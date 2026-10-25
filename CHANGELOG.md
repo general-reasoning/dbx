@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- **hyp --docs: a conversation branches.** A click on a turn's heading in
+  a session's window opens a new branch going on after it, the turns after
+  it left where they are; its first turn forks Claude Code's conversation
+  there (`--resume-session-at`, `--fork-session`). A branch is a markdown of
+  its own turns only, naming its parent's file and the turns it keeps
+  (`parent`, `fork`), its earlier turns assembled from its parents as it is
+  opened (`Session.branch`, `Session.path`). On the disk a branch is one
+  point, embedded by its own turns, joined to its parent's by a faint
+  geodesic (`__point_link__`).
 - **hyp --docs: web access.** A setting, off by default and kept with the
   corpus (its `settings.json`), that gives a session's Claude `WebSearch`
   and `WebFetch` besides its read-only tools, from the next turn on and in

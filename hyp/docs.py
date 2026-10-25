@@ -300,6 +300,9 @@ def documents(root, progress=print, n_workers=16, cache=None, storage_options=No
         if claude.is_session(fields):
             # A Claude session: embedded whole, as long as it gets; its point opens the session again, labeled by its title and dated by its last write.
             extra.update(kind=claude.KIND, session=fields.get("session"), updated=fields.get("updated"))
+            above = claude.parent_url(url, fields)
+            if above is not None:  # a branch: its point is linked to its parent's, the conversation drawn as the tree it is
+                extra.update(branch_of=above, fork=fields.get("fork"))
             title = fields.get("title") or base
             summary = f"Claude · {title}"
             # By its title and what was said: the file's name and the transcript's markup are every session's, and
@@ -470,6 +473,7 @@ class HypDocs(Hyp):
         self.settings["web access"] = bool(self._kept_settings_().get("web access", False))
         self._remoted_ = False  # the sessions put on remote as hyp started: once
         self.names = None  # a question's digest -> the words Claude named it by, as words.json keeps them: read once
+        self._at_key_ = (None, {})  # (snapshot, {key: row}): where a branch's parent is on the disk
 
     def __click_point__(self, i, now):
         """Left click on a document: open it in the center; on a saved Claude session, the session, to go on with -- on a turn of one, at that turn."""
@@ -562,6 +566,16 @@ class HypDocs(Hyp):
         head = label[: -len(words) - 3]  # its session's label: what precedes " · <words>"
         return f"{head[: max(LABEL_CHARS - len(words) - 4, 4)]}… · {words}"
 
+    def __point_link__(self, i):
+        """A branch of a conversation: joined to its parent branch's point, where that is on the disk."""
+        point = self.snap.points[i] if self.snap.points else {}
+        above = point.get("branch_of")
+        if not above:
+            return None
+        if self._at_key_[0] is not self.snap:
+            self._at_key_ = (self.snap, {p.get("key") or p.get("path"): n for n, p in enumerate(self.snap.points)})
+        return self._at_key_[1].get(above)
+
     def __point_tooltip__(self, i):
         """A turn's: its label in full, its datetime, and the beginning of its question; any other point's, as every point's."""
         point = self.snap.points[i] if self.snap.points else {}
@@ -594,7 +608,8 @@ class HypDocs(Hyp):
             args = self.args
             session = session or claude.Session(self.root(args), self.claude_dir(args))
             session.web = self.settings.get("web access", False)
-            window = claude.ClaudeWindow(session, self._send_claude_, self._rename_claude_, self._hand_off_, self._take_back_)
+            window = claude.ClaudeWindow(session, self._send_claude_, self._rename_claude_, self._hand_off_, self._take_back_,
+                                         self._branch_)
             self._reclaim_(window)
             window.account = self.claude_account  # as last read, until read again: an account switched to since is shown
             self.run_async(claude.account, lambda said: self._account_(window, said))
@@ -603,7 +618,7 @@ class HypDocs(Hyp):
             self.center, self.expanded = window, False
             self.bring_to_front("center")
         if turn is not None:
-            window.show_turn(turn)
+            window.show_turn(len(window.session.upstream()) + turn)  # a turn of its own: after its upstream's, in the window
         self.focus = window
 
     def open_note(self, text):
@@ -784,6 +799,19 @@ class HypDocs(Hyp):
     def _claude_window_(self):
         """The Claude session's window open, wherever it is -- the center or a tile -- or None."""
         return next((w for w in self.windows() if isinstance(w, claude.ClaudeWindow)), None)
+
+    def _branch_(self, window, k):
+        """A click on turn *k* of *window*'s conversation: a new branch going on after it, opened in its place, the box beneath
+        the turn -- or, the last turn of a branch it goes on from, that branch, to go on with."""
+        session = window.session.branch(k)
+        if session is window.session:
+            return
+        self.open_claude(session)
+        opened = self._claude_window_()
+        if opened is not None:
+            opened._render_(follow=True)  # at the end: the box goes on from there
+        self.status = (f"a new branch, after turn {k}: ask below -- nothing is kept till you do" if not session.resumable
+                       else f"back to {session.title()}")
 
     def _hand_off_(self, window):
         """Hand *window*'s session off to a phone: Claude Code run with it, with Remote Control, its QR code in the window."""

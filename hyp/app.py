@@ -71,6 +71,7 @@ LABEL = (205, 212, 225)
 TIP_BG = (245, 240, 225)
 TIP_FG = (30, 30, 30)
 EDGE = (250, 200, 90)
+LINK = (95, 110, 135)  # a point's link to the one it grew from: a branch's to its parent's
 STATUS = (150, 160, 175)
 DIMMED = (85, 92, 105)  # a menu shown but not yet usable
 DISK_SEE_THROUGH = 150  # the disk's alpha, out of 255, over layers behind it
@@ -1151,7 +1152,7 @@ class Hyp:
     (`__context_empty__`, `__cmd_context_empty__`, `__submit_text__`, `BOX_HINT`), what a setting toggled does
     (`__setting_changed__`), and how a point is labeled (`__point_label__`,
     `__point_tag__`, `__point_name__`, `__point_version__`, `__point_datetime__`,
-    `__point_tooltip__`). The hooks are the only methods
+    `__point_tooltip__`), and what it is joined to (`__point_link__`). The hooks are the only methods
     a specialization is meant to override; everything else is shared.
     """
 
@@ -1256,6 +1257,10 @@ class Hyp:
         """When point *i* is from, as text, or None: here, when it was added."""
         added = self.snap.points[i].get("added") if self.snap.points else None
         return time.strftime("%Y-%m-%d %H:%M", time.localtime(added)) if added else None
+
+    def __point_link__(self, i):
+        """The point point *i* is drawn joined to -- the one it grew from, in a tree of them -- as an index, or None: here, none."""
+        return None
 
     def __point_tooltip__(self, i):
         """The tooltip of point *i*: its label, both lines, as the settings show them -- in full, where the label is cut short."""
@@ -1365,6 +1370,7 @@ class Hyp:
         self.viewers = []  # open text windows, the last on top
         self.hover = None
         self.arrows = {}  # (snapshot, point) -> its arrows decoded, or None while they are being decoded: Shift over a point
+        self._links_ = (None, [])  # (snapshot, [(point, the one it is joined to)]): `__point_link__`, asked once a snapshot
         self.press = None  # where the left button went down, while it is down
         self.last_off_disk = None  # (pos, time) of the last left click off the disk: half a double click
         self.dragging = False
@@ -1690,6 +1696,13 @@ class Hyp:
             return tag
         return f"{tag} · {rest}" if len(tag) + 3 + len(rest) <= SUBLABEL_CHARS else f"{tag}\n{rest}"
 
+    def links(self):
+        """Every point's link to the one it grew from, `(i, j)`, as `__point_link__` says: asked once a snapshot."""
+        if self._links_[0] is not self.snap:
+            n = len(self.snap.positions)
+            self._links_ = (self.snap, [(i, j) for i in range(n) if (j := self.__point_link__(i)) is not None and 0 <= j < n])
+        return self._links_[1]
+
     def point_color(self, z):
         """A point's color, by where it lies on the disk -- *z*, in data coordinates: its angle the hue, its radius the saturation."""
         col = pygame.Color(0)
@@ -1780,8 +1793,11 @@ class Hyp:
                 if d2[i] <= HOVER_PX**2:
                     self.hover = i
 
+            t = np.linspace(0, 1, 40)
+            for i, j in self.links():
+                self.polyline(P.geodesic(data[i], data[j], t), M, LINK)
+
             if self.hover is not None:
-                t = np.linspace(0, 1, 40)
                 for j in self.snap.neighbors[self.hover]:
                     self.polyline(P.geodesic(data[self.hover], data[j], t), M, EDGE)
 

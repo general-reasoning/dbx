@@ -76,7 +76,26 @@ if os.environ.get("FAKE_STDERR"):
     sys.exit(1)
 def put(e):
     print(json.dumps(e), flush=True)
-sid = sys.argv[sys.argv.index("--resume" if "--resume" in sys.argv else "--session-id") + 1]
+sid = sys.argv[sys.argv.index("--session-id" if "--session-id" in sys.argv else "--resume") + 1]
+record = None
+if os.environ.get("FAKE_RECORD"):  # each turn recorded, as Claude Code does: a fork copies its source's record up to --resume-session-at
+    import uuid
+    home = os.path.join(os.environ["CLAUDE_CONFIG_DIR"], "projects", "here")
+    os.makedirs(home, exist_ok=True)
+    record = os.path.join(home, sid + ".jsonl")
+    if "--fork-session" in sys.argv:
+        src, at = sys.argv[sys.argv.index("--resume") + 1], sys.argv[sys.argv.index("--resume-session-at") + 1]
+        kept = []
+        for line in open(os.path.join(home, src + ".jsonl")):
+            kept.append(line)
+            if json.loads(line).get("uuid") == at:
+                break
+        else:
+            put({{"type": "result", "subtype": "error_during_execution", "is_error": True, "result": f"no message {{at}}"}})
+            sys.exit(1)
+        open(record, "w").writelines(kept)
+seen = [json.loads(ln)["message"]["content"] for ln in open(record)] if record and os.path.exists(record) else []
+seen = "|".join(c.strip() for c in seen if isinstance(c, str)) + ("|" if seen else "") + text.strip()
 model = {{"haiku": "claude-haiku-5-5", "sonnet": "claude-sonnet-5-5"}}.get(sys.argv[sys.argv.index("--model") + 1] if "--model" in sys.argv else "", "claude-opus-5-5")
 put({{"type": "system", "subtype": "init", "session_id": sid, "model": model}})
 put({{"type": "rate_limit_event", "rate_limit_info": {{"unifiedWindows": {{"five_hour": {{"utilization": 0.71}}, "seven_day": {{"utilization": 0.65}}}}}}}})
@@ -84,7 +103,13 @@ if os.environ.get("FAKE_FAIL"):
     put({{"type": "result", "subtype": "error_during_execution", "is_error": True, "result": os.environ["FAKE_FAIL"]}})
     sys.exit(1)
 put({{"type": "stream_event", "event": {{"type": "content_block_start", "content_block": {{"type": "text", "text": ""}}}}}})
-for w in os.environ.get("FAKE_REPLY", "Hello there.").split(" "):
+reply = os.environ.get("FAKE_REPLY", "Hello there.").replace("{{seen}}", seen)
+if record:
+    with open(record, "a") as f:
+        f.write(json.dumps({{"type": "user", "uuid": str(uuid.uuid4()), "message": {{"role": "user", "content": text}}}}) + "\n")
+        f.write(json.dumps({{"type": "assistant", "uuid": str(uuid.uuid4()),
+                             "message": {{"role": "assistant", "content": [{{"type": "text", "text": reply}}]}}}}) + "\n")
+for w in reply.split(" "):
     put({{"type": "stream_event", "event": {{"type": "content_block_delta", "delta": {{"type": "text_delta", "text": w + " "}}}}}})
 if os.environ.get("FAKE_TOOL"):
     put({{"type": "stream_event", "event": {{"type": "content_block_start", "content_block": {{"type": "tool_use", "name": "Read"}}}}}})
@@ -107,7 +132,7 @@ def cli(tmp_path, monkeypatch):
     monkeypatch.setenv("FAKE_LOG", str(log))
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "claude-config"))  # where the conversations handed off are recorded
     for v in ("FAKE_REPLY", "FAKE_FAIL", "FAKE_STDERR", "FAKE_TOOL", "FAKE_ACCOUNT", "FAKE_PHONE", "FAKE_FIRST_RUN",
-              "FAKE_API_BILLING", "FAKE_SILENT", "FAKE_CONSENT"):
+              "FAKE_API_BILLING", "FAKE_SILENT", "FAKE_CONSENT", "FAKE_RECORD"):
         monkeypatch.delenv(v, raising=False)
     return NS(runs=lambda: [json.loads(ln) for ln in log.read_text().splitlines()] if log.exists() else [])
 
@@ -1735,3 +1760,127 @@ def test_web_access_is_a_setting_kept_with_the_corpus_and_turned_on_for_the_next
     assert json.loads((data / "settings.json").read_text()) == {"web access": True}
     again = docs.HypDocs(engine=None, worker=app.worker, args=app.args)
     assert again.settings["web access"] is True, "kept with the corpus"
+
+
+# -- branches ----------------------------------------------------------------------------------------------------------
+
+
+@pytest.fixture
+def three(cli, tree, monkeypatch):
+    """A conversation of three turns, saved, Claude Code's record of it kept: each reply says every prompt it has seen."""
+    monkeypatch.setenv("FAKE_RECORD", "1")
+    monkeypatch.setenv("FAKE_REPLY", "seen:{seen}")
+    s = claude.Session(str(tree))
+    for word in ("apple", "banana", "cherry"):
+        s.send(word)
+    s.save()
+    return s
+
+
+def test_a_branch_forks_claude_codes_conversation_after_its_turn_and_keeps_only_its_own_turns(three, cli, tree):
+    loaded = claude.Session.load(three.md_url, str(tree))
+    branch = loaded.branch(1)
+    assert branch.above is loaded and branch.fork == 1 and branch.upstream() == [("apple", "seen:apple")] and not branch.own()
+    assert branch.title() == "apple ⑂ 1", "no title of its own yet: its parent's, as a branch's"
+    assert branch.send("date") == "seen:apple|date", "Claude has the turns before the branch, and not those after"
+    argv = cli.runs()[-1]["argv"]
+    at = argv[argv.index("--resume-session-at") + 1]
+    assert argv[argv.index("--resume") + 1] == three.id and "--fork-session" in argv
+    assert argv[argv.index("--session-id") + 1] == branch.id != three.id
+    assert at == claude.anchor(three.id, 1) and at != claude.anchor(three.id, 2)
+    url = branch.save()
+    text = open(url).read()
+    assert '\nparent: "' + os.path.basename(three.md_url) + '"\nfork: 1\n' in text, "its parent's file, beside it, and the turns kept"
+    assert "## You\n\napple" not in text and "## You\n\ndate" in text, "only its own turns"
+    again = claude.Session.load(url, str(tree))
+    assert again.path() == [("apple", "seen:apple"), ("date", "seen:apple|date")] and again.title() == "date"
+    assert again.send("elder") == "seen:apple|date|elder", "a branch goes on from its own record"
+    assert claude.Session.load(three.md_url, str(tree)).path()[2] == ("cherry", "seen:apple|banana|cherry"), "the parent, as it was"
+
+
+def test_a_branch_of_a_branch_grows_from_whichever_holds_the_turn(three, tree):
+    loaded = claude.Session.load(three.md_url, str(tree))
+    b = loaded.branch(2)
+    b.send("date")
+    b.save()
+    b = claude.Session.load(b.md_url, str(tree))
+    assert b.branch(3) is b, "its own last turn: no branch, the box goes on from it"
+    assert b.branch(1).above.md_url == three.md_url, "a turn of its upstream: a branch of the branch that holds it"
+    c = b.branch(1)
+    assert c.send("fig") == "seen:apple|fig" and c.source is b, "forked from the conversation clicked in, which has the turn"
+    sibling = b.branch(2)
+    assert sibling.above is b.above and sibling.fork == 2 and sibling is not b, "the turn it forks after: a sibling, made anew"
+    assert b.above.branch(3) is b.above, "the parent's own last turn: the parent, to go on with"
+
+
+def test_a_branch_whose_parent_is_gone_shows_its_own_turns_and_says_so(three, tree):
+    b = claude.Session.load(three.md_url, str(tree)).branch(1)
+    b.send("date")
+    b.save()
+    os.remove(three.md_url)
+    lost = claude.Session.load(b.md_url, str(tree))
+    assert lost.lost == three.md_url and lost.path() == [("date", "seen:apple|date")]
+    assert f"A branch of {three.md_url}, which cannot be read" in claude.ClaudeWindow(lost, lambda w, t: None)._transcript_()
+    lost.save()
+    assert claude.parent_url(lost.md_url, docview.front_matter(open(lost.md_url).read())[0]) == three.md_url, "the link kept"
+
+
+def test_a_click_on_a_turns_heading_goes_on_from_it_but_not_on_the_last(three, tree):
+    clicked = []
+    window = claude.ClaudeWindow(claude.Session.load(three.md_url, str(tree)), lambda w, t: None, on_branch=lambda w, k: clicked.append(k))
+    surf = pygame.display.set_mode((900, 1400))
+    window.draw(surf, pygame.Rect(0, 0, 900, 1400), docview.FONTS.get(15), docview.FONTS.get(12))
+    heads = {}
+    for r in window._laid_.runs:
+        if r.block in window.turn_blocks:
+            heads.setdefault(window.turn_blocks[r.block], []).append(r)
+    assert sorted(heads) == [1, 2, 3] and all(len(rs) == 2 for rs in heads.values()), "each turn: its You and Claude headings"
+    for k in (1, 2, 3):
+        for r in heads[k]:
+            pos = (window.body.x + 300, window.body.y + r.y - round(window.sy) + r.h // 2)  # anywhere along the heading's row
+            window.handle(pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1, pos=pos))
+    assert clicked == [1, 1, 2, 2], "the last turn is no branch: the box goes on from it"
+
+
+def test_a_click_on_a_turn_in_docs_opens_a_new_branch_saved_with_its_first_turn_and_linked_on_the_disk(three, cli, tree, monkeypatch):
+    a = docs.HypDocs(engine=None, worker=Worker(), args=NS(dir=str(tree), claude_dir=""))
+    a.run_async = lambda fn, then: then(fn())
+    a.settings["sessions on remote"] = False
+    a.open_claude(claude.Session.load(three.md_url, str(tree)))
+    a._branch_(a._claude_window_(), 2)
+    window = a._claude_window_()
+    assert window.session.above.md_url == three.md_url and window.session.fork == 2 and not window.session.resumable
+    assert "a new branch, after turn 2" in a.status
+    a._close_(window)
+    assert len(docs.documents(str(tree), progress=lambda *x: None)) == 2, "closed unasked: no branch kept"
+
+    a.open_claude(claude.Session.load(three.md_url, str(tree)))
+    a._branch_(a._claude_window_(), 2)
+    monkeypatch.setenv("FAKE_REPLY", "Noted.")
+    _type_(a._claude_window_(), "date")
+    found = {d.key: d for d in docs.documents(str(tree), progress=lambda *x: None)}
+    (new,) = set(found) - {three.md_url, str(tree / "a.md")}
+    assert found[new].extra["branch_of"] == three.md_url and found[new].summary == "Claude · date"
+    assert "banana" not in found[new].embed and "date" in found[new].embed, "embedded by its own turns only"
+    order = list(found)
+    a.snap = NS(positions=np.zeros(len(order), dtype=complex), summaries=[found[k].summary for k in order],
+                texts=[""] * len(order), neighbors=np.zeros((len(order), 0), dtype=int),
+                points=[{"key": k, **found[k].extra} for k in order])
+    assert a.__point_link__(order.index(new)) == order.index(three.md_url) and a.__point_link__(order.index(three.md_url)) is None
+    assert a.links() == [(order.index(new), order.index(three.md_url))]
+
+
+def test_a_turn_counts_as_claude_code_records_prompts(cli):
+    events = [{"type": "user", "uuid": "u1", "message": {"content": "one"}},
+              {"type": "assistant", "uuid": "a1", "message": {"content": [{"type": "tool_use"}]}},
+              {"type": "user", "uuid": "t1", "message": {"content": [{"type": "tool_result", "content": "x"}]}},
+              {"type": "assistant", "uuid": "a1b", "message": {"content": [{"type": "text", "text": "done"}]}},
+              {"type": "user", "uuid": "m", "isMeta": True, "message": {"content": "a note"}},
+              {"type": "user", "uuid": "c", "message": {"content": "<command-name>/x</command-name>"}},
+              {"type": "user", "uuid": "u2", "message": {"content": "two"}},
+              {"type": "assistant", "uuid": "a2", "message": {"content": [{"type": "text", "text": "ok"}]}}]
+    home = os.path.join(os.environ["CLAUDE_CONFIG_DIR"], "projects", "here")
+    os.makedirs(home, exist_ok=True)
+    with open(os.path.join(home, "conv.jsonl"), "w") as f:
+        f.writelines(json.dumps(e) + "\n" for e in events)
+    assert [claude.anchor("conv", k) for k in (0, 1, 2, 3)] == [None, "a1b", "a2", None]

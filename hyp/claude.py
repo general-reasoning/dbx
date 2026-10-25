@@ -59,6 +59,7 @@ SYSTEM_NO_TOOLS = "You cannot see the documents unless the user pastes them in."
 WEB_TOOLS = ("WebSearch", "WebFetch")
 SYSTEM_WEB = "You may also search the web and fetch web pages, to answer from them."
 SYSTEM_NO_WEB = "You cannot reach the web."
+MAX_BRANCH_DEPTH = 256  # branches of branches, read up to a conversation's first: past this, a parent named is taken to be lost
 # Where Claude Code keeps its login and conversations, unless CLAUDE_CONFIG_DIR says elsewhere.
 DEFAULT_CONFIG = os.path.expanduser("~/.claude")
 # The models a session's window switches among, by Claude Code's names for them; None is Claude Code's own default.
@@ -79,16 +80,25 @@ class Failed(Exception):
 
 
 class Session:
-    """One conversation: Claude Code's session id, its transcript, and where it is saved.
+    """One conversation -- a branch of one -- Claude Code's session id, its transcript, and where it is saved.
 
     *root* is the directory hyp scans, local or any fsspec url; *subdir* a
     relative directory under it to save in, or "" for *root* itself. A
     session loaded from its markdown has *prior*, the transcript as saved,
     and is *resumable*: Claude Code has it, by its id.
+
+    A conversation branches: a branch goes on from a turn of another, its
+    *above*, keeping the first *fork* turns of that one's (`path`) and
+    adding its own. Its file holds only its own turns, and names its parent's
+    file and *fork* in its front matter: the turns before them are assembled
+    from its parents, as it is loaded (`upstream`). Claude Code's side is
+    the same: a branch's first turn forks the conversation it was made
+    from, resumed at the last message of its turn *fork* (`branch`).
     """
 
     def __init__(self, root, subdir="", storage_options=None, command=None, id=None, started=None, title=None,
-                 prior="", resumable=False, md_url=None, choice=None, usage=None, updated=None):
+                 prior="", resumable=False, md_url=None, choice=None, usage=None, updated=None, above=None, fork=0,
+                 source=None):
         self.root, self.subdir = str(root).rstrip("/") or "/", subdir
         self.storage_options = storage_options or {}
         self.command = command
@@ -110,6 +120,11 @@ class Session:
         self.web = False  # whether Claude may search the web and fetch pages (WEB_TOOLS), from the next turn on: its owner says
         self.plan_at = None  # when a turn last said what is left of the plan's windows: the time the quota is as of
         self.plan_account = None  # who Claude Code ran as then, as its owner read it just after: whose the quota is
+        self.above, self.fork = above, fork  # the branch this one goes on from, and how many of its turns it keeps
+        self.lost = None  # the parent's file, where its front matter names one that cannot be read: its turns are not shown
+        # The session whose conversation a new branch's first turn forks: one holding its first *fork* turns. The session,
+        # not its id: handed off meanwhile, it may be given another (`fresh_copy`), and the old one's record go.
+        self.source = source
         stamp = self.started.replace("-", "").replace(":", "").replace("T", "-")
         # By its start and its id: two sessions begun in one second are two files, not one written over.
         name = f"{PREFIX}{stamp}-{self.id[:8]}.md"
@@ -118,8 +133,8 @@ class Session:
     # 2. Declared API ---------------------------------------------------------
 
     @classmethod
-    def load(cls, md_url, root, subdir="", storage_options=None, command=None):
-        """The session saved at *md_url*, to go on with."""
+    def load(cls, md_url, root, subdir="", storage_options=None, command=None, _below_=()):
+        """The session saved at *md_url*, to go on with -- a branch, with the branches it goes on from, loaded too."""
         fields, body = front_matter(_read_(md_url, storage_options))
         if not is_session(fields):
             raise ValueError(f"{md_url} is not a {KIND}")
@@ -129,7 +144,45 @@ class Session:
                       choice=fields.get("choice") if fields.get("choice") in MODELS else None, usage=usage,
                       updated=fields.get("updated"))
         session.model = fields.get("model")
+        parent = parent_url(md_url, fields)
+        if parent is not None:
+            session.fork = int(fields.get("fork") or 0)
+            try:
+                if parent in _below_ or len(_below_) > MAX_BRANCH_DEPTH:
+                    raise ValueError(f"{parent}: a branch of its own branches")
+                session.above = cls.load(parent, root, subdir, storage_options, command, (*_below_, md_url))
+            except (OSError, ValueError):
+                session.lost = parent
         return session
+
+    def branch(self, k):
+        """A new branch going on after turn *k* of `path` (1-based): its upstream the first *k* turns, and nothing yet of its own.
+
+        Its parent is the branch whose own turns hold turn *k* -- this one, or
+        one it goes on from -- so the tree is drawn as it grew. Claude Code's
+        side is forked from this conversation, which holds every turn of its
+        `path`, at its first turn (`send`). Turn *k* the last of that parent's
+        is no branch: the parent itself, to go on with.
+        """
+        owner = self
+        while owner.above is not None and k <= owner.fork:
+            owner = owner.above
+        if k >= len(owner.path()):
+            return owner
+        return Session(self.root, self.subdir, self.storage_options, self.command, choice=self.choice, above=owner, fork=k,
+                       source=self if self.resumable else owner)
+
+    def upstream(self):
+        """The turns before its own, `(asked, answered)` each: the first `fork` of its parent's `path`; none for a conversation's first branch."""
+        return self.above.path()[: self.fork] if self.above is not None else []
+
+    def own(self):
+        """Its own turns, `(asked, answered)` each: those saved, then this time's."""
+        return [*turns(self.prior), *self.turns]
+
+    def path(self):
+        """Every turn of the conversation, to its own last: its `upstream`, then its `own`."""
+        return [*self.upstream(), *self.own()]
 
     def send(self, text, on_text=lambda t: None, cancelled=lambda: False):
         """Send *text* as the next turn, streaming the reply to *on_text*; the reply, or None if *cancelled*.
@@ -139,7 +192,14 @@ class Session:
         """
         if self.resumable:
             carry_over(self.id)  # begun under another login, Claude Code's: resumed under this one
-        args = self._args_()
+        at = None
+        if not self.resumable and self.source is not None:
+            carry_over(self.source.id)
+            at = anchor(self.source.id, self.fork)
+            if at is None:
+                raise Failed(f"Claude Code has no record here of the conversation to branch from ({self.source.id}), or not of "
+                             f"its turn {self.fork}: it keeps them per machine and directory")
+        args = self._args_(at)
         try:
             proc = subprocess.Popen(args, cwd=self._cwd_(), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                     stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace")
@@ -211,6 +271,9 @@ class Session:
         """The transcript: front matter, what was saved before, this time's turns -- and *partial*, a reply still coming, last."""
         fields = {"hyp": KIND, "session": self.id, "backend": "claude-code", "started": self.started,
                   "updated": time.strftime("%Y-%m-%dT%H:%M:%S"), "title": self.title()}
+        parent = self.above.md_url if self.above is not None else self.lost
+        if parent is not None:  # a branch: its parent's file, relative to its own where it can be, and its turns kept
+            fields.update(parent=_relative_(parent, self.md_url), fork=self.fork)
         if self.model:
             fields["model"] = self.model
         if self.choice:
@@ -229,8 +292,10 @@ class Session:
         return "\n".join(lines)
 
     def title(self):
-        """The title it was given or saved with; else the first line of its first turn; else the time it began."""
-        return self.given_title() or self.started.replace("T", " ")
+        """The title it was given or saved with; else the first line of its first own turn; else, a branch, its parent's, as a branch's; else the time it began."""
+        if self.given_title():
+            return self.given_title()
+        return f"{self.above.title()} ⑂ {self.fork}" if self.above is not None else self.started.replace("T", " ")
 
     def given_title(self):
         """The title it was given or saved with, else the first line of its first turn; "" while it has neither -- its start time is no title."""
@@ -297,7 +362,7 @@ class Session:
                     continue
                 text = _text_(e.get("message", {}).get("content"))
                 if e["type"] == "user":
-                    if text and not text.lstrip().startswith("<"):  # a prompt, not a command's output or a reminder
+                    if _prompt_(e):
                         if prompt is not None:
                             added.append((prompt, "\n\n".join(reply)))
                         prompt, reply = text.strip(), []
@@ -337,12 +402,19 @@ class Session:
         said = [SYSTEM_TOOLS if self._local_() else SYSTEM_NO_TOOLS, SYSTEM_WEB if self.web else SYSTEM_NO_WEB]
         return ",".join(tools), SYSTEM.format(root=self.root, tools=" ".join(said))
 
-    def _args_(self):
+    def _args_(self, at=None):
+        """The command a turn runs: the conversation resumed by its id, or begun with it -- or, *at* the last message of a
+        branch's upstream, the conversation it branches from forked there, under its id."""
         tools, system = self._tools_()
+        if self.resumable:
+            which = ("--resume", self.id)
+        elif at is not None:
+            which = ("--resume", self.source.id, "--resume-session-at", at, "--fork-session", "--session-id", self.id)
+        else:
+            which = ("--session-id", self.id)
         return [self.command or claude_command(), "-p", "--output-format", "stream-json", "--include-partial-messages",
                 "--verbose", f"--tools={tools}", f"--allowedTools={tools}", "--permission-mode", "dontAsk",
-                "--append-system-prompt", system, *(("--model", self.choice) if self.choice else ()),
-                *(("--resume", self.id) if self.resumable else ("--session-id", self.id))]
+                "--append-system-prompt", system, *(("--model", self.choice) if self.choice else ()), *which]
 
 
 class Handoff:
@@ -635,6 +707,59 @@ def _at_(event):
         return 0.0
 
 
+def anchor(session_id, k):
+    """The uuid of the last message of turn *k* (1-based) of conversation *session_id*, as Claude Code records it: where a branch after it is resumed. None for none.
+
+    Turns are counted by the prompts typed, as `Session.take_back` reads
+    them; turn 0 is before the first.
+    """
+    path = conversation_path(session_id)
+    if path is None:
+        return None
+    count, last = 0, None
+    with open(path, encoding="utf-8", errors="replace") as f:
+        for line in f:
+            e = _event_(line)
+            if not e or e.get("type") not in ("user", "assistant") or e.get("isMeta"):
+                continue
+            if e["type"] == "user" and _prompt_(e):
+                if count == k:
+                    return last
+                count, last = count + 1, None
+            elif e["type"] == "assistant" and count == k:
+                last = e.get("uuid") or last
+    return last if count == k else None
+
+
+def parent_url(md_url, fields):
+    """The file of the branch the session saved at *md_url* goes on from, as its front matter *fields* name it; None for a first branch."""
+    parent = fields.get("parent") if isinstance(fields, dict) else None
+    if not parent:
+        return None
+    parent = str(parent)
+    if "://" in parent or parent.startswith("/"):
+        return parent
+    head, sep, path = md_url.rpartition("://")  # a url's scheme and host kept: normpath would fold its "//"
+    return f"{head}{sep}{posixpath.normpath(posixpath.join(posixpath.dirname(path), parent))}"
+
+
+def _relative_(url, start):
+    """*url* relative to *start*'s directory, where both are on one filesystem; else *url* as it is."""
+    head_a, _, path_a = url.rpartition("://")
+    head_b, _, path_b = start.rpartition("://")
+    if head_a != head_b:
+        return url
+    if head_a and path_a.split("/", 1)[0] != path_b.split("/", 1)[0]:
+        return url  # another host, or bucket
+    return posixpath.relpath(path_a, posixpath.dirname(path_b))
+
+
+def _prompt_(event):
+    """Whether Claude Code's record *event*, a user's, is a prompt typed: not a tool's result, a command's output, a reminder or a summary."""
+    text = _text_(event.get("message", {}).get("content"))
+    return bool(text.strip()) and not text.lstrip().startswith("<") and not event.get("isCompactSummary")
+
+
 def _text_(content):
     """A message's text: as it is, or its text blocks joined."""
     if isinstance(content, str):
@@ -729,15 +854,23 @@ class ClaudeWindow(EditableTitle, DocWindow):
     is, its QR code covers the transcript, to open it on a phone, nothing is
     sent from the box, and the button, **take back**, brings it back --
     *on_take_back(window)*, the turns made there added.
+
+    The transcript is the conversation's whole `path`, a branch's upstream
+    turns too, a line marking where its own begin. Each turn's headings
+    are a click away from going on after it: *on_branch(window, k)*, turn
+    *k*, for its owner to open the branch (`Session.branch`).
     """
 
     INPUT_LINES = 8  # the box grows to this many lines, then scrolls
     TITLE_PREFIX = "Claude · "
+    BRANCH_HINT = "click: go on from here"
+    HOVER = (90, 120, 170, 60)  # a turn's headings, under the mouse: RGBA
 
-    def __init__(self, session, on_send, on_rename=lambda window: None, on_hand_off=None, on_take_back=None):
+    def __init__(self, session, on_send, on_rename=lambda window: None, on_hand_off=None, on_take_back=None, on_branch=None):
         super().__init__("Claude", posixpath.basename(session.md_url))
         self.session, self.on_send, self.on_rename = session, on_send, on_rename
-        self.on_hand_off, self.on_take_back = on_hand_off, on_take_back
+        self.on_hand_off, self.on_take_back, self.on_branch = on_hand_off, on_take_back, on_branch
+        self.turn_blocks = {}  # the transcript's block of each turn's `You` and `Claude` heading -> the turn, 1-based
         self.handoff = None  # the Handoff, while the session is elsewhere
         self.handoff_lines = []  # what its panel says beneath the QR code, as last drawn
         self._shown_ = (None, None)  # the handoff's (url, problem), as its panel last drew them
@@ -829,6 +962,11 @@ class ClaudeWindow(EditableTitle, DocWindow):
             return None
         if self._title_event_(ev):  # a click off the title, while edited, keeps it and goes on: into the box, say
             return None
+        if ev.type == pygame.MOUSEBUTTONDOWN and ev.button == 1 and self.on_branch is not None:
+            k = self._turn_at_(ev.pos)
+            if k is not None:
+                self.on_branch(self, k)
+                return None
         if ev.type == pygame.MOUSEBUTTONUP and ev.button == 1:
             self._box_selecting_ = False
         if ev.type == pygame.MOUSEBUTTONDOWN and ev.button == 1 and self.input.collidepoint(ev.pos):
@@ -877,8 +1015,10 @@ class ClaudeWindow(EditableTitle, DocWindow):
             hint = "on the phone · take back: go on here, with what was said there"
         elif self.busy():
             hint = "Claude is answering …"
+        elif self.session.above is not None and not self.session.own():
+            hint = f"Enter: send -- a new branch, after turn {self.session.fork} · Esc: close, leaving no branch"
         else:
-            hint = "Enter: send · Shift+Enter: new line · click the title: rename · Esc: close and save"
+            hint = "Enter: send · Shift+Enter: new line · click a turn: go on from it · click the title: rename · Esc: close"
         box_h = 2 * pad + lh * shown + small.get_linesize() + 4
         self.title = "" if self.naming is not None else f"Claude · {self.session.title()}"  # being edited: drawn below
         remote = small.render("take back" if self.handoff is not None else "remote", True, TEXT)
@@ -889,6 +1029,7 @@ class ClaudeWindow(EditableTitle, DocWindow):
         self.sub = "\n".join([f"{account}{web} · {posixpath.basename(self.session.md_url)}",
                               f"{self.session.usage_line()} · {self.quota_line()}"])
         super().draw(surf, pygame.Rect(rect.x, rect.y, rect.width, rect.height - box_h), font, small)
+        self._draw_hover_(surf, small)
         self._draw_title_(surf, font, small)
         zoom_w = small.size(f"{self.zoom:.0%}")[0]
         self.remote_button = remote.get_rect(topright=(self.close.x - zoom_w - 22, self.rect.y + 12)).inflate(10, 4)
@@ -945,12 +1086,65 @@ class ClaudeWindow(EditableTitle, DocWindow):
     def _render_(self, follow=False):
         at_end = self.sy >= self._size[1] - self.body.height - 4
         self.anchor = self.cursor = None  # laid out again: a selection of the old layout would point anywhere
-        text = self.session.markdown()
-        if self.sending is not None:
-            text += f"\n## You\n\n{self.sending}\n\n## Claude\n\n{self.partial or '…'}\n"
-        self.doc = MarkdownDoc(_body_(text))
+        self.doc = MarkdownDoc(self._transcript_())
+        path = len(self.session.path())
+        heads = [k for k, b in enumerate(self.doc.blocks)
+                 if b.kind == "heading" and b.level == 2 and "".join(t for t, _ in b.spans).strip() in ("You", "Claude")]
+        self.turn_blocks, turn = {}, 0
+        for k in heads:
+            b = self.doc.blocks[k]
+            turn += "".join(t for t, _ in b.spans).strip() == "You"
+            if 1 <= turn <= path:  # the turn being sent is none yet
+                self.turn_blocks[k] = turn
         if follow or at_end:
             self.sy = 10**9  # clamped to the end at the next draw
+
+    def _transcript_(self):
+        """What the window shows: the conversation's whole `path` -- its upstream, then a line where its own begin -- and the turn being sent."""
+        s = self.session
+        lines = [f"# Claude · {s.title()}", ""]
+        if s.lost:
+            lines += [f"*A branch of {s.lost}, which cannot be read: the turns before this branch's are not shown.*", ""]
+        for asked, answered in s.upstream():
+            lines += ["## You", "", asked.strip(), "", "## Claude", "", answered, ""]
+        if s.above is not None:
+            mine = "this branch" if s.own() or self.sending is not None else "a new branch -- ask below"
+            lines += ["---", "", f"*From here, {mine}: going on from {s.above.title()}, after its turn {s.fork}.*", ""]
+        for asked, answered in s.own():
+            lines += ["## You", "", asked.strip(), "", "## Claude", "", answered, ""]
+        if self.sending is not None:
+            lines += ["## You", "", self.sending, "", "## Claude", "", self.partial or "…", ""]
+        return "\n".join(lines)
+
+    def _turn_at_(self, pos):
+        """The turn whose `You` or `Claude` heading is at screen *pos* -- the whole row, across the transcript -- or None; not the last, which the box goes on from."""
+        laid = self._laid_
+        if laid is None or not self.body.collidepoint(pos) or self.busy() or self.handoff is not None:
+            return None
+        _, y = self._content_(pos)
+        last = len(self.session.path())
+        for r in laid.runs:
+            k = self.turn_blocks.get(r.block)
+            if k is not None and r.y <= y < r.y + r.h:
+                return k if k < last else None
+        return None
+
+    def _draw_hover_(self, surf, small):
+        """The turn's heading under the mouse, highlighted across the transcript, and what a click on it does."""
+        if self.on_branch is None or self._laid_ is None:
+            return
+        k = self._turn_at_(pygame.mouse.get_pos())
+        if k is None:
+            return
+        rows = [r for r in self._laid_.runs if self.turn_blocks.get(r.block) == k]
+        mouse_y = self._content_(pygame.mouse.get_pos())[1]
+        row = next(r for r in rows if r.y <= mouse_y < r.y + r.h)
+        band = pygame.Rect(self.body.x, self.body.y + row.y - round(self.sy) - 2, self.body.width, row.h + 4).clip(self.body)
+        veil = pygame.Surface(band.size, pygame.SRCALPHA)
+        veil.fill(self.HOVER)
+        surf.blit(veil, band)
+        hint = small.render(f"turn {k} · {self.BRANCH_HINT}", True, TEXT)
+        surf.blit(hint, hint.get_rect(midright=(band.right - 12, band.centery)))
 
 
 def said(body):

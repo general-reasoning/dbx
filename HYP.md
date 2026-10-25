@@ -497,6 +497,35 @@ machine, and for the directory, it ran in. A session saved on one machine
 and reopened on another is shown, but Claude there has no record of it: the
 window says so.
 
+**Branches.** A conversation is a tree. Its window shows it turn by turn,
+and each turn's `You` and `Claude` headings are a click away from going on
+after it: a click opens a new branch in the window's place -- the turns up
+to that one, those after it left where they are, and the box beneath it --
+and the first thing sent from it makes the branch. Closed before then, it
+leaves nothing. A click on the last turn of a branch the window's goes on
+from opens that branch, to go on with it; the window's own last turn is no
+branch -- the box goes on from it already. A branch's turns before its own
+are shown above a line saying where it goes on from.
+
+A branch is a markdown of its own, holding only its own turns, its front
+matter naming its parent's file -- relative to its own -- and `fork`, the
+number of its parent's turns it keeps; the turns before its own are
+assembled from its parents as it is opened. Its parent is the branch whose
+own turns hold the turn clicked, so the tree is kept as it grew. On Claude
+Code's side, its first turn forks the conversation it was made from, at the
+last message of that turn (`claude -p --resume <id> --resume-session-at
+<message> --fork-session --session-id <new id>`): the branch has the turns
+before it, and not those after, and the conversation it came from is as it
+was. Claude Code keeps conversations per machine, so a branch is made where
+the conversation it comes from was held; elsewhere, the window says so.
+
+On the disk, a branch is one point, labeled by its first own turn and
+embedded by its own turns only -- embedded with its upstream, every branch
+of a conversation would lie on top of the others -- and a faint geodesic
+joins it to its parent's point: a conversation is drawn as the tree it is.
+A branch whose parent's file is gone shows its own turns, says so, and keeps
+the link.
+
 **Its turns, as points of their own.** Cmd+right click on a session's
 point shows each of its turns as a point -- a shard of the session's --
 ringed about it, and slides the view to it; a right click on empty disk

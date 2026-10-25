@@ -1259,8 +1259,16 @@ class Hyp:
         return time.strftime("%Y-%m-%d %H:%M", time.localtime(added)) if added else None
 
     def __point_link__(self, i):
-        """The point point *i* is drawn joined to -- the one it grew from, in a tree of them -- as an index, or None: here, none."""
-        return None
+        """The point point *i* is drawn joined to -- the one it grew from, in a tree of them -- as an index, or None: here, the one its "link", a key, names.
+
+        The engine lays linked points out near each other (`layout.LINK_PULL`).
+        """
+        point = self.snap.points[i] if self.snap.points else {}
+        if not point.get("link"):
+            return None
+        if self._keyed_[0] is not self.snap:
+            self._keyed_ = (self.snap, {p.get("key") or p.get("path"): n for n, p in enumerate(self.snap.points)})
+        return self._keyed_[1].get(point["link"])
 
     def __point_tooltip__(self, i):
         """The tooltip of point *i*: its label, both lines, as the settings show them -- in full, where the label is cut short."""
@@ -1371,6 +1379,7 @@ class Hyp:
         self.hover = None
         self.arrows = {}  # (snapshot, point) -> its arrows decoded, or None while they are being decoded: Shift over a point
         self._links_ = (None, [])  # (snapshot, [(point, the one it is joined to)]): `__point_link__`, asked once a snapshot
+        self._keyed_ = (None, {})  # (snapshot, {key: point}): what a "link" names
         self.press = None  # where the left button went down, while it is down
         self.last_off_disk = None  # (pos, time) of the last left click off the disk: half a double click
         self.dragging = False
@@ -1659,11 +1668,11 @@ class Hyp:
     # -- drawing --------------------------------------------------------------
 
     def label(self, i, text, sub=None):
-        """Point *i*'s label: *text*, and below it, dimmer, *sub* -- its `sublabel`."""
+        """Point *i*'s label: *text* -- a line each, cut short -- and below it, dimmer, *sub*, its `sublabel`."""
         key = (i, text, sub)
         if key not in self.labels:
-            short = text if len(text) <= LABEL_CHARS else text[: LABEL_CHARS - 1] + "…"
-            lines = [self.small.render(short, True, LABEL)]
+            lines = [self.small.render(t if len(t) <= LABEL_CHARS else t[: LABEL_CHARS - 1] + "…", True, LABEL)
+                     for t in text.split("\n")]
             for line in sub.split("\n") if sub else ():
                 line = line if len(line) <= SUBLABEL_CHARS else line[: SUBLABEL_CHARS - 1] + "…"
                 lines.append(self.tiny.render(line, True, STATUS))
@@ -1724,7 +1733,8 @@ class Hyp:
             def text(i):
                 sub = self.sublabel(i, full=True)
                 sub = sub.replace("\n", " · ") if sub else sub  # one line, in a menu
-                t = f"{self.__point_label__(i)}  ·  {sub}" if sub else str(self.__point_label__(i))
+                label = str(self.__point_label__(i)).replace("\n", " · ")  # one line, in a menu
+                t = f"{label}  ·  {sub}" if sub else label
                 return t if len(t) <= POINTS_MENU_CHARS else t[: POINTS_MENU_CHARS - 1] + "…"
 
             items = sorted(((text(i), i) for i in range(len(self.snap.positions))), key=lambda t: t[0].lower())

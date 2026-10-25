@@ -466,7 +466,7 @@ def test_reload_picks_up_new_pipelines_and_lays_out_afresh(tmp_path, monkeypatch
     monkeypatch.setattr(layout, "compute", lambda emb, **kw: laid.append(kw) or real(emb, **kw))
     engine.reload(quiet)
     assert len(engine.store) == 7 and engine.store.layout.shape == (7,)
-    assert laid == [{"seed": 0}], "laid out afresh, not seeded from the old layout"
+    assert laid == [{"seed": 0, "links": []}], "laid out afresh, not seeded from the old layout"
     assert len(Store(data)) == 7, "and saved"
 
 
@@ -616,7 +616,7 @@ def test_the_window_samples_what_is_picked_and_shows_it(pipelines_app, monkeypat
     monkeypatch.setattr(dbxpipelines, "slice_plan", lambda row, python: {"tablets": 532, "rows0": {"features": 286}})
     monkeypatch.setattr(dbxpipelines, "slice_sample", lambda row, data, labels, fraction, **kw: calls.append((data, labels, fraction, kw))
                         or (np.eye(6, dtype=np.float32), ["a", "a", "b", "b", "c", "c"], [(0, r) for r in range(6)], []))
-    monkeypatch.setattr(layout, "compute", lambda X, seed=0: np.linspace(0, 0.5, len(X)).astype(complex))
+    monkeypatch.setattr(layout, "compute", lambda X, seed=0, links=(): np.linspace(0, 0.5, len(X)).astype(complex))
     window = NS(row=SLICED_ROW)
     menus = app._slice_menus_(window)
     data = window.slice_menus["data"]

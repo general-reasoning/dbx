@@ -43,6 +43,12 @@ class Shards:
     offsets: np.ndarray = None  # None for shards laid out on their own, `shatter`'s
 
 
+def _links_(points):
+    """The rows each point is joined to by its "link" -- another's key: what it grew from, a branch's parent -- `[(i, j)]`, laid out near each other."""
+    row = {p.get("key"): n for n, p in enumerate(points) if p.get("key") is not None}
+    return [(n, row[p["link"]]) for n, p in enumerate(points) if p.get("link") in row and row[p["link"]] != n]
+
+
 def _shard_points_(key, entries):
     """Shards *entries*, as their point's -- *key*'s -- stored fields: a point's, with "origin", the key."""
     return tuple({"text": e.text, "summary": e.summary, "key": e.key, "embed": e.embed, **e.extra, "origin": key} for e in entries)
@@ -117,7 +123,7 @@ class Engine:
             elif s.layout is None or len(s.layout) != len(s) or moved:
                 progress("computing hyperbolic UMAP layout")
                 keep = previous if previous is not None and len(previous) <= len(s) else None
-                s.layout = layout.compute(s.embeddings, previous=keep, seed=self.seed)
+                s.layout = layout.compute(s.embeddings, previous=keep, seed=self.seed, links=_links_(s.points))
             s.save()
 
     def reload(self, progress=print):
@@ -130,7 +136,7 @@ class Engine:
                 self._lay_out_shown_(progress)
             else:
                 progress(f"computing hyperbolic UMAP layout of {len(s)} texts")
-                s.layout = layout.compute(s.embeddings, seed=self.seed)
+                s.layout = layout.compute(s.embeddings, seed=self.seed, links=_links_(s.points))
             s.save()
 
     def reembed(self, progress=print):
@@ -159,7 +165,7 @@ class Engine:
             self.keys = {e.key for e in entries} if self.source is not None else None
             self._shown_ = None
             progress(f"computing hyperbolic UMAP layout of {len(s)} texts")
-            s.layout = layout.compute(s.embeddings, seed=self.seed) if len(s) else None
+            s.layout = layout.compute(s.embeddings, seed=self.seed, links=_links_(s.points)) if len(s) else None
             s.save()
 
     def refresh(self, progress=print):
@@ -179,7 +185,7 @@ class Engine:
             elif moved or s.layout is None or len(s.layout) != len(s):
                 progress("updating the layout")
                 keep = previous if previous is not None and len(previous) <= len(s) else None
-                s.layout = layout.compute(s.embeddings, previous=keep, seed=self.seed)
+                s.layout = layout.compute(s.embeddings, previous=keep, seed=self.seed, links=_links_(s.points))
             s.save()
             return moved
 
@@ -349,7 +355,7 @@ class Engine:
             m = sum(k in was for k in keys)
             progress(f"computing hyperbolic UMAP layout of {len(rows)} texts, {len(rows) - len(whole)} of them shards")
             laid = layout.compute(embedded[order], previous=np.array([was[keys[n]] for n in order[:m]], dtype=complex) if m else None,
-                                  seed=self.seed)
+                                  seed=self.seed, links=_links_([rows[n] for n in order]))
             self._shattered_at_ = at = {keys[n]: z for n, z in zip(order, laid)}
         return rows, embedded, np.array([at[k] for k in keys], dtype=complex)
 
@@ -373,10 +379,12 @@ class Engine:
         """Lay out the points shown, by themselves: kept apart from the stored layout, which is of them all."""
         shown = self._shown_indices_()
         progress(f"computing hyperbolic UMAP layout of {len(shown)} of {len(self.store)} texts")
-        self._shown_ = (shown, layout.compute(self.store.embeddings[shown], seed=self.seed) if len(shown) else np.zeros(0, dtype=complex))
+        points = [self.store.points[i] for i in shown]
+        self._shown_ = (shown, layout.compute(self.store.embeddings[shown], seed=self.seed, links=_links_(points)) if len(shown)
+                        else np.zeros(0, dtype=complex))
 
     def _sync_(self, progress):
-        """Add the source's new entries and update changed ones; True if any embedding changed.
+        """Add the source's new entries and update changed ones; True if any embedding changed, or any link.
 
         The store is changed only once everything is embedded, so a job
         interrupted on the way -- its *progress* raising -- leaves it as it was.
@@ -386,6 +394,8 @@ class Engine:
         entries = self.source(progress)
         new = [e for e in entries if e.key not in index]
         changed = [e for e in entries if e.key in index and s.points[index[e.key]].get("embed") != e.embed]
+        # A link made or gone moves points too, though no embedding changes: they are laid out by it.
+        relinked = any(s.points[index[e.key]].get("link") != e.extra.get("link") for e in entries if e.key in index)
         todo = new + changed
         if todo:
             vecs = self._embed_([e.embed for e in todo], progress, f"embedding {len(new)} new and {len(changed)} changed entries")
@@ -396,8 +406,8 @@ class Engine:
                 # a pipeline run again keeps its spec but gains a datetime.
                 s.points[index[e.key]].update(text=e.text, summary=e.summary, embed=e.embed, **e.extra)
         if not todo:
-            progress("source: nothing new")
-            return False
+            progress("source: nothing new" if not relinked else "source: links changed")
+            return relinked
         for e, v in zip(changed, vecs[len(new) :]):
             s.embeddings[index[e.key]] = v
         if new:
@@ -427,7 +437,7 @@ class Engine:
             previous = s.layout
             s.add([text], [summary], vec)
             progress("updating layout")
-            s.layout = layout.compute(s.embeddings, previous=previous, seed=self.seed)
+            s.layout = layout.compute(s.embeddings, previous=previous, seed=self.seed, links=_links_(s.points))
             s.save()
             return len(s) - 1
 

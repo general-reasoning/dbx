@@ -301,8 +301,8 @@ def documents(root, progress=print, n_workers=16, cache=None, storage_options=No
             # A Claude session: embedded whole, as long as it gets; its point opens the session again, labeled by its title and dated by its last write.
             extra.update(kind=claude.KIND, session=fields.get("session"), updated=fields.get("updated"))
             above = claude.parent_url(url, fields)
-            if above is not None:  # a branch: its point is linked to its parent's, the conversation drawn as the tree it is
-                extra.update(branch_of=above, fork=fields.get("fork"))
+            if above is not None:  # a branch: its point joined to its parent's, laid out by it, the conversation drawn as the tree it is
+                extra.update(link=above, fork=fields.get("fork"))
             title = fields.get("title") or base
             summary = f"Claude · {title}"
             # By its title and what was said: the file's name and the transcript's markup are every session's, and
@@ -384,6 +384,14 @@ def _named_lines_(reply, n):
     if len(lines) != n or not all(lines):
         return None
     return [ln if len(ln) <= WORDS_CHARS else ln[: WORDS_CHARS - 1] + "…" for ln in lines]
+
+
+def _squeezed_(text, n):
+    """*text* in at most *n* characters: its start and its end, an ellipsis between, where it is longer."""
+    if len(text) <= n:
+        return text
+    head = (n - 1) // 2
+    return f"{text[:head].rstrip()}…{text[-(n - 1 - head):].lstrip()}"
 
 
 def _first_words_(text):
@@ -473,7 +481,6 @@ class HypDocs(Hyp):
         self.settings["web access"] = bool(self._kept_settings_().get("web access", False))
         self._remoted_ = False  # the sessions put on remote as hyp started: once
         self.names = None  # a question's digest -> the words Claude named it by, as words.json keeps them: read once
-        self._at_key_ = (None, {})  # (snapshot, {key: row}): where a branch's parent is on the disk
 
     def __click_point__(self, i, now):
         """Left click on a document: open it in the center; on a saved Claude session, the session, to go on with -- on a turn of one, at that turn."""
@@ -558,23 +565,21 @@ class HypDocs(Hyp):
         return time.strftime("%Y-%m-%d %H:%M", time.localtime(mtime)) if mtime else None
 
     def __point_label__(self, i):
-        """A point's summary; a turn's, its session's label cut short where both would not fit, the turn's few words kept whole."""
+        """A point's summary; a turn's, its session's label cut short where both would not fit, the turn's few words kept whole.
+
+        A branch of a conversation: its parent's label on a line, squeezed to
+        its start and end, and beneath it, `↳` and its own.
+        """
         point, label = self.snap.points[i] if self.snap.points else {}, self.snap.summaries[i]
+        above = self.__point_link__(i) if point.get("kind") == claude.KIND else None
+        if above is not None:
+            mine = label.removeprefix(claude.ClaudeWindow.TITLE_PREFIX)
+            return f"{_squeezed_(self.snap.summaries[above], LABEL_CHARS)}\n↳ {mine}"
         words = point.get("words")
         if point.get("kind") != SHARD or not words or len(label) <= LABEL_CHARS:
             return label
         head = label[: -len(words) - 3]  # its session's label: what precedes " · <words>"
         return f"{head[: max(LABEL_CHARS - len(words) - 4, 4)]}… · {words}"
-
-    def __point_link__(self, i):
-        """A branch of a conversation: joined to its parent branch's point, where that is on the disk."""
-        point = self.snap.points[i] if self.snap.points else {}
-        above = point.get("branch_of")
-        if not above:
-            return None
-        if self._at_key_[0] is not self.snap:
-            self._at_key_ = (self.snap, {p.get("key") or p.get("path"): n for n, p in enumerate(self.snap.points)})
-        return self._at_key_[1].get(above)
 
     def __point_tooltip__(self, i):
         """A turn's: its label in full, its datetime, and the beginning of its question; any other point's, as every point's."""

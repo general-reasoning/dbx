@@ -13,7 +13,11 @@ All notable changes to this project will be documented in this file.
   (`parent`, `fork`), its earlier turns assembled from its parents as it is
   opened (`Session.branch`, `Session.path`). On the disk a branch is one
   point, embedded by its own turns, joined to its parent's by a faint
-  geodesic (`__point_link__`).
+  geodesic (`__point_link__`), labeled by its parent's label squeezed to a
+  line and, beneath, its own. A point's `link` -- another's key -- draws the
+  two together in the layout, not the embeddings: their distance shortened
+  (`layout.LINK_PULL`), each in the other's neighbor graph, and the linked
+  point kept within reach of the other (`layout.LINK_REACH`).
 - **hyp --docs: web access.** A setting, off by default and kept with the
   corpus (its `settings.json`), that gives a session's Claude `WebSearch`
   and `WebFetch` besides its read-only tools, from the next turn on and in

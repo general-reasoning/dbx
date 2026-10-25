@@ -410,7 +410,7 @@ def test_a_refresh_embeds_what_changed_and_nudges_the_layout_from_where_it_was(t
     engine.start(quiet)
     before = engine.store.layout.copy()
     seen, real = {}, layout.compute
-    monkeypatch.setattr(layout, "compute", lambda e, previous=None, seed=0: (seen.__setitem__("previous", previous), real(e, previous=previous, seed=seed))[1])
+    monkeypatch.setattr(layout, "compute", lambda e, previous=None, seed=0, links=(): (seen.__setitem__("previous", previous), real(e, previous=previous, seed=seed, links=links))[1])
     assert engine.refresh(quiet) is False and "previous" not in seen, "nothing new: nothing laid out"
     texts["k6"] = "a new one"
     assert engine.refresh(quiet) is True
@@ -1860,7 +1860,7 @@ def test_a_click_on_a_turn_in_docs_opens_a_new_branch_saved_with_its_first_turn_
     _type_(a._claude_window_(), "date")
     found = {d.key: d for d in docs.documents(str(tree), progress=lambda *x: None)}
     (new,) = set(found) - {three.md_url, str(tree / "a.md")}
-    assert found[new].extra["branch_of"] == three.md_url and found[new].summary == "Claude · date"
+    assert found[new].extra["link"] == three.md_url and found[new].summary == "Claude · date"
     assert "banana" not in found[new].embed and "date" in found[new].embed, "embedded by its own turns only"
     order = list(found)
     a.snap = NS(positions=np.zeros(len(order), dtype=complex), summaries=[found[k].summary for k in order],
@@ -1868,6 +1868,13 @@ def test_a_click_on_a_turn_in_docs_opens_a_new_branch_saved_with_its_first_turn_
                 points=[{"key": k, **found[k].extra} for k in order])
     assert a.__point_link__(order.index(new)) == order.index(three.md_url) and a.__point_link__(order.index(three.md_url)) is None
     assert a.links() == [(order.index(new), order.index(three.md_url))]
+    assert a.__point_label__(order.index(new)) == "Claude · apple\n↳ date", "its parent's label, then its own"
+    long = list(a.snap.summaries)
+    long[order.index(three.md_url)] = "Claude · a parent whose title runs on and on to its very end"
+    a.snap = NS(**{**vars(a.snap), "summaries": long})
+    first, second = a.__point_label__(order.index(new)).split("\n")
+    assert len(first) <= docs.LABEL_CHARS and "…" in first and second == "↳ date", "squeezed to a line: its start and its end"
+    assert first.startswith("Claude · a pare") and first.endswith("to its very end")
 
 
 def test_a_turn_counts_as_claude_code_records_prompts(cli):

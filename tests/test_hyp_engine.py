@@ -244,7 +244,7 @@ def test_points_shattered_lie_on_their_own_in_their_place_and_are_put_back(tmp_p
     groups = {"k3": [NS(key=f"k3#{n}", text=f"turn {n}", embed=e, summary=f"k3 · {n}", extra={}) for n, e in enumerate(["text 6", "x", "y"])],
               "k5": [NS(key=f"k5#{n}", text=f"turn {n}", embed=f"z{n}", summary=f"k5 · {n}", extra={}) for n in range(2)]}
     laid, real = [], layout.compute
-    monkeypatch.setattr(layout, "compute", lambda e, previous=None, seed=0: (laid.append(len(e)), real(e, previous=previous, seed=seed))[1])
+    monkeypatch.setattr(layout, "compute", lambda e, previous=None, seed=0, links=(): (laid.append(len(e)), real(e, previous=previous, seed=seed, links=links))[1])
     engine.shatter(groups, quiet)
 
     snap = engine.snapshot()
@@ -283,3 +283,30 @@ def test_shards_are_embedded_with_a_bar_and_a_shatter_interrupted_leaves_the_dis
         engine.shatter({"k5": [NS(key="k5#0", text="t", embed="z", summary="s", extra={})]}, stop_laying_out)
     assert not engine.shattered and "k3" in engine.shards
     assert np.array_equal(engine.snapshot().positions, before.positions), "interrupted: as it was"
+
+
+def test_linked_points_are_laid_out_within_reach_of_each_other_their_embeddings_untouched(tmp_path):
+    rng = np.random.default_rng(3)
+    e = rng.normal(size=(40, 16)).astype(np.float32)
+    pairs = [(0, 1), (2, 3), (4, 5), (10, 0)]  # 10 grew from 0, which grew from 1
+    d = layout.distances(e, pairs)
+    plain = layout.distances(e)
+    assert np.isclose(d[0, 1], plain[0, 1] * (1 - layout.LINK_PULL)) and d[0, 2] == plain[0, 2]
+    w = layout.compute(e, seed=0, links=pairs)
+    nn = poincare.distance(w[:, None], w[None, :])
+    np.fill_diagonal(nn, np.inf)
+    reach = layout.LINK_REACH * float(np.median(nn.min(axis=1)))
+    assert all(poincare.distance(w[j], w[i]) <= reach * 1.05 for i, j in pairs)
+    few = layout.compute(e[:4], links=[(0, 1)])
+    assert poincare.distance(few[0], few[1]) < poincare.distance(*layout.compute(e[:4])[:2]), "a few: scaled by the shortened distance"
+
+    links = {"k3": "k7"}
+    source = lambda progress: [NS(key=f"k{i}", text=f"t{i}", embed=f"text {i}", summary=f"k{i}",  # noqa: E731
+                                  extra={"link": links[f"k{i}"]} if f"k{i}" in links else {}) for i in range(12)]
+    engine = Engine(Store(tmp_path), HashEmbedder(), EchoSummarizer(), source=source)
+    engine.start(quiet)
+    snap = engine.snapshot()
+    assert snap.points[3]["link"] == "k7"
+    links["k5"] = "k7"
+    assert engine.refresh(quiet), "a link made: laid out again, though nothing was embedded"
+    assert engine.store.points[5]["link"] == "k7" and not engine.refresh(quiet)

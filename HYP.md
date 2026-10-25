@@ -519,10 +519,25 @@ before it, and not those after, and the conversation it came from is as it
 was. Claude Code keeps conversations per machine, so a branch is made where
 the conversation it comes from was held; elsewhere, the window says so.
 
-On the disk, a branch is one point, labeled by its first own turn and
-embedded by its own turns only -- embedded with its upstream, every branch
-of a conversation would lie on top of the others -- and a faint geodesic
-joins it to its parent's point: a conversation is drawn as the tree it is.
+On the disk, a branch is one point, embedded by its own turns only --
+embedded with its upstream, every branch of a conversation would lie on top
+of the others -- and a faint geodesic joins it to its parent's point: a
+conversation is drawn as the tree it is. Its label is two lines: its
+parent's, squeezed to one -- its start, an ellipsis, its end -- and beneath
+it, `↳` and its own first turn's.
+
+Joined, a branch is laid out by its parent, whatever it goes on to: the
+link adds proximity to the metric the layout measures by, not to the
+embeddings, which still say only what the texts say -- so a point's
+nearest, as the hover's arcs and the arrows have them, are as they were.
+The cosine distance between the two is shortened by `LINK_PULL` (70%), each
+is among the other's neighbors in the graph UMAP is given, and a new branch
+starts beside its parent. One neighbor among fifteen does not hold a branch
+in place, so one laid out farther from its parent than `LINK_REACH` -- 1.5
+times the layout's median distance from a point to its nearest -- is moved
+in along the geodesic between them, parents first, so a branch of a branch
+follows its parent (`hyp/layout.py`). A link made or gone lays the disk out
+again, as a changed embedding does.
 A branch whose parent's file is gone shows its own turns, says so, and keeps
 the link.
 

@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- **hyp --docs: web access.** A setting, off by default and kept with the
+  corpus (its `settings.json`), that gives a session's Claude `WebSearch`
+  and `WebFetch` besides its read-only tools, from the next turn on and in
+  handoffs to the phone; the system prompt and the window say so. Settings
+  toggled reach a specialization through `__setting_changed__`.
 - **hyp --docs: a session's turns, as points of their own.** Cmd+right
   click on a Claude session's point rings its turns about it, each labeled
   `Claude · <title> · <words>`, the words Claude's, naming its question --
@@ -12,7 +17,9 @@ All notable changes to this project will be documented in this file.
   is embedded by the session's title and what was said in it, averaged with
   the session's embedding, and placed about the session by classical scaling
   of what the turns say, carried to wherever the session lies: the map does
-  not move (`Engine.shard`, `layout.about`). A click on a turn opens the
+  not move (`Engine.shard`, `layout.about`). Turns are embedded as an
+  engine job, with the loading card's bar in the middle of the window, and
+  Esc to stop it. A click on a turn opens the
   session at it; a right click on empty disk folds the turns back. A
   snapshot now slides its points from where they were by key, so points that
   come and go no longer reset the view.

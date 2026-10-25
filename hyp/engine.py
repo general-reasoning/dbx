@@ -19,6 +19,7 @@ SHARD_RADIUS = 0.45
 SHARD_INNER = 0.1
 # How much of a shard's embedding is its point's: as much as its own, so its nearest are its point and its siblings.
 SHARD_PULL = 1.0
+SHARD_BATCH = 8  # shards embedded at a time: a session's few turns still move the bar
 
 
 @dataclass(frozen=True)
@@ -287,8 +288,13 @@ class Engine:
                 if entries:
                     shattered[key] = Shards(points=_shard_points_(key, entries), embeddings=vecs[k : k + len(entries)])
                 k += len(entries)
+            was = self.shards, self.shattered, self._shattered_at_
             self.shards, self.shattered = {}, shattered
-            self._rows_(progress)  # laid out now, on the thread called on, not by the next snapshot
+            try:
+                self._rows_(progress)  # laid out now, on the thread called on, not by the next snapshot
+            except BaseException:
+                self.shards, self.shattered, self._shattered_at_ = was  # interrupted: as it was
+                raise
 
     def unshatter(self):
         """Put the points shattered back, whole, the disk as it is without them; whether any were shattered."""
@@ -351,7 +357,7 @@ class Engine:
         """The embeddings of shards *entries*, a row each: those embedded before, kept by their embed texts; the rest embedded now."""
         new = list(dict.fromkeys(e.embed for e in entries if e.embed not in self._shard_vectors_))
         if new:
-            self._shard_vectors_.update(zip(new, self._embed_(new, progress, f"embedding {len(new)} shards")))
+            self._shard_vectors_.update(zip(new, self._embed_(new, progress, f"embedding {len(new)} shards", batch=SHARD_BATCH)))
         if not entries:
             return np.zeros((0, self.store.embeddings.shape[1] if self.store.embeddings.ndim == 2 else 0), dtype=np.float32)
         return np.stack([self._shard_vectors_[e.embed] for e in entries]).astype(np.float32)

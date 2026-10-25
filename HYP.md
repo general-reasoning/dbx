@@ -340,6 +340,15 @@ disk, and change nothing. Each tool it uses is noted in the reply. A
 runs in your home directory, with no tools, and sees only what is pasted
 in.
 
+**Web access** (settings, off by default) gives Claude `WebSearch` and
+`WebFetch` besides, from the next turn on -- the sessions open, and those
+handed to the phone from then -- and its system prompt says so; off, it is
+told it cannot reach the web. The window says `web access on`, after the
+account. It is kept with the corpus, in its `settings.json`, so it stays as
+it was left. It is off by default because a session that both reads your
+documents and fetches pages could be led -- by a page, or a document --
+to put what it read into a url it fetches.
+
 **The model, and the usage.** At the right of the box, `model: default ▾`:
 a click switches it -- Claude Code's default, `opus`, `sonnet`, `haiku` --
 from the next turn on, which resumes the session on that model
@@ -498,8 +507,11 @@ words naming what it asked: `Claude · <title> · <words>`, the title cut
 short where both do not fit, the words kept whole. The words are Claude's,
 asked of every turn not named before at once (`claude -p`, no tools), and
 kept in the corpus's `words.json`, so a question is named once. The turns
-appear at once, those not yet named by their first words, and are relabeled
-as Claude's come. A left click on a turn opens the session at it -- that
+are read and embedded -- and, shattered, laid out -- as an engine job: the
+card in the middle of the window shows its bar, the turns done out of all,
+and Esc stops it, the disk left as it was. Then they appear, those not yet
+named by their first words, and are relabeled as Claude's come, in the
+background, the window usable meanwhile. A left click on a turn opens the session at it -- that
 turn's `## You` at the top of the window till it is scrolled -- and a right
 click places its session's transcript, at the turn.
 
@@ -596,7 +608,7 @@ a directory of markdowns, they are directions of content.
 | while a corpus loads | the window is dimmed and takes no input. A card in its middle shows the stage under way, with a bar, the files done out of the total, the time taken and the time left. An anchor's journal is listed first, as a stage of its own (`dbx.BuildJournal.list`). Until the listing is done there is no total, so the bar slides and the card counts the files found so far, after every directory. Then the files are read (`dbx.BuildJournal.read_frame`), counted against that total |
 | Esc, while a corpus loads | interrupt it at its next step and drop anything queued behind it. A reload that is interrupted leaves the disk as it was; a switch of journal leaves it empty until the next reload. Laying out the disk (UMAP) cannot be cut short, so an Esc during it waits for it to finish |
 | points (top right) | every point, by its label and second line in full, alphabetically (the first 2,000): picking one slides it to the center; a right click on one does what a right click on its point does |
-| settings (top right) | tags (an anchor's blocks), names and versions (`--journal`) and datetimes, each on and off: under labels and in tooltips; line numbers, in text windows (off by default); title colors -- a point's window titled in the point's color, and its entry blocks' windows in the same |
+| settings (top right) | tags (an anchor's blocks), names and versions (`--journal`) and datetimes, each on and off: under labels and in tooltips; line numbers, in text windows (off by default); title colors -- a point's window titled in the point's color, and its entry blocks' windows in the same; in `--docs`, sessions on remote, and web access -- Claude may search the web and fetch pages, kept with the corpus (see [Claude sessions](#claude-sessions)) |
 | in a text window | scroll / Up Down / PgUp PgDn move; Left / Right step through its title menu; × or Esc closes it |
 | in a text window: the triangle by a line | a line whose next line is indented deeper folds the deeper lines after it into `… N lines`, and unfolds them. Spec, dfn and kwargs are shown one key per line, a level per four spaces, so they fold by nesting |
 | in a text window: *fold* (top right), or 1–9, 0 | fold every such line at that many levels of indentation or deeper; *unfold all*, or 0, unfolds them all |

@@ -465,6 +465,9 @@ class HypDocs(Hyp):
         # Every session not open here is on remote -- handed off as hyp starts, and as its window closes -- and one
         # opened here is taken back.
         self.settings = {**self.settings, "sessions on remote": True}
+        # Whether Claude may search the web and fetch pages, besides reading the documents: off unless turned on, and kept
+        # with the corpus, in its settings.json, as it is turned on and off.
+        self.settings["web access"] = bool(self._kept_settings_().get("web access", False))
         self._remoted_ = False  # the sessions put on remote as hyp started: once
         self.names = None  # a question's digest -> the words Claude named it by, as words.json keeps them: read once
 
@@ -493,6 +496,22 @@ class HypDocs(Hyp):
             self.shard(i)
         else:
             self.__context_point__(i, pos)
+
+    def __setting_changed__(self, name):
+        """"web access" toggled: kept with the corpus, and so are the sessions open, from their next turn on."""
+        if name != "web access":
+            return
+        on = self.settings["web access"]
+        for window in self.windows():
+            if isinstance(window, claude.ClaudeWindow):
+                window.session.web = on
+        data = getattr(self.args, "data", None)
+        if data:
+            fs, path = fsspec.url_to_fs(posixpath.join(str(data), "settings.json"))
+            with fs.open(path, "w") as f:
+                json.dump({**self._kept_settings_(), "web access": on}, f)
+        self.status = ("web access on: Claude may search the web and fetch pages, from the next turn" if on
+                       else "web access off: Claude reads the documents only, from the next turn")
 
     def __wants_text__(self):
         """Typed into: a Claude session's window, whenever one is open -- its box, or its title -- besides what the disk's are."""
@@ -574,6 +593,7 @@ class HypDocs(Hyp):
         else:
             args = self.args
             session = session or claude.Session(self.root(args), self.claude_dir(args))
+            session.web = self.settings.get("web access", False)
             window = claude.ClaudeWindow(session, self._send_claude_, self._rename_claude_, self._hand_off_, self._take_back_)
             self._reclaim_(window)
             window.account = self.claude_account  # as last read, until read again: an account switched to since is shown
@@ -655,16 +675,17 @@ class HypDocs(Hyp):
     def shard(self, i):
         """Session *i*'s turns, each a point of its own about it -- labeled by the session's label and a few words of what it asked -- and the view slid to it.
 
-        Read from the session's file, as saved, on a thread: shown at once,
-        the turns Claude has not named yet by their first words, and relabeled
-        as it names them, all at once (`_words_`). Each turn is embedded by
-        the session's title and what was said in it, and by the session's own
-        embedding too, and ringed about its point (`Engine.shard`). Filed
-        again, a session keeps its turns shown, a new one among them.
+        Read from the session's file, as saved, and embedded as an engine
+        job -- its bar in the middle of the window, Esc to stop it -- then
+        shown, the turns Claude has not named yet by their first words, and
+        relabeled in the background as it names them, all at once
+        (`_words_`). Each turn is embedded by the session's title and what was
+        said in it, and by the session's own embedding too, and ringed about
+        its point (`Engine.shard`). Filed again, a session keeps its turns
+        shown, a new one among them.
         """
         point = self.snap.points[i]
-        # What is said of it, in order after what was said on the way: "Claude is naming them" would else outlast it.
-        self.run_async(lambda: self._shard_(point["key"], point["path"], focus=True), self.worker.status)
+        self._job_(lambda progress: self._shard_(point["key"], point["path"], True, progress))
 
     def collapse(self, key=None):
         """Fold session *key*'s turns back into its point -- every session's, without *key*: the disk as it was."""
@@ -684,12 +705,13 @@ class HypDocs(Hyp):
         asked and answered alone -- not its session's title, nor its
         session's embedding -- and the disk laid out again with the turns in
         the sessions' place, from where everything was (`Engine.shatter`).
-        Labeled as `shard`'s are, and named by Claude as they are, the
-        questions of every session asked WORDS_BATCH at a time. A session
-        filed meanwhile is shattered again, its new turn among the rest.
+        Embedded and laid out as an engine job, as `shard`'s are; labeled as
+        theirs are, and named by Claude as they are, the questions of every
+        session asked WORDS_BATCH at a time. A session filed meanwhile is
+        shattered again, its new turn among the rest.
         """
         sessions = self._sessions_()
-        self.run_async(lambda: self._shatter_(sessions), self.worker.status)
+        self._job_(lambda progress: self._shatter_(sessions, progress))
 
     def unshatter(self):
         """The sessions whole again, in place of their turns: the disk as it was before `shatter`."""
@@ -729,6 +751,7 @@ class HypDocs(Hyp):
     def _send_claude_(self, window, text):
         """Send *text* in *window*'s session, on a thread, the reply shown as it comes."""
         window.begin(text)
+        window.session.web = self.settings.get("web access", False)
         put = self.worker.events.put
 
         def turn():
@@ -771,6 +794,7 @@ class HypDocs(Hyp):
         window.session.save()
         self._file_(window.session)  # embedded, in the background
         window.note = None
+        window.session.web = self.settings.get("web access", False)
         window.handoff = claude.Handoff(window.session)
         before = window.session.id
         window.handoff.start()
@@ -804,7 +828,7 @@ class HypDocs(Hyp):
             return
         self._remoted_ = True
         urls = [p["path"] for p in self.snap.points if p.get("kind") == claude.KIND and p.get("path")]
-        root, subdir = self.root(self.args), self.claude_dir(self.args)
+        root, subdir, web = self.root(self.args), self.claude_dir(self.args), self.settings.get("web access", False)
 
         def open_here(session):
             return any(isinstance(w, claude.ClaudeWindow) and w.session.md_url == session.md_url for w in self.windows())
@@ -822,6 +846,7 @@ class HypDocs(Hyp):
                 if claude.conversation_path(session.id) is None:
                     continue  # no record of it to resume: it stays here
                 before = session.id
+                session.web = web
                 handoff = claude.Handoff(session)
                 handoff.start()
                 if session.id != before:
@@ -887,55 +912,85 @@ class HypDocs(Hyp):
         def job():
             url = session.save()
             moved = engine is not None and engine.refresh(self.worker.status)
-            if sessions is not None and engine.shattered:
-                self._shatter_({**sessions, url: url})  # shattered: again, its new turn among the rest
-            elif engine is not None and url in engine.shards:
-                self._shard_(url, url, focus=False)  # its turns shown: shown again, the new one among them
+            if sessions is not None and engine.shattered:  # shattered: again, its new turn among the rest
+                _, name = self._shatter_({**sessions, url: url}, self.worker.status)
+                if name is not None:
+                    name()
+            elif engine is not None and url in engine.shards:  # its turns shown: shown again, the new one among them
+                _, name = self._shard_(url, url, False, self.worker.status)
+                if name is not None:
+                    name()
             elif moved:
                 put(("snapshot", (engine.snapshot(), None)))
             return url
 
         self.run_async(job, lambda url: setattr(self, "status", f"saved and embedded {posixpath.basename(url)}"))
 
-    def _shard_(self, key, url, focus):
-        """Show session *key*'s turns, read from *url*, on the thread called on: then, once Claude names them, again; what to say of it.
+    def _job_(self, show):
+        """*show* as an engine job -- `show(progress)`, giving `(what to say, name)` -- and then *name*, if any, in the background.
 
-        With *focus*, the view slides to the session's point as they appear.
+        The job has the window's loading card, its bar and Esc; Claude's
+        naming, which may take a while, does not hold the window.
+        """
+        put = self.worker.events.put
+
+        def job(progress):
+            shown, name = show(progress)
+            progress(shown)
+            if name is not None:
+                # Said in order after what was said on the way: "Claude is naming them" would else outlast it.
+                put(("call", lambda: self.run_async(name, self.worker.status)))
+
+        self.worker.submit(job)
+
+    def _shard_(self, key, url, focus, progress):
+        """Show session *key*'s turns, read from *url*, on the thread called on: `(what to say, name)`.
+
+        *name*, None if every turn is named, names those Claude has not --
+        on a thread of its own, as it may take a while -- and shows them
+        again; what to say then. With *focus*, the view slides to the
+        session's point as the turns appear.
         """
         engine, put, status = self.engine, self.worker.events.put, self.worker.status
+        progress(f"reading the turns of {posixpath.basename(url)}")
         session = claude.Session.load(url, self.root(self.args), self.claude_dir(self.args))
         said = claude.turns(session.prior)
         if not said:
             if engine.unshard(key):
                 put(("snapshot", (engine.snapshot(), None)))
-            return f"{session.title()}: no turns to show"
+            return f"{session.title()}: no turns to show", None
         questions = [q for q, _ in said]
         words, unnamed = self._words_(questions, ask=False)
-        engine.shard(key, self._turns_(session, key, said, words), status)
+        engine.shard(key, self._turns_(session, key, said, words), progress)
         snap = engine.snapshot()
         put(("snapshot", (snap, next((n for n, p in enumerate(snap.points) if p.get("key") == key), None) if focus else None)))
         shown = f"{len(said)} turn{'s' * (len(said) != 1)} of {session.title()}"
         if not unnamed:
-            return shown
-        status(f"{shown}: Claude is naming {unnamed} of them")
-        try:
-            words, _ = self._words_(questions, ask=True)
-        except claude.Failed as e:
-            return f"{shown}, by their first words: Claude could not name them: {e}"
-        if key not in engine.shards:
-            return shown  # folded back while Claude named them
-        engine.shard(key, self._turns_(session, key, said, words), status)
-        put(("snapshot", (engine.snapshot(), None)))
-        return shown
+            return shown, None
 
-    def _shatter_(self, sessions):
-        """Shatter *sessions* -- `{key: url}` -- into their turns, on the thread called on: shown, then, once Claude names them, again; what to say of it.
+        def name():
+            status(f"{shown}: Claude is naming {unnamed} of them")
+            try:
+                named, _ = self._words_(questions, ask=True)
+            except claude.Failed as e:
+                return f"{shown}, by their first words: Claude could not name them: {e}"
+            if key not in engine.shards:
+                return shown  # folded back while Claude named them
+            engine.shard(key, self._turns_(session, key, said, named), status)
+            put(("snapshot", (engine.snapshot(), None)))
+            return shown
+
+        return shown, name
+
+    def _shatter_(self, sessions, progress):
+        """Shatter *sessions* -- `{key: url}` -- into their turns, on the thread called on: `(what to say, name)`, as `_shard_`'s.
 
         A session that cannot be read, or has no turns, stays whole.
         """
         engine, put, status = self.engine, self.worker.events.put, self.worker.status
         read = []
-        for key, url in sessions.items():
+        for n, (key, url) in enumerate(sessions.items()):
+            progress("reading the sessions' turns", n, len(sessions))
             try:
                 session = claude.Session.load(url, self.root(self.args), self.claude_dir(self.args))
             except (OSError, ValueError):
@@ -944,7 +999,7 @@ class HypDocs(Hyp):
             if said:
                 read.append((key, session, said))
         if not read:
-            return "no session has turns to shatter"
+            return "no session has turns to shatter", None
         questions = [asked for _, _, said in read for asked, _ in said]
 
         def groups(words):
@@ -955,21 +1010,25 @@ class HypDocs(Hyp):
             return out
 
         words, unnamed = self._words_(questions, ask=False)
-        engine.shatter(groups(words), status)
+        engine.shatter(groups(words), progress)
         put(("snapshot", (engine.snapshot(), None)))
         shown = f"{len(questions)} turn{'s' * (len(questions) != 1)} of {len(read)} session{'s' * (len(read) != 1)}, on their own"
         if not unnamed:
+            return shown, None
+
+        def name():
+            status(f"{shown}: Claude is naming {unnamed} of them")
+            try:
+                named, _ = self._words_(questions, ask=True)
+            except claude.Failed as e:
+                return f"{shown}, by their first words: Claude could not name them: {e}"
+            if not engine.shattered:
+                return shown  # whole again while Claude named them
+            engine.shatter(groups(named), status)
+            put(("snapshot", (engine.snapshot(), None)))
             return shown
-        status(f"{shown}: Claude is naming {unnamed} of them")
-        try:
-            words, _ = self._words_(questions, ask=True)
-        except claude.Failed as e:
-            return f"{shown}, by their first words: Claude could not name them: {e}"
-        if not engine.shattered:
-            return shown  # whole again while Claude named them
-        engine.shatter(groups(words), status)
-        put(("snapshot", (engine.snapshot(), None)))
-        return shown
+
+        return shown, name
 
     def _sessions_(self):
         """`{key: url}` of every session on the disk: whole, or as its turns."""
@@ -1040,6 +1099,18 @@ class HypDocs(Hyp):
             fs, path = fsspec.url_to_fs(posixpath.join(str(data), "words.json"))
             with fs.open(path, "w") as f:
                 json.dump(self.names, f)
+
+    def _kept_settings_(self):
+        """The settings kept with the corpus, in its settings.json: {} without one."""
+        data = getattr(self.args, "data", None)
+        if not data:
+            return {}
+        fs, path = fsspec.url_to_fs(posixpath.join(str(data), "settings.json"))
+        try:
+            kept = json.loads(fs.cat_file(path))
+        except (FileNotFoundError, ValueError):
+            return {}
+        return kept if isinstance(kept, dict) else {}
 
     def _close_(self, window):
         if isinstance(window, notes.NoteWindow) and window.dirty():

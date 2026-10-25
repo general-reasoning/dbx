@@ -259,3 +259,27 @@ def test_points_shattered_lie_on_their_own_in_their_place_and_are_put_back(tmp_p
     assert np.array_equal(engine.snapshot().positions, snap.positions)
     assert engine.unshatter() and not engine.unshatter()
     assert np.array_equal(engine.snapshot().positions, before.positions), "whole again: the disk as it was"
+
+
+def test_shards_are_embedded_with_a_bar_and_a_shatter_interrupted_leaves_the_disk_as_it_was(tmp_path):
+    texts = {f"k{i}": f"text {i}" for i in range(8)}
+    source = lambda progress: [NS(key=k, text=t, embed=t, summary=k, extra={}) for k, t in texts.items()]  # noqa: E731
+    engine = Engine(Store(tmp_path), HashEmbedder(), EchoSummarizer(), source=source)
+    engine.start(quiet)
+    told = []
+    shards = [NS(key=f"k3#{n}", text="t", embed=f"turn {n}", summary="s", extra={}) for n in range(10)]
+    engine.shard("k3", shards, lambda msg, done=None, total=None: told.append((msg, done, total)))
+    assert told == [("embedding 10 shards", 0, 10), ("embedding 10 shards", 8, 10), ("embedding 10 shards", 10, 10)]
+    before = engine.snapshot()
+
+    class Stop(Exception):
+        pass
+
+    def stop_laying_out(msg, done=None, total=None):
+        if msg.startswith("computing"):
+            raise Stop()
+
+    with pytest.raises(Stop):
+        engine.shatter({"k5": [NS(key="k5#0", text="t", embed="z", summary="s", extra={})]}, stop_laying_out)
+    assert not engine.shattered and "k3" in engine.shards
+    assert np.array_equal(engine.snapshot().positions, before.positions), "interrupted: as it was"

@@ -10,7 +10,9 @@ id, so a turn after the first is `claude -p --resume <id>`.
 Claude runs in the directory hyp scans (`--dir`), with read-only tools
 (`TOOLS`): it can read, list and search the documents on the disk, and
 change nothing. A `--dir` that is a url is not a directory Claude Code can
-work in, so there it has no tools at all.
+work in, so there it has none of them. The web is not reached unless the
+session's `web` says so -- hyp's "web access" setting -- and then Claude may
+search it and fetch pages too (`WEB_TOOLS`).
 
 Every turn writes the session into `--dir`, or a directory under it
 (`--claude-dir`), as one markdown, `claude-session-<started>-<id>.md`: the
@@ -53,6 +55,10 @@ SYSTEM = (
 )
 SYSTEM_TOOLS = "You may read, list and search those documents, to answer from them; you cannot change them."
 SYSTEM_NO_TOOLS = "You cannot see the documents unless the user pastes them in."
+# What Claude may do besides, while the session's `web` is on: search the web, and read the pages it finds.
+WEB_TOOLS = ("WebSearch", "WebFetch")
+SYSTEM_WEB = "You may also search the web and fetch web pages, to answer from them."
+SYSTEM_NO_WEB = "You cannot reach the web."
 # Where Claude Code keeps its login and conversations, unless CLAUDE_CONFIG_DIR says elsewhere.
 DEFAULT_CONFIG = os.path.expanduser("~/.claude")
 # The models a session's window switches among, by Claude Code's names for them; None is Claude Code's own default.
@@ -101,6 +107,7 @@ class Session:
         self.usage = {"tokens_in": 0, "tokens_out": 0, "cost_usd": 0.0, **(usage or {})}
         self.plan = None  # the plan's windows, as the last turn left them: {"five_hour": {"utilization", "resetsAt"}, ...}
         self.overage = False  # whether the last turn ran on overage, past the plan's windows
+        self.web = False  # whether Claude may search the web and fetch pages (WEB_TOOLS), from the next turn on: its owner says
         self.plan_at = None  # when a turn last said what is left of the plan's windows: the time the quota is as of
         self.plan_account = None  # who Claude Code ran as then, as its owner read it just after: whose the quota is
         stamp = self.started.replace("-", "").replace(":", "").replace("T", "-")
@@ -316,15 +323,22 @@ class Session:
         (`Handoff`): started with the session, it shows the phone only what
         comes after, and the conversation there would begin empty.
         """
-        tools = ",".join(TOOLS) if self._local_() else ""
-        system = SYSTEM.format(root=self.root, tools=SYSTEM_TOOLS if tools else SYSTEM_NO_TOOLS)
+        tools, system = self._tools_()
         return [self.command or claude_command(), "--resume", self.id,
                 f"--tools={tools}", f"--allowedTools={tools}", "--permission-mode", "dontAsk",
                 "--append-system-prompt", system, *(("--model", self.choice) if self.choice else ())]
 
+    def _tools_(self):
+        """`(tools, system)`: the tools Claude Code is given, comma-separated, and the system prompt, saying what they are.
+
+        The documents' (TOOLS) where they are local; the web's (WEB_TOOLS) with `web`.
+        """
+        tools = [*(TOOLS if self._local_() else ()), *(WEB_TOOLS if self.web else ())]
+        said = [SYSTEM_TOOLS if self._local_() else SYSTEM_NO_TOOLS, SYSTEM_WEB if self.web else SYSTEM_NO_WEB]
+        return ",".join(tools), SYSTEM.format(root=self.root, tools=" ".join(said))
+
     def _args_(self):
-        tools = ",".join(TOOLS) if self._local_() else ""
-        system = SYSTEM.format(root=self.root, tools=SYSTEM_TOOLS if tools else SYSTEM_NO_TOOLS)
+        tools, system = self._tools_()
         return [self.command or claude_command(), "-p", "--output-format", "stream-json", "--include-partial-messages",
                 "--verbose", f"--tools={tools}", f"--allowedTools={tools}", "--permission-mode", "dontAsk",
                 "--append-system-prompt", system, *(("--model", self.choice) if self.choice else ()),
@@ -871,7 +885,8 @@ class ClaudeWindow(EditableTitle, DocWindow):
         self.header_reserve = remote.get_width() + 22
         # The account first: what the session runs on, and where a session handed off goes.
         account = f"Claude Code as {self.account}" if self.account else "Claude Code's account: reading …"
-        self.sub = "\n".join([f"{account} · {posixpath.basename(self.session.md_url)}",
+        web = " · web access on" if self.session.web else ""  # what Claude may reach, said where whose it is
+        self.sub = "\n".join([f"{account}{web} · {posixpath.basename(self.session.md_url)}",
                               f"{self.session.usage_line()} · {self.quota_line()}"])
         super().draw(surf, pygame.Rect(rect.x, rect.y, rect.width, rect.height - box_h), font, small)
         self._draw_title_(surf, font, small)

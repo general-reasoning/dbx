@@ -1148,7 +1148,8 @@ class Hyp:
     `__data_origin__`, `__storage_options__`), what opening a point
     does (`__open_point__`), what clicking one does (`__click_point__`,
     `__context_point__`, `__cmd_context_point__`), what a right click on empty disk does
-    (`__context_empty__`, `__cmd_context_empty__`, `__submit_text__`, `BOX_HINT`), and how a point is labeled (`__point_label__`,
+    (`__context_empty__`, `__cmd_context_empty__`, `__submit_text__`, `BOX_HINT`), what a setting toggled does
+    (`__setting_changed__`), and how a point is labeled (`__point_label__`,
     `__point_tag__`, `__point_name__`, `__point_version__`, `__point_datetime__`,
     `__point_tooltip__`). The hooks are the only methods
     a specialization is meant to override; everything else is shared.
@@ -1200,6 +1201,9 @@ class Hyp:
 
     def __snapshot_arrived__(self):
         """What the specialization does as the points are read in, or again: here, nothing."""
+
+    def __setting_changed__(self, name):
+        """What the specialization does as setting *name* is toggled in the settings menu: here, nothing."""
 
     def __context_empty__(self, pos):
         """A right click on empty disk, at screen *pos*: here, a box to type a text in, at *pos* (`__submit_text__`)."""
@@ -1728,6 +1732,7 @@ class Hyp:
 
     def _toggle_setting_(self, name):
         self.settings[name] = not self.settings[name]
+        self.__setting_changed__(name)
 
     def polyline(self, data, M, color, width=1):
         pts = np.asarray(self.to_screen(self.display(data, M))).T

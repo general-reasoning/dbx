@@ -1573,6 +1573,17 @@ def turns(cli, tree, tmp_path, monkeypatch):
     return NS(app=a, url=url, asked=asked, embedder=embedder, data=data, session=session, n=len(a.snap.points))
 
 
+def _settle_(app, timeout=30):
+    """Drain what the worker and the reads send till nothing is under way: sharding is an engine job, on the worker's thread."""
+    end = time.monotonic() + timeout
+    while time.monotonic() < end:
+        app.drain(0.0)
+        if not app.worker.pending and app.worker.events.empty():
+            return
+        time.sleep(0.01)
+    raise AssertionError(f"still under way after {timeout} s: {app.status}")
+
+
 def _shards_(app):
     return [(k, p) for k, p in enumerate(app.snap.points) if p.get("kind") == docs.SHARD]
 
@@ -1584,7 +1595,8 @@ def test_cmd_right_click_on_a_session_shows_its_turns_about_it_named_by_claude(t
     monkeypatch.setattr(pygame.key, "get_mods", lambda: pygame.KMOD_META)
     cx, cy, _ = a.frame()
     a.handle(pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=3, pos=(int(cx), int(cy))), 0.0)
-    a.drain(0.0)
+    assert a.loading(), "an engine job: its card, with its bar, in the middle of the window"
+    _settle_(a)
 
     shards = _shards_(a)
     assert [p["turn"] for _, p in shards] == [0, 1, 2] and a.sharded() == {turns.url}
@@ -1598,21 +1610,21 @@ def test_cmd_right_click_on_a_session_shows_its_turns_about_it_named_by_claude(t
     assert "What is alpha?" in a.__point_tooltip__(k)
 
     a.__context_empty__((5, 5))
-    a.drain(0.0)
+    _settle_(a)
     assert not _shards_(a) and len(a.snap.points) == turns.n and a.popup is None, "folded back, rather than the menu"
     seen = len(turns.embedder.seen)
     a.__cmd_context_point__(turns.session, (0, 0))
-    a.drain(0.0)
+    _settle_(a)
     assert len(_shards_(a)) == 3 and len(turns.asked) == 1 and len(turns.embedder.seen) == seen, "named and embedded once"
     a.__cmd_context_point__(_shards_(a)[1][0], (0, 0))
-    a.drain(0.0)
+    _settle_(a)
     assert not _shards_(a), "Cmd+right click on a turn folds its session's back too"
 
 
 def test_a_click_on_a_turn_opens_its_session_at_that_turn(turns):
     a = turns.app
     a.__cmd_context_point__(turns.session, (0, 0))
-    a.drain(0.0)
+    _settle_(a)
     k = _shards_(a)[1][0]
     a.__click_point__(k, 0.0)
     window = a._claude_window_()
@@ -1626,11 +1638,11 @@ def test_a_click_on_a_turn_opens_its_session_at_that_turn(turns):
 def test_a_session_filed_with_its_turns_shown_shows_the_new_one_too(turns, monkeypatch):
     a = turns.app
     a.__cmd_context_point__(turns.session, (0, 0))
-    a.drain(0.0)
+    _settle_(a)
     a.__click_point__(turns.session, 0.0)
     monkeypatch.setenv("FAKE_REPLY", "Delta it is.")
     _type_(a._claude_window_(), "And delta?")
-    a.drain(0.0)
+    _settle_(a)
     assert [p["words"] for _, p in _shards_(a)] == ["Topic 1.1", "Topic 1.2", "Topic 1.3", "Topic 2.1"]
     assert "And delta?" in turns.asked[1] and "What is alpha?" not in turns.asked[1], "only the new question asked"
 
@@ -1642,7 +1654,7 @@ def test_turns_claude_cannot_name_are_named_by_their_first_words(turns, monkeypa
     monkeypatch.setattr(claude, "ask", down)
     a = turns.app
     a.__cmd_context_point__(turns.session, (0, 0))
-    a.drain(0.0)
+    _settle_(a)
     assert [p["words"] for _, p in _shards_(a)] == ["What is alpha?", "How does beta relate to …", "And gamma, finally?"]
     assert "Claude could not name them: Claude Code is not logged in" in a.status
     assert not (turns.data / "words.json").exists()
@@ -1653,7 +1665,7 @@ def _cmd_right_click_(app, monkeypatch, pos=None):
     cx, cy, _ = app.frame()
     app.handle(pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=3, pos=pos or (int(cx), int(cy))), 0.0)
     monkeypatch.setattr(pygame.key, "get_mods", lambda: 0)
-    app.drain(0.0)
+    _settle_(app)
 
 
 def test_cmd_right_click_on_empty_disk_shatters_every_session_and_again_makes_them_whole(turns, monkeypatch):
@@ -1686,6 +1698,40 @@ def test_a_session_filed_while_shattered_is_shattered_again_its_new_turn_among_t
     a.__click_point__(_shards_(a)[0][0], 0.0)
     monkeypatch.setenv("FAKE_REPLY", "Delta it is.")
     _type_(a._claude_window_(), "And delta?")
-    a.drain(0.0)
+    _settle_(a)
     assert [p["words"] for _, p in _shards_(a)] == ["Topic 1.1", "Topic 1.2", "Topic 1.3", "Topic 2.1"]
     assert a.shattered() and not any(p.get("kind") == claude.KIND for p in a.snap.points)
+
+
+# -- web access ---------------------------------------------------------------------------------------------------------
+
+
+def test_with_web_on_claude_may_search_the_web_and_fetch_pages_and_is_told_so(cli, tree):
+    s = claude.Session(str(tree))
+    s.send("one")
+    argv = cli.runs()[-1]["argv"]
+    assert "--tools=Read,Glob,Grep" in argv and "cannot reach the web" in argv[argv.index("--append-system-prompt") + 1]
+    s.web = True
+    s.send("two")
+    argv = cli.runs()[-1]["argv"]
+    assert "--tools=Read,Glob,Grep,WebSearch,WebFetch" in argv and "--allowedTools=Read,Glob,Grep,WebSearch,WebFetch" in argv
+    assert "search the web" in argv[argv.index("--append-system-prompt") + 1]
+    assert "--tools=Read,Glob,Grep,WebSearch,WebFetch" in s.handoff_args(), "and so does the phone"
+    remote = claude.Session("ssh://host/notes")
+    remote.web = True
+    assert remote._tools_()[0] == "WebSearch,WebFetch", "a url's documents: none of their tools, but the web's"
+
+
+def test_web_access_is_a_setting_kept_with_the_corpus_and_turned_on_for_the_next_turn(app, tmp_path):
+    data = tmp_path / "data"
+    data.mkdir()
+    app.args.data = str(data)
+    assert app.settings["web access"] is False
+    app.open_claude()
+    window = app._claude_window_()
+    assert not window.session.web
+    app._toggle_setting_("web access")
+    assert window.session.web and "web access on" in app.status
+    assert json.loads((data / "settings.json").read_text()) == {"web access": True}
+    again = docs.HypDocs(engine=None, worker=app.worker, args=app.args)
+    assert again.settings["web access"] is True, "kept with the corpus"

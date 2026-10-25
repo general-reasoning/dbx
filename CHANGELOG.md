@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Added
-- **hyp --docs: a session's turns, as points of their own.** Shift+right
+- **hyp --docs: a session's turns, as points of their own.** Cmd+right
   click on a Claude session's point rings its turns about it, each labeled
   `Claude · <title> · <words>`, the words Claude's, naming its question --
   asked of every turn at once, and kept in the corpus's `words.json`. A turn
@@ -16,7 +16,7 @@ All notable changes to this project will be documented in this file.
   session at it; a right click on empty disk folds the turns back. A
   snapshot now slides its points from where they were by key, so points that
   come and go no longer reset the view.
-- **hyp --docs: every session shattered into its turns.** Shift+right click
+- **hyp --docs: every session shattered into its turns.** Cmd+right click
   on empty disk replaces every session's point with its turns, each embedded
   by what was said in it alone and laid out by UMAP among the documents,
   seeded with where everything was (`Engine.shatter`); again, the sessions

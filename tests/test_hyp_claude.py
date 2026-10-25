@@ -1577,11 +1577,11 @@ def _shards_(app):
     return [(k, p) for k, p in enumerate(app.snap.points) if p.get("kind") == docs.SHARD]
 
 
-def test_shift_right_click_on_a_session_shows_its_turns_about_it_named_by_claude(turns, monkeypatch):
+def test_cmd_right_click_on_a_session_shows_its_turns_about_it_named_by_claude(turns, monkeypatch):
     a = turns.app
     whole = a.snap.positions.copy()
     a.hover = turns.session
-    monkeypatch.setattr(pygame.key, "get_mods", lambda: pygame.KMOD_SHIFT)
+    monkeypatch.setattr(pygame.key, "get_mods", lambda: pygame.KMOD_META)
     cx, cy, _ = a.frame()
     a.handle(pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=3, pos=(int(cx), int(cy))), 0.0)
     a.drain(0.0)
@@ -1601,17 +1601,17 @@ def test_shift_right_click_on_a_session_shows_its_turns_about_it_named_by_claude
     a.drain(0.0)
     assert not _shards_(a) and len(a.snap.points) == turns.n and a.popup is None, "folded back, rather than the menu"
     seen = len(turns.embedder.seen)
-    a.__shift_context_point__(turns.session, (0, 0))
+    a.__cmd_context_point__(turns.session, (0, 0))
     a.drain(0.0)
     assert len(_shards_(a)) == 3 and len(turns.asked) == 1 and len(turns.embedder.seen) == seen, "named and embedded once"
-    a.__shift_context_point__(_shards_(a)[1][0], (0, 0))
+    a.__cmd_context_point__(_shards_(a)[1][0], (0, 0))
     a.drain(0.0)
-    assert not _shards_(a), "Shift+right click on a turn folds its session's back too"
+    assert not _shards_(a), "Cmd+right click on a turn folds its session's back too"
 
 
 def test_a_click_on_a_turn_opens_its_session_at_that_turn(turns):
     a = turns.app
-    a.__shift_context_point__(turns.session, (0, 0))
+    a.__cmd_context_point__(turns.session, (0, 0))
     a.drain(0.0)
     k = _shards_(a)[1][0]
     a.__click_point__(k, 0.0)
@@ -1625,7 +1625,7 @@ def test_a_click_on_a_turn_opens_its_session_at_that_turn(turns):
 
 def test_a_session_filed_with_its_turns_shown_shows_the_new_one_too(turns, monkeypatch):
     a = turns.app
-    a.__shift_context_point__(turns.session, (0, 0))
+    a.__cmd_context_point__(turns.session, (0, 0))
     a.drain(0.0)
     a.__click_point__(turns.session, 0.0)
     monkeypatch.setenv("FAKE_REPLY", "Delta it is.")
@@ -1641,26 +1641,26 @@ def test_turns_claude_cannot_name_are_named_by_their_first_words(turns, monkeypa
 
     monkeypatch.setattr(claude, "ask", down)
     a = turns.app
-    a.__shift_context_point__(turns.session, (0, 0))
+    a.__cmd_context_point__(turns.session, (0, 0))
     a.drain(0.0)
     assert [p["words"] for _, p in _shards_(a)] == ["What is alpha?", "How does beta relate to …", "And gamma, finally?"]
     assert "Claude could not name them: Claude Code is not logged in" in a.status
     assert not (turns.data / "words.json").exists()
 
 
-def _shift_right_click_(app, monkeypatch, pos=None):
-    monkeypatch.setattr(pygame.key, "get_mods", lambda: pygame.KMOD_SHIFT)
+def _cmd_right_click_(app, monkeypatch, pos=None):
+    monkeypatch.setattr(pygame.key, "get_mods", lambda: pygame.KMOD_META)
     cx, cy, _ = app.frame()
     app.handle(pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=3, pos=pos or (int(cx), int(cy))), 0.0)
     monkeypatch.setattr(pygame.key, "get_mods", lambda: 0)
     app.drain(0.0)
 
 
-def test_shift_right_click_on_empty_disk_shatters_every_session_and_again_makes_them_whole(turns, monkeypatch):
+def test_cmd_right_click_on_empty_disk_shatters_every_session_and_again_makes_them_whole(turns, monkeypatch):
     monkeypatch.setattr(docs, "WORDS_BATCH", 2)
     a = turns.app
     a.hover = None
-    _shift_right_click_(a, monkeypatch)
+    _cmd_right_click_(a, monkeypatch)
     shards = _shards_(a)
     assert [p["turn"] for _, p in shards] == [0, 1, 2] and all(p["shattered"] for _, p in shards) and a.shattered()
     assert not any(p.get("kind") == claude.KIND for p in a.snap.points), "the session gone: its turns in its place"
@@ -1671,18 +1671,18 @@ def test_shift_right_click_on_empty_disk_shatters_every_session_and_again_makes_
     a.__context_empty__((5, 5))
     assert a.popup is not None, "a plain right click on empty disk: the menu, as ever"
     a.popup = None
-    a.__shift_context_point__(shards[0][0], (100, 100))
-    assert isinstance(a.popup, docs.TilePicker), "Shift+right click on a turn shattered: placed, as a right click"
+    a.__cmd_context_point__(shards[0][0], (100, 100))
+    assert isinstance(a.popup, docs.TilePicker), "Cmd+right click on a turn shattered: placed, as a right click"
     a.popup = None
     a.hover = None
-    _shift_right_click_(a, monkeypatch)
+    _cmd_right_click_(a, monkeypatch)
     assert not _shards_(a) and len(a.snap.points) == turns.n and not a.shattered(), "whole again"
 
 
 def test_a_session_filed_while_shattered_is_shattered_again_its_new_turn_among_them(turns, monkeypatch):
     a = turns.app
     a.hover = None
-    _shift_right_click_(a, monkeypatch)
+    _cmd_right_click_(a, monkeypatch)
     a.__click_point__(_shards_(a)[0][0], 0.0)
     monkeypatch.setenv("FAKE_REPLY", "Delta it is.")
     _type_(a._claude_window_(), "And delta?")

@@ -488,11 +488,11 @@ machine, and for the directory, it ran in. A session saved on one machine
 and reopened on another is shown, but Claude there has no record of it: the
 window says so.
 
-**Its turns, as points of their own.** Shift+right click on a session's
+**Its turns, as points of their own.** Cmd+right click on a session's
 point shows each of its turns as a point -- a shard of the session's --
 ringed about it, and slides the view to it; a right click on empty disk
 folds every session's back, the disk as it was (instead of the
-Claude/Markdown menu, that once), and so does Shift+right click on the
+Claude/Markdown menu, that once), and so does Cmd+right click on the
 session or on any of its turns. A turn is labeled by its session's label and a few
 words naming what it asked: `Claude · <title> · <words>`, the title cut
 short where both do not fit, the words kept whole. The words are Claude's,
@@ -515,7 +515,7 @@ center to read it. A session filed with its turns shown keeps them shown,
 a new turn among them. They are kept in memory, not in the corpus
 (`Engine.shard`): the next start shows the sessions whole.
 
-**Every session, shattered.** Shift+right click on empty disk shatters every
+**Every session, shattered.** Cmd+right click on empty disk shatters every
 session into its turns at once, and again puts them back whole. Shattered,
 a turn is not anchored to its session: it is embedded by what was asked and
 answered in it alone -- not its session's title, nor its session's
@@ -525,7 +525,7 @@ was and each turn beside its nearest (`Engine.shatter`). So a turn lies by
 whatever it is about, a document or another session's turn, wherever its
 session was. The turns are labeled, named by Claude -- 40 questions a call --
 and opened by a click as a session's ringed turns are; a right click on one
-places its session's transcript, Shift or not, and a plain right click on
+places its session's transcript, Cmd or not, and a plain right click on
 empty disk opens its menu as ever. The layout is kept, and computed again
 only when what is shown changes: a session filed meanwhile is shattered
 again, its new turn among the rest.
@@ -586,8 +586,8 @@ a directory of markdowns, they are directions of content.
 | left drag | move the plane rigidly (a hyperbolic translation); the grabbed point stays under the cursor |
 | scroll | hyperbolic zoom: a point at distance *d* is drawn at *k·d* |
 | right click on a point | its stored text |
-| Shift+right click on a session (`--docs`) | its turns, as points of their own ringed about it, each labeled by a few words of its question; again, or on a turn, folds them back. See [Claude sessions](#claude-sessions) |
-| Shift+right click on empty disk (`--docs`) | every session shattered into its turns, each embedded and laid out on its own among the documents; again, the sessions whole |
+| Cmd+right click on a session (`--docs`) | its turns, as points of their own ringed about it, each labeled by a few words of its question; again, or on a turn, folds them back. See [Claude sessions](#claude-sessions) |
+| Cmd+right click on empty disk (`--docs`) | every session shattered into its turns, each embedded and laid out on its own among the documents; again, the sessions whole |
 | right click elsewhere | type a text; Enter embeds, summarizes, stores and places it -- in `--docs`, asks it of Claude in a new session, or, while sessions' turns are shown, folds them back |
 | hover | the point's label, in full, and geodesics to the 5 nearest neighbors in embedding space -- by cosine over the whole vectors, so an arc may reach a point far off on the disk |
 | Shift, while hovering | each of those arcs labeled with what its direction means, named by Claude from where else it runs in the corpus, and what that rests on. See [Arrows](#arrows) |

@@ -19,10 +19,10 @@ point opens the session again. That is all hyp writes there: the corpus is
 kept under ~/.hyp/docs/, one directory per scanned directory. A markdown's
 front matter is no part of what is embedded of it.
 
-Shift+right click on a session's point shows its turns as points of their
+Cmd+right click on a session's point shows its turns as points of their
 own -- its shards -- ringed about it, each labeled by the session's label and
 a few words Claude names its question by; a right click on empty disk folds
-them back (`HypDocs.shard`). Shift+right click on empty disk shatters every
+them back (`HypDocs.shard`). Cmd+right click on empty disk shatters every
 session into its turns instead, each embedded and laid out on its own among
 the documents, the sessions gone from the disk till it is done again
 (`HypDocs.shatter`).
@@ -405,7 +405,7 @@ class HypDocs(Hyp):
     # What a right click on empty disk offers, and what its box then says it does on Enter.
     NEW = {"claude": ("Claude: ask it, in a new session", BOX_HINT),
            "markdown": ("Markdown: a new document, to write", "Enter: a new markdown, to go on writing   Shift+Enter: newline   Esc: cancel")}
-    HINT = ("click: open · right-click: place · Shift+right-click: turns · drag: move · scroll: zoom · Tab: next layer"
+    HINT = ("click: open · right-click: place · Cmd+right-click: turns · drag: move · scroll: zoom · Tab: next layer"
             " · double-click outside: reset")
     LAYERS = ("disk", "tiles", "center")
     CLAUDE_AREA = 1 / 3  # of the window's, a Claude session's window takes, in its middle -- and a markdown being written
@@ -482,8 +482,8 @@ class HypDocs(Hyp):
         """Right click on a document -- on the disk, or in the points menu: where to place it, or ask Claude about it, as a `TilePicker` at the mouse."""
         self.popup = TilePicker(lambda slot: self.place(i, slot), pos, on_claude=lambda: self.ask_about(i))
 
-    def __shift_context_point__(self, i, pos):
-        """Shift+right click on a Claude session: its turns, about it (`shard`); again, or on a turn, folded back. On a document, or a turn shattered, a right click."""
+    def __cmd_context_point__(self, i, pos):
+        """Cmd+right click on a Claude session: its turns, about it (`shard`); again, or on a turn, folded back. On a document, or a turn shattered, a right click."""
         point = self.snap.points[i] if self.snap.points else {}
         if point.get("kind") == SHARD and not point.get("shattered"):
             self.collapse(point["parent"])
@@ -508,8 +508,8 @@ class HypDocs(Hyp):
             return
         self.open_popup([(label, kind) for kind, (label, _) in self.NEW.items()], lambda kind: self._type_new_(kind, pos), pos)
 
-    def __shift_context_empty__(self, pos):
-        """Shift+right click on empty disk: every session shattered into its turns, on their own (`shatter`); again, the sessions whole."""
+    def __cmd_context_empty__(self, pos):
+        """Cmd+right click on empty disk: every session shattered into its turns, on their own (`shatter`); again, the sessions whole."""
         if self.shattered():
             self.unshatter()
         else:

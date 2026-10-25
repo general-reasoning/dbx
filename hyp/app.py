@@ -1147,8 +1147,8 @@ class Hyp:
     corpus comes from and how it is embedded (`__source__`, `__embedder__`, `__default_data__`,
     `__data_origin__`, `__storage_options__`), what opening a point
     does (`__open_point__`), what clicking one does (`__click_point__`,
-    `__context_point__`, `__shift_context_point__`), what a right click on empty disk does
-    (`__context_empty__`, `__shift_context_empty__`, `__submit_text__`, `BOX_HINT`), and how a point is labeled (`__point_label__`,
+    `__context_point__`, `__cmd_context_point__`), what a right click on empty disk does
+    (`__context_empty__`, `__cmd_context_empty__`, `__submit_text__`, `BOX_HINT`), and how a point is labeled (`__point_label__`,
     `__point_tag__`, `__point_name__`, `__point_version__`, `__point_datetime__`,
     `__point_tooltip__`). The hooks are the only methods
     a specialization is meant to override; everything else is shared.
@@ -1205,8 +1205,8 @@ class Hyp:
         """A right click on empty disk, at screen *pos*: here, a box to type a text in, at *pos* (`__submit_text__`)."""
         self.box = TextBox(pos, self.BOX_HINT)
 
-    def __shift_context_empty__(self, pos):
-        """Shift+right click on empty disk, at screen *pos*: here, what a right click there does."""
+    def __cmd_context_empty__(self, pos):
+        """Cmd+right click on empty disk, at screen *pos*: here, what a right click there does."""
         self.__context_empty__(pos)
 
     def __submit_text__(self, text):
@@ -1222,8 +1222,8 @@ class Hyp:
         """Right click on point *i*, at screen *pos*: open it."""
         self.__open_point__(i)
 
-    def __shift_context_point__(self, i, pos):
-        """Shift+right click on point *i*, at screen *pos*: here, what a right click does."""
+    def __cmd_context_point__(self, i, pos):
+        """Cmd+right click on point *i*, at screen *pos*: here, what a right click does."""
         self.__context_point__(i, pos)
 
     def __open_point__(self, i):
@@ -1594,12 +1594,12 @@ class Hyp:
         elif ev.type == pygame.MOUSEBUTTONDOWN and ev.button == 3:
             if self.box is not None:
                 self.box = None
-            if self.hover is not None and pygame.key.get_mods() & pygame.KMOD_SHIFT:
-                self.__shift_context_point__(self.hover, ev.pos)
+            if self.hover is not None and pygame.key.get_mods() & pygame.KMOD_META:
+                self.__cmd_context_point__(self.hover, ev.pos)
             elif self.hover is not None:
                 self.__context_point__(self.hover, ev.pos)
-            elif pygame.key.get_mods() & pygame.KMOD_SHIFT:
-                self.__shift_context_empty__(ev.pos)
+            elif pygame.key.get_mods() & pygame.KMOD_META:
+                self.__cmd_context_empty__(ev.pos)
             else:
                 self.__context_empty__(ev.pos)
         elif ev.type == pygame.MOUSEWHEEL:

@@ -111,6 +111,30 @@ class TestTheRecordedRedirection:
         assert set(broken.buildjournal()['event']) == {'build:end', 'UNSAFE_redirect'}
 
 
+@pytest.mark.pinned
+class TestRedirectedAgreesWithGetRedirection:
+    """`redirected()` is the cheap question, `get_redirection()` the full one.
+
+    They must not disagree. A caller branches on the cheap one and then resolves
+    through the full one, so a datablock that answers True here and None there takes
+    the redirected path and finds no paths to read -- and the disagreement is
+    invisible, because neither call errors.
+    """
+
+    def test_an_empty_redirection_dir_is_not_a_redirection(self, broken):
+        """`paths.yaml` is the record. A `.redirection/` holding nothing is what a
+        cleared redirection, or a write that failed after the directory was made,
+        leaves behind."""
+        os.makedirs(os.path.join(broken.anchorkeypath, '.redirection'), exist_ok=True)
+        assert broken.get_redirection() is None
+        assert broken.redirected() is False
+
+    def test_both_see_a_recorded_redirection(self, broken):
+        broken.UNSAFE_redirect(paths={'output': '/data/out.txt'}, OVERRIDE=True)
+        assert broken.redirected() is True
+        assert broken.get_redirection() is not None
+
+
 class TestTheArguments:
 
     def test_no_arguments_does_no_redirection(self, broken):

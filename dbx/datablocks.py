@@ -319,6 +319,51 @@ class TOPICMARKER(metaclass=TopicMarkerMeta):
     """
 
 
+def _render_subdirs_(subdirs) -> str:
+    """``((name, children), ...)`` back as the positionals that spell it.
+
+    A leaf is its name; a level with children is a dict. The rendering reaches the type
+    string, so it has to be injective -- which it is, because a name is a string and a
+    nesting is a dict, and the two never render alike.
+    """
+    out = []
+    for name, children in subdirs:
+        out.append(repr(name) if not children
+                   else "{%r: (%s)}" % (name, _render_subdirs_(children) +
+                                        ("," if len(children) == 1 else "")))
+    return ", ".join(out)
+
+
+def _check_subdirs_(kind, subdirs):
+    """A declared subdirectory tree, canonicalised to ``((name, children), ...)``.
+
+    Accepts a sequence of names, or a dict mapping a name to its own children --
+    ``('meta', 'data')``, ``{'videos': ('chunk-000',)}`` -- and nests to any depth. The
+    canonical form is what renders into the type string, so two spellings of one tree
+    reach one hash.
+    """
+    if isinstance(subdirs, str):
+        subdirs = (subdirs,)
+    if isinstance(subdirs, dict):
+        items = list(subdirs.items())
+    else:
+        items = []
+        for entry in subdirs:
+            items.extend(entry.items() if isinstance(entry, dict) else [(entry, None)])
+    out = []
+    for name, children in items:
+        if not isinstance(name, str) or not name:
+            raise TypeError(f"{kind} subdir name must be a non-empty string, got {name!r}")
+        if '/' in name:
+            raise ValueError(
+                f"{kind} subdir {name!r} may not contain '/': declare the nesting -- "
+                f"subdirs={{{name.split('/')[0]!r}: ({name.split('/', 1)[1]!r},)}}")
+        out.append((name, () if children is None else _check_subdirs_(kind, children)))
+    if not out:
+        raise ValueError(f"{kind} subdirs is empty: omit it, or name the subdirectories")
+    return tuple(out)
+
+
 def _check_note_(kind, note):
     """Refuse a note that would render into an ambiguous type string."""
     if not isinstance(note, str) or not note:
@@ -343,15 +388,25 @@ class _NotedMarkerMeta_(TopicMarkerMeta):
     so `DATADIR() is DATADIR` and the two spell the same thing.
     """
 
-    def __call__(cls, note=None):
-        if note is None:
+    def __call__(cls, note=None, *, subdirs=None):
+        if note is None and subdirs is None:
             return cls
-        _check_note_(cls.__name__, note)
-        return _NotedMarkerMeta_(cls.__name__, (cls,), {'note': note})
+        if note is not None:
+            _check_note_(cls.__name__, note)
+        if subdirs is not None:
+            if not getattr(cls, 'SUBDIRS_OK', False):
+                raise TypeError(f"{cls.__name__} takes no subdirs: it is not a directory")
+            subdirs = _check_subdirs_(cls.__name__, subdirs)
+        return _NotedMarkerMeta_(cls.__name__, (cls,),
+                                 {'note': note, 'subdirs': subdirs})
 
     def __repr__(cls):
-        note = cls.__dict__.get('note')
-        return cls.__name__ if note is None else f"{cls.__name__}({note!r})"
+        note, subdirs = cls.__dict__.get('note'), cls.__dict__.get('subdirs')
+        if note is None and subdirs is None:
+            return cls.__name__
+        args = ([repr(note)] if note is not None else []) + \
+               ([f"subdirs={subdirs!r}"] if subdirs is not None else [])
+        return f"{cls.__name__}({', '.join(args)})"
 
     __str__ = __repr__
 
@@ -371,13 +426,78 @@ class SYNTHETIC(TOPICMARKER, metaclass=_NotedMarkerMeta_):
     note = None
 
 
-class DATADIR(TOPICMARKER, metaclass=_NotedMarkerMeta_):
+class _DirMarkerMeta_(_NotedMarkerMeta_):
+    """`DATADIR('meta', 'data', 'videos', note='a lerobot dataset')`.
+
+    Positionals are the subdirectories the topic must contain -- a name, or a dict for
+    a nested level -- and the note is a keyword, because a directory far more often
+    wants to say what is under it than to carry prose.
+
+    A positional holding whitespace is REFUSED rather than taken as a subdirectory:
+    `DATADIR('one PNG per frame')` was a note before this signature existed, and
+    reading it as a directory name would re-key the block and change what makes it
+    valid, both in silence.
+    """
+
+    def __call__(cls, *subdirs, note=None):
+        # One positional holding whitespace is the NOTE, as it was before subdirs
+        # existed -- `DATADIR('one PNG per frame')`. A directory name has no spaces in
+        # it, so the two never collide, and no declaration written before this re-keys.
+        if (note is None and len(subdirs) == 1 and isinstance(subdirs[0], str)
+                and any(c.isspace() for c in subdirs[0])):
+            return super().__call__(subdirs[0])
+        for entry in subdirs:
+            if isinstance(entry, str) and any(c.isspace() for c in entry):
+                raise TypeError(
+                    f"{cls.__name__}({entry!r}): a subdirectory name may not hold "
+                    f"whitespace. For a note alongside subdirectories, say "
+                    f"{cls.__name__}(..., note={entry!r})")
+        if not subdirs:
+            return super().__call__(note)
+        return _DirMarkerMeta_(cls.__name__, (cls,),
+                               {'note': note,
+                                'subdirs': _check_subdirs_(cls.__name__, subdirs)})
+
+    def __repr__(cls):
+        note, subdirs = cls.__dict__.get('note'), cls.__dict__.get('subdirs')
+        if note is None and subdirs is None:
+            return cls.__name__
+        if not subdirs:
+            # Exactly as it rendered before subdirs existed, so no declaration carrying
+            # a note re-keys -- and it evaluates back to a note, because it has spaces.
+            # A note WITHOUT spaces has to say so, or reading it back would make a
+            # directory name of it.
+            return (f"{cls.__name__}({note!r})" if any(c.isspace() for c in note)
+                    else f"{cls.__name__}(note={note!r})")
+        args = [_render_subdirs_(subdirs)]
+        if note is not None:
+            args.append(f"note={note!r}")
+        return f"{cls.__name__}({', '.join(args)})"
+
+    __str__ = __repr__
+
+
+class DATADIR(TOPICMARKER, metaclass=_DirMarkerMeta_):
     """A directory topic: the topic IS the directory.  `DIRTOPIC` as a marker.
 
     A location, unlike `SYNTHETIC` -- a real directory that merely has no
     filename inside it -- and it may say what is in it:
 
         TOPICS = {'masks': DATADIR('one PNG per frame')}
+
+    It may also DECLARE its subdirectories, positionally, which makes the topic valid
+    only when every one of them is there -- not merely when the directory exists:
+
+        TOPICS = {'data': DATADIR('meta', 'data', 'videos',
+                                  note='a lerobot dataset')}
+
+    Nest by giving a dict: `DATADIR('meta', {'videos': ('chunk-000',)})`. The note is
+    a keyword, because a directory more often says what is under it than carries prose,
+    and a positional holding whitespace is refused rather than read as a directory name
+    -- see `_DirMarkerMeta_`. The topic stays ONE
+    topic -- one path, shipped and cleared whole -- unlike a nested dict in TOPICS,
+    which makes a group whose leaves are separate topics and whose root is no topic at
+    all. Declared subdirs render into the type string, so adding them re-keys.
 
     The base of every directory marker: `DATASLICE` is one, because a slice
     IS a directory, and so is the deprecated `DIR`. Every test that asks
@@ -386,6 +506,13 @@ class DATADIR(TOPICMARKER, metaclass=_NotedMarkerMeta_):
 
     # Unset on the bare marker, and set by the call that parameterises it.
     note = None
+
+    #: Subdirectories this topic must contain, ``((name, children), ...)``; None when
+    #: undeclared, and then only the directory itself has to exist.
+    subdirs = None
+
+    #: Only a directory may declare what is inside it -- see `_NotedMarkerMeta_`.
+    SUBDIRS_OK = True
 
 
 class DIR(DATADIR):
@@ -2668,8 +2795,27 @@ class Datablock:
         topicpath = self._normtopic_(topicpath)
         path = self.path(*topicpath)
         valid = self.valid_path(path)
+        if valid and not self.is_topicgroup(*topicpath):
+            subdirs = getattr(self._topicnode_(*topicpath), 'subdirs', None)
+            if subdirs:
+                valid = self._valid_subdirs_(path, subdirs)
         self.log.detailed(f"{self.anchor}: topic {'/'.join(topicpath)} valid: {valid}")
         return valid
+
+    def _valid_subdirs_(self, root, subdirs) -> bool:
+        """Whether every subdirectory a DATADIR declares is under *root*.
+
+        What makes a declared structure worth declaring: the directory existing says
+        nothing about a combination that died after writing the first of three.
+        """
+        for name, children in subdirs:
+            path = os.path.join(str(root), name)
+            if not self.valid_path(path):
+                self.log.detailed(f"{self.anchor}: {root} is missing subdir {name!r}")
+                return False
+            if children and not self._valid_subdirs_(path, children):
+                return False
+        return True
 
     def validtopic(self, *topicpath):
         """Deprecated alias for valid_topic."""
@@ -3502,15 +3648,21 @@ class Datablock:
                                 specialization=specialization)
 
     def redirected(self) -> bool:
-        """True if this block is redirected (checks presence of hidden .redirection topic without reading the journal)."""
+        """True if this datablock is redirected, from the hidden ``.redirection`` topic alone -- no journal read.
+
+        The DIRECTORY existing is not a redirection: ``paths.yaml`` is the only
+        file written there and the only one every reader resolves through, so a
+        ``.redirection/`` left empty -- by a cleared redirection, or by a write
+        that failed after the directory was made -- used to report True here
+        while :meth:`get_redirection` returned None for the same datablock.
+        """
         if not getattr(self, 'redirect', False):
             return False
         if '__redirected_paths__' in self.__dict__ and self.__dict__['__redirected_paths__'] is not None:
             return True
-        red_dir = os.path.join(self.anchorkeypath, '.redirection')
-        red_yaml = os.path.join(red_dir, 'paths.yaml')
+        red_yaml = os.path.join(self.anchorkeypath, '.redirection', 'paths.yaml')
         try:
-            return self.fs.exists(red_yaml) or self.fs.exists(red_dir)
+            return self.fs.exists(red_yaml)
         except Exception as e:
             self.log.detailed(f"redirected: error checking .redirection topic: {e}")
             return False
@@ -3533,6 +3685,10 @@ class Datablock:
         the hash reconstructed from it. It implies its own `topics`, and is
         recorded as itself, so the journal says a specialization was installed
         and which one -- not merely that some paths were.
+
+        :meth:`UNSAFE_clear_redirection` undoes it, and is the only thing that
+        does: deleting ``.redirection/paths.yaml`` by hand leaves the journal's
+        record in place, and the journal is what :meth:`get_redirection` reads first.
 
         *dry_run* resolves the whole thing and reports what it WOULD record --
         to stdout, and as the `Redirection` it returns -- without
@@ -3915,7 +4071,7 @@ class Datablock:
             self.__dict__.pop('__redirected_paths__', None)
             self.write_journal_entry(event=f"UNSAFE_clear:{list(topics)}", redirection={'cleared': True})
 
-        msg = f"UNSAFE_clear: cleared block {self.hash}"
+        msg = f"UNSAFE_clear: cleared datablock {self.hash}"
         if had_redirection:
             msg += " (redirection removed)"
         self.log.info(msg)
@@ -4025,6 +4181,146 @@ class Datablock:
             show_progress=show_progress,
             **kwargs,
         )
+
+    def ship_targets(self) -> dict:
+        """``{topic: target}`` this datablock ships to by DEFAULT; ``{}`` unless overridden.
+
+        The one place a subclass says where its generated files belong, so a caller
+        can write :meth:`UNSAFE_ship` with no arguments and still land them in the
+        right place. A subclass may take keywords of its own (which checkout, which
+        store) as long as calling it bare works.
+        """
+        return {}
+
+    def __relocate_shipment__(self, topic, target, workdir, **kwargs):
+        """The path :meth:`UNSAFE_ship` should send for *topic*; by default its own.
+
+        The hook for shipping bytes that differ from the stored ones -- a config whose
+        absolute paths must become ``${oc.env:ROOT}/...`` before it is checked in
+        somewhere else, say. *kwargs* is whatever the caller passed as
+        ``UNSAFE_ship(relocate={...})``; *target* is where this is going, which the
+        caller usually does not spell out because :meth:`ship_targets` did.
+
+        *workdir* is a CALLABLE, not a directory: call it to get a temporary directory
+        to write into, and :meth:`UNSAFE_ship` removes that directory afterwards. A
+        hook that does not call it costs nothing, so returning ``self.path(topic)`` --
+        the default -- never stages a byte, however large the topic is.
+
+            def __relocate_shipment__(self, topic, target, workdir, root_env=None):
+                if topic != 'config':
+                    return self.path(topic)
+                out = os.path.join(workdir(), 'config.yaml')
+                write_yaml(self._portable_config_(root_env), out)
+                return out
+
+        A topic whose hook relocates it must NOT then be redirected onto what was
+        shipped: the shipped copy is deliberately not this block's data. See
+        :meth:`UNSAFE_ship_redirect`.
+        """
+        return self.path(*topic.split('/'))
+
+    def UNSAFE_ship(self, targets=None, /, *, relocate: dict | None = None,
+                    OVERRIDE: bool = False, overwrite: bool = False,
+                    validate: bool = True, show_progress: bool = True):
+        """Copy named topics OUT, to locations a reader needs no dbx to find.
+
+        The outbound mirror of :meth:`UNSAFE_copy_from`: that one takes one source
+        anchorkeypath and copies every topic in, this one takes a target PER TOPIC and
+        copies only the topics named. A topic left out is not shipped, which is how a
+        block ships its generated config and keeps its checkpoints to itself.
+
+        *targets* is ``{topic: target}``, a dict and not keywords: a keyword tail would
+        make every option name a topic nobody can ship. Omitted, it is
+        :meth:`ship_targets`. Either side of a pair may be local or an fsspec URL.
+
+        *relocate* is handed to :meth:`__relocate_shipment__`, the hook that may write
+        the bytes to send somewhere other than where the topic lives -- rewriting a
+        path a config carries, say. ``{}`` or None is the default no-op hook: the topic
+        ships from where it is, and nothing is staged however large it is.
+
+        Unlike :meth:`UNSAFE_copy_from`, this asserts the block IS valid: shipping
+        copies data out, and data that is not there is not what you meant to send.
+
+        The targets go in the journal. That is what makes a shipped file traceable: a
+        yaml checked into another repo is otherwise anonymous, and nothing says which
+        block's VAR produced it.
+        """
+        targets = dict(targets) if targets else {}
+        if not targets:
+            # The subclass's own defaults -- see `ship_targets`.
+            targets = dict(self.ship_targets() or {})
+        if not targets:
+            raise ValueError(
+                f"{self.__class__.__name__}.UNSAFE_ship() names no topic to ship, and "
+                f"{self.__class__.__name__}.ship_targets() names none either; pass "
+                f"{{topic: target}}"
+            )
+        known = set(self.topics())
+        unknown = [t for t in targets if self._normtopic_((t,))[0] not in known]
+        if unknown:
+            raise ValueError(
+                f"{self.__class__.__name__}.UNSAFE_ship(): {unknown!r} are not topics of "
+                f"this block; have {sorted(known)!r}"
+            )
+        if not UNSAFE_allowed("UNSAFE_ship", OVERRIDE=OVERRIDE):
+            return {}
+        if validate:
+            assert self.valid(), f"Attempting to ship an invalid Datablock {self}"
+        note = ', '.join(f"{t}->{d}" for t, d in sorted(targets.items()))
+        self.log.verbose(f"Shipping topics: BEGIN ({note})")
+        self.write_journal_entry(event="UNSAFE_ship:BEGIN", note=note, inline_note=True)
+        try:
+            items = sorted(targets.items())
+            items_iter = tqdm.tqdm(items, desc="UNSAFE_ship", unit="topic") if show_progress else items
+            shipped = {}
+            for topic, target in items_iter:
+                shipped.update(self._UNSAFE_ship_topic_(topic, target,
+                                                        overwrite=overwrite,
+                                                        relocate=relocate))
+            self.log.verbose(f"Shipping topics: END ({note})")
+            self.write_journal_entry(event="UNSAFE_ship:END", note=note, inline_note=True)
+        except Exception as e:
+            self.log.error(f"UNSAFE_ship: Error when trying to ship {note}")
+            self.log.error(f"EXCEPTION: {e}")
+            self.write_journal_entry(event="UNSAFE_ship:ERROR", note=note, inline_note=True)
+            raise e
+        return shipped
+
+    def UNSAFE_ship_redirect(self, targets=None, /, *, relocate: dict | None = None,
+                             OVERRIDE: bool = False, overwrite: bool = False,
+                             validate: bool = True, show_progress: bool = True):
+        """Ship, then read the shipped topics from where they were shipped.
+
+        After this the shipped location is the single source of truth: :meth:`read`
+        and :meth:`path` answer through it, so the block and the team are looking at
+        one copy rather than two that can drift. Topics not named keep reading their
+        own data -- :meth:`UNSAFE_redirect` redirects only what it is given, and
+        :meth:`UNSAFE_clear_redirection` is what undoes it.
+
+        Shipping a topic that already reads from its target is a no-op rather than
+        an error, so calling this twice is harmless.
+
+        *relocate* is REFUSED here. It asks :meth:`__relocate_shipment__` to send bytes
+        that differ from the stored ones, and redirecting onto those would make this
+        block read something it did not build -- the opposite of the one guarantee this
+        method exists for. Ship with :meth:`UNSAFE_ship` and leave the block reading its
+        own data. (A hook that relocates unasked is not caught here; only what the
+        caller declares is.)
+        """
+        if relocate:
+            raise ValueError(
+                f"{self.__class__.__name__}.UNSAFE_ship_redirect(relocate={relocate!r}): "
+                f"a relocated shipment is not this block's data, so redirecting onto it "
+                f"would make read() answer with something it did not build. Use "
+                f"UNSAFE_ship() for a relocated shipment.")
+        shipped = self.UNSAFE_ship(targets, OVERRIDE=OVERRIDE, overwrite=overwrite,
+                                   validate=validate, show_progress=show_progress)
+        if not shipped:
+            return shipped
+        # merge=True: shipping one topic now must not drop a redirection already in
+        # place for another. OVERRIDE: the one confirmation was given to UNSAFE_ship.
+        self.UNSAFE_redirect(paths=shipped, topics=sorted(shipped), merge=True, OVERRIDE=True)
+        return shipped
 
     def leave_breadcrumbs_at_path(self, path, crumbs=None):
         """Bring a breadcrumb file into existence for the directory at *path*.
@@ -6540,6 +6836,112 @@ class Datablock:
                 _executor.exec_callables(_callables)
         else:
             self._UNSAFE_copy_fs_(src_path=src_path, dst_path=dst_path, recursive=True)
+
+    def _UNSAFE_ship_topic_(self, topic, target, *, overwrite: bool = False,
+                            relocate: dict | None = None):
+        """Copy one topic OUT to *target*. Returns ``{topic: target}`` as shipped.
+
+        The outbound counterpart of :meth:`_UNSAFE_copy_topic_`, and the same
+        extension point: override it to ship a subset of a topic's files.
+
+        A group ships its leaves under *target* as a directory, so the returned dict
+        is nested the way :meth:`_redirect_path_` walks it.
+        """
+        topic = self._normtopic_((topic,))
+        if self._is_syntopic_(*topic):
+            # No location on either side -- there is nothing to ship.
+            self.log.verbose(f"Skipping SYNTOPIC topic {'/'.join(topic)}: it has no location")
+            return {}
+        if self.is_topicgroup(*topic):
+            out = {}
+            for leaf in self._leaves_under_(*topic):
+                leaf = self._normtopic_((leaf,))
+                sub = self._UNSAFE_ship_topic_(
+                    leaf, os.path.join(str(target), *leaf[len(topic):]),
+                    overwrite=overwrite, relocate=relocate)
+                out.update(sub)
+            return {topic[0]: out} if len(topic) == 1 else out
+
+        is_dir = self._is_dir_topic_(*topic) or self._topicfiles_ is None
+        src_path = self.dirpath(*topic) if is_dir else self.path(*topic)
+        if src_path is None:
+            raise ValueError(f"UNSAFE_ship: topic {'/'.join(topic)!r} has no path to ship from")
+        target = str(target)
+        if not overwrite:
+            dst_fs, _ = self._url_to_fs_(target)
+            if dst_fs.exists(target):
+                raise FileExistsError(
+                    f"UNSAFE_ship: {target!r} already holds data for topic "
+                    f"{'/'.join(topic)!r}. Pass overwrite=True to replace it."
+                )
+        # The hook decides WHAT to send; by default the topic's own data. `made` stays
+        # empty unless the hook calls workdir(), so a hook that relocates nothing --
+        # every default one -- never creates a directory, however large the topic.
+        made = []
+
+        def workdir():
+            if not made:
+                made.append(tempfile.mkdtemp(prefix='dbx-ship-'))
+            return made[0]
+
+        try:
+            src_path = self.__relocate_shipment__('/'.join(topic), target, workdir,
+                                                  **(relocate or {}))
+            relocated = not self._same_location_(src_path, self.path(*topic))
+            if relocated:
+                self.log.verbose(
+                    f"Topic {'/'.join(topic)} relocated for shipping: {src_path}")
+                is_dir = self._isdir_(src_path)
+
+            if self._same_location_(src_path, target):
+                # Already shipped and redirected onto this target: the data IS there, so
+                # re-shipping is a copy onto itself. Idempotent rather than SameFileError.
+                self.log.verbose(
+                    f"Topic {'/'.join(topic)} already reads from {target}; nothing to ship")
+                return self._nest_topic_path_(topic, target)
+            self.log.detailed(f"Shipping {'/'.join(topic)} from {src_path} to {target}")
+            # The trailing slash is load-bearing: fsspec nests a source DIRECTORY under
+            # a destination that already exists, so without it a re-ship, or a ship onto
+            # a prefix some earlier partial transfer created, silently lands the tree one
+            # level deep -- `<target>/<topic>/...` instead of `<target>/...`.
+            self._UNSAFE_copy_fs_(src_path=f"{str(src_path).rstrip('/')}/" if is_dir
+                                  else src_path,
+                                  dst_path=target, recursive=is_dir)
+            return self._nest_topic_path_(topic, target)
+        finally:
+            if made:
+                shutil.rmtree(made[0], ignore_errors=True)
+
+    def _isdir_(self, path) -> bool:
+        """Whether *path* is a directory, on whichever filesystem holds it."""
+        fs, _ = self._url_to_fs_(str(path))
+        return bool(fs.isdir(str(path)))
+
+    def _same_location_(self, left, right) -> bool:
+        """Whether two paths name the same data. Compared as strings, and for local
+        paths that both exist by identity, so `a/../a/x` and `a/x` are one file."""
+        left, right = str(left), str(right)
+        if left == right:
+            return True
+        try:
+            left_fs, _ = self._url_to_fs_(left)
+            right_fs, _ = self._url_to_fs_(right)
+            if left_fs is not right_fs and left_fs != right_fs:
+                return False
+            if 'file' in getattr(left_fs, 'protocol', ()):
+                return (os.path.exists(left) and os.path.exists(right)
+                        and os.path.samefile(left, right))
+            return os.path.normpath(left) == os.path.normpath(right)
+        except Exception:
+            return False
+
+    @staticmethod
+    def _nest_topic_path_(topic, path):
+        """``('a','b'), p -> {'a': {'b': p}}`` -- the shape `_redirect_path_` walks."""
+        out = path
+        for name in reversed(topic):
+            out = {name: out}
+        return out
 
     def _UNSAFE_copy_topic_(self, topic, anchorkeypath, *, topicpaths=None, always_copy_whole_dirpath: bool = False, **kwargs):
         """Copy one topic's data from anchorkeypath into this Datablock.

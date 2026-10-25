@@ -3,6 +3,7 @@
 import os
 import sys
 import time
+from types import SimpleNamespace as NS
 
 os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
 
@@ -11,7 +12,7 @@ import pytest
 
 pygame = pytest.importorskip("pygame", reason="hyp is the [hyp] extra")
 
-from hyp import docs, docview
+from hyp import docs, docview, poincare
 
 pygame.init()
 
@@ -85,15 +86,11 @@ def test_modification_times_however_a_filesystem_names_them(info, expected):
 ])
 def test_a_remote_documents_url_keeps_its_host(url, top, name, expected):
     """fsspec's unstrip_protocol drops an ssh url's host: the url could not be opened again."""
-    from types import SimpleNamespace as NS
-
     fs = NS(protocol=url.split("://")[0], hyp_prefix=docs._prefix_(url, top))
     assert docs.url_of(fs, name) == expected
 
 
 def test_the_corpus_is_kept_apart_from_the_directory_scanned(tree):
-    from types import SimpleNamespace as NS
-
     data = docs.HypDocs.__default_data__(NS(dir=str(tree)))
     assert data.startswith(os.path.join(os.path.expanduser("~"), ".hyp", "docs")) and str(tree) not in data
 
@@ -217,8 +214,6 @@ def test_the_window_scrolls_both_ways_and_zooms():
 
 @pytest.fixture
 def app(tree):
-    from types import SimpleNamespace as NS
-
     from hyp.app import Worker
 
     a = docs.HypDocs(engine=None, worker=Worker())
@@ -357,3 +352,25 @@ def test_a_click_on_a_layer_brings_it_to_the_front(app):
     assert app.layers[-1] == "disk"
     inside_tile_and_disk = (tile.rect.right - 30, h // 2)
     assert app.layer_at(inside_tile_and_disk) == "disk", "now in front, the disk takes what it covers"
+
+
+def test_shards_slide_out_of_their_point_and_back_without_the_view_resetting(app):
+    def snap(positions, points):
+        return NS(positions=np.array(positions), summaries=[p["key"] for p in points], texts=[""] * len(points),
+                  neighbors=np.zeros((len(points), 0), dtype=int), points=points)
+
+    whole = snap([0.1 + 0.1j, -0.4 + 0.2j], [{"key": "a"}, {"key": "s"}])
+    app.on_snapshot(whole, None, 0.0)
+    app.view.M = poincare.Mobius.translation(0.2 + 0j)  # the view moved: a reset would put it back
+    moved = app.view.M
+    sharded = snap([0.1 + 0.1j, -0.4 + 0.2j, -0.5 + 0.3j, -0.3 + 0.1j],
+                   [{"key": "a"}, {"key": "s"}, {"key": "s#0", "origin": "s"}, {"key": "s#1", "origin": "s"}])
+    app.on_snapshot(sharded, None, 1.0)
+    start, end, _ = app.tween
+    assert np.array_equal(start, [0.1 + 0.1j, -0.4 + 0.2j, -0.4 + 0.2j, -0.4 + 0.2j]), "out of their session's point"
+    assert np.array_equal(end, sharded.positions) and app.view.M is moved
+    app.on_snapshot(whole, None, 5.0)
+    start, end, _ = app.tween
+    assert np.array_equal(start, whole.positions) and app.view.M is moved, "folded back: the rest stays where it was"
+    app.on_snapshot(snap([0.3j], [{"key": "elsewhere"}]), None, 9.0)
+    assert app.tween is None and app.view.M is not moved, "another corpus: opened on its center"

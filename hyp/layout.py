@@ -43,15 +43,15 @@ def _align_(new, old):
     return best
 
 
-# The radius the farthest of a few points is placed at, scaled by `_scaled_`: as far out as the ring they were on.
+# The radius the farthest of a few points is placed at, by `scaled`: as far out as the ring they were on.
 FEW_RADIUS = 0.3
 
 
-def _scaled_(embeddings):
+def scaled(embeddings, radius=FEW_RADIUS):
     """A few points on the disk, placed by classical multidimensional scaling of their cosine distances.
 
     The plane positions whose distances best match theirs, centered on the
-    origin and scaled so that the farthest is at FEW_RADIUS: their distances
+    origin and scaled so that the farthest is at *radius*: their distances
     relative to one another are theirs, and near the origin the disk's
     distances are the plane's, near enough. One point is at the origin.
     """
@@ -67,7 +67,21 @@ def _scaled_(embeddings):
     w = xy[:, 0] + 1j * (xy[:, 1] if xy.shape[1] > 1 else 0.0)
     w = w - w.mean()
     far = float(np.abs(w).max())
-    return w * (FEW_RADIUS / far) if far > 1e-12 else np.zeros(n, dtype=complex)
+    return w * (radius / far) if far > 1e-12 else np.zeros(n, dtype=complex)
+
+
+def about(embeddings, radius, inner):
+    """Points ringed about the origin, as `scaled` places them: the farthest at *radius*, none nearer than *inner*.
+
+    The origin is another's -- the point they are the shards of -- so each is
+    moved out by *inner*, along its own direction. One `scaled` left at the
+    origin -- the only one, or one in the middle of the rest -- has none, and
+    takes its place on the ring by its index.
+    """
+    w = scaled(embeddings, radius - inner)
+    r = np.abs(w)
+    angle = np.where(r > 1e-9, np.angle(w), 2 * np.pi * np.arange(len(w)) / max(len(w), 1))
+    return (inner + r) * np.exp(1j * angle)
 
 
 # One layout at a time: UMAP's numba kernels run parallel, and numba's default
@@ -97,7 +111,7 @@ def _compute_(embeddings, previous=None, seed=0):
         # Too few points for a neighbor graph -- and UMAP's would not do: it scales each point's distances by its
         # nearest neighbor's, so three points come out equidistant whatever they mean. Placed by their cosine
         # distances themselves instead; they were once a ring, the same for every corpus.
-        w = _scaled_(embeddings)
+        w = scaled(embeddings)
         if previous is not None and len(previous) == n:
             reflect, rot = _align_(w, np.asarray(previous))
             w = (np.conj(w) if reflect else w) * rot

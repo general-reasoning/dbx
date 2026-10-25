@@ -754,7 +754,12 @@ class ClaudeWindow(EditableTitle, DocWindow):
 
     def begin(self, text):
         self.sending, self.partial, self.note = text, "", None
+        self.pinned = None  # the reply followed, not a turn kept in view
         self._render_(follow=True)
+
+    def show_turn(self, n):
+        """Keep turn *n* -- its `## You`, the *n*-th of `turns` -- at the top of the transcript's view, till it is scrolled."""
+        self.pin_heading("You", n)
 
     def delta(self, text):
         if self.partial is not None:
@@ -938,6 +943,37 @@ def said(body):
     body = re.sub(r"^# Claude · .*$", "", body, flags=re.M)
     body = re.sub(r"^## (You|Claude)[ \t]*$", "", body, flags=re.M)
     return re.sub(r"\n{3,}", "\n\n", body).strip()
+
+
+def turns(body):
+    """A saved transcript's *body* as its turns: `(asked, answered)` each, in order, as its `## You` and `## Claude` lines part them.
+
+    What precedes the first `## You` -- the `# Claude · <title>` heading -- is
+    no turn's, and a reply in more than one `## Claude` part is one answer. A
+    `## You` inside fenced code is the code's: the window's markdown does not
+    make a heading of it either, and counts its turns as this does.
+    """
+    out, part, lines, fence = [], None, [], None
+
+    def close():
+        text = "\n".join(lines).strip()
+        if part == "You":
+            out.append([text, ""])
+        elif part == "Claude" and out:
+            out[-1][1] = f"{out[-1][1]}\n\n{text}".strip()
+
+    for line in body.splitlines():
+        mark = line.strip()[:3]
+        if mark in ("```", "~~~"):
+            fence = None if fence == mark else fence or mark
+        heading = None if fence else re.match(r"^## (You|Claude)[ \t]*$", line)
+        if heading:
+            close()
+            part, lines = heading.group(1), []
+        else:
+            lines.append(line)
+    close()
+    return [tuple(t) for t in out]
 
 
 def is_session(fields):

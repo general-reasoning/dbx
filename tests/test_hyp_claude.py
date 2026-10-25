@@ -15,6 +15,11 @@ import pygame
 import pytest
 
 from hyp import claude, docs, docview
+from hyp.app import Worker
+from hyp.engine import Engine
+from hyp.store import Store
+
+from test_hyp_engine import EchoSummarizer, HashEmbedder, quiet
 
 # A stand-in for `claude -p ... --output-format stream-json`: each run's argv, cwd and stdin logged; its reply
 # FAKE_REPLY (words streamed), or FAKE_FAIL's message as a failed result, or FAKE_STDERR on stderr with no result.
@@ -225,7 +230,7 @@ def app(saved, monkeypatch):
         a.refreshed += 1
         return True
 
-    a.engine = NS(refresh=refresh, snapshot=lambda: a.snap)
+    a.engine = NS(refresh=refresh, snapshot=lambda: a.snap, shards={}, shattered={})
     found = docs.documents(str(tree), progress=lambda *a: None)
     a.snap = NS(positions=np.array([0.1 + 0.1j, -0.4 + 0.2j]), summaries=[d.summary for d in found],
                 texts=[d.text for d in found], neighbors=np.array([[1], [0]]), points=[dict(d.extra) for d in found])
@@ -1527,3 +1532,160 @@ def test_sessions_stay_here_with_the_setting_off(app):
     app.settings["sessions on remote"] = False
     app.__snapshot_arrived__()
     assert app.handoffs == {}
+
+
+# -- a session's turns, as points of their own ---------------------------------------------------------------------
+
+
+def test_a_transcript_is_parted_into_its_turns():
+    body = "\n".join(["# Claude · t", "", "## You", "", "one?", "", "## Claude", "", "first", "", "## Claude", "", "more",
+                      "", "## You", "", "```", "## You", "```", "", "## Claude", "", "second", ""])
+    assert claude.turns(body) == [("one?", "first\n\nmore"), ("```\n## You\n```", "second")]
+    assert claude.turns("# Claude · t\n\nnothing said") == []
+
+
+@pytest.fixture
+def turns(cli, tree, tmp_path, monkeypatch):
+    """hyp --docs on a real engine, over a saved session of three turns: Claude's naming of their questions, faked and recorded."""
+    s = claude.Session(str(tree))
+    for q in ("What is alpha?", "How does beta relate to it?", "And gamma, finally?"):
+        monkeypatch.setenv("FAKE_REPLY", " ".join([f"About {q.split()[-1]}"] * 400))  # long: the transcript scrolls
+        s.send(q)
+    url = s.save()
+    asked = []
+
+    def ask(prompt, timeout=180, command=None):
+        asked.append(prompt)
+        n = int(re.search(r"exactly (\d+) lines", prompt).group(1))
+        return "\n".join(f"{k + 1}. Topic {len(asked)}.{k + 1}" for k in range(n))
+
+    monkeypatch.setattr(claude, "ask", ask)
+    data = tmp_path / "data"
+    args = NS(dir=str(tree), claude_dir="", data=str(data))
+    embedder = HashEmbedder()
+    engine = Engine(Store(str(data)), embedder, EchoSummarizer(), source=docs.HypDocs.__source__(args))
+    engine.start(quiet)
+    a = docs.HypDocs(engine=engine, worker=Worker(), args=args)
+    a.run_async = lambda fn, then: then(fn())
+    a.settings["sessions on remote"] = False
+    a.on_snapshot(engine.snapshot(), None, 0.0)
+    session = next(n for n, p in enumerate(a.snap.points) if p.get("kind") == claude.KIND)
+    return NS(app=a, url=url, asked=asked, embedder=embedder, data=data, session=session, n=len(a.snap.points))
+
+
+def _shards_(app):
+    return [(k, p) for k, p in enumerate(app.snap.points) if p.get("kind") == docs.SHARD]
+
+
+def test_shift_right_click_on_a_session_shows_its_turns_about_it_named_by_claude(turns, monkeypatch):
+    a = turns.app
+    whole = a.snap.positions.copy()
+    a.hover = turns.session
+    monkeypatch.setattr(pygame.key, "get_mods", lambda: pygame.KMOD_SHIFT)
+    cx, cy, _ = a.frame()
+    a.handle(pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=3, pos=(int(cx), int(cy))), 0.0)
+    a.drain(0.0)
+
+    shards = _shards_(a)
+    assert [p["turn"] for _, p in shards] == [0, 1, 2] and a.sharded() == {turns.url}
+    assert [a.snap.summaries[k] for k, _ in shards] == [f"Claude · What is alpha? · Topic 1.{n}" for n in (1, 2, 3)]
+    assert len(turns.asked) == 1 and all(q in turns.asked[0] for q in ("What is alpha?", "beta relate", "gamma, finally"))
+    assert sorted(json.loads((turns.data / "words.json").read_text()).values()) == ["Topic 1.1", "Topic 1.2", "Topic 1.3"]
+    assert np.array_equal(a.snap.positions[: turns.n], whole), "the rest of the disk stays where it was"
+    k = shards[0][0]
+    label = a.__point_label__(k)
+    assert label == "Claude · What is al… · Topic 1.1" and len(label) == 32, "the session's label cut short, the turn's words kept"
+    assert "What is alpha?" in a.__point_tooltip__(k)
+
+    a.__context_empty__((5, 5))
+    a.drain(0.0)
+    assert not _shards_(a) and len(a.snap.points) == turns.n and a.popup is None, "folded back, rather than the menu"
+    seen = len(turns.embedder.seen)
+    a.__shift_context_point__(turns.session, (0, 0))
+    a.drain(0.0)
+    assert len(_shards_(a)) == 3 and len(turns.asked) == 1 and len(turns.embedder.seen) == seen, "named and embedded once"
+    a.__shift_context_point__(_shards_(a)[1][0], (0, 0))
+    a.drain(0.0)
+    assert not _shards_(a), "Shift+right click on a turn folds its session's back too"
+
+
+def test_a_click_on_a_turn_opens_its_session_at_that_turn(turns):
+    a = turns.app
+    a.__shift_context_point__(turns.session, (0, 0))
+    a.drain(0.0)
+    k = _shards_(a)[1][0]
+    a.__click_point__(k, 0.0)
+    window = a._claude_window_()
+    a.draw(0.0)
+    run = next(r for r in window._laid_.runs if r.block == window.pinned)
+    assert run.text == "You" and window.sy > 0 and run.y - window.sy == 12, "the second turn's You, at the top"
+    window.handle(pygame.event.Event(pygame.MOUSEWHEEL, x=0, y=-1, precise_x=0.0, precise_y=-1.0))
+    assert window.pinned is None, "scrolled: the reader's again"
+
+
+def test_a_session_filed_with_its_turns_shown_shows_the_new_one_too(turns, monkeypatch):
+    a = turns.app
+    a.__shift_context_point__(turns.session, (0, 0))
+    a.drain(0.0)
+    a.__click_point__(turns.session, 0.0)
+    monkeypatch.setenv("FAKE_REPLY", "Delta it is.")
+    _type_(a._claude_window_(), "And delta?")
+    a.drain(0.0)
+    assert [p["words"] for _, p in _shards_(a)] == ["Topic 1.1", "Topic 1.2", "Topic 1.3", "Topic 2.1"]
+    assert "And delta?" in turns.asked[1] and "What is alpha?" not in turns.asked[1], "only the new question asked"
+
+
+def test_turns_claude_cannot_name_are_named_by_their_first_words(turns, monkeypatch):
+    def down(prompt, timeout=180, command=None):
+        raise claude.Failed("Claude Code is not logged in")
+
+    monkeypatch.setattr(claude, "ask", down)
+    a = turns.app
+    a.__shift_context_point__(turns.session, (0, 0))
+    a.drain(0.0)
+    assert [p["words"] for _, p in _shards_(a)] == ["What is alpha?", "How does beta relate to …", "And gamma, finally?"]
+    assert "Claude could not name them: Claude Code is not logged in" in a.status
+    assert not (turns.data / "words.json").exists()
+
+
+def _shift_right_click_(app, monkeypatch, pos=None):
+    monkeypatch.setattr(pygame.key, "get_mods", lambda: pygame.KMOD_SHIFT)
+    cx, cy, _ = app.frame()
+    app.handle(pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=3, pos=pos or (int(cx), int(cy))), 0.0)
+    monkeypatch.setattr(pygame.key, "get_mods", lambda: 0)
+    app.drain(0.0)
+
+
+def test_shift_right_click_on_empty_disk_shatters_every_session_and_again_makes_them_whole(turns, monkeypatch):
+    monkeypatch.setattr(docs, "WORDS_BATCH", 2)
+    a = turns.app
+    a.hover = None
+    _shift_right_click_(a, monkeypatch)
+    shards = _shards_(a)
+    assert [p["turn"] for _, p in shards] == [0, 1, 2] and all(p["shattered"] for _, p in shards) and a.shattered()
+    assert not any(p.get("kind") == claude.KIND for p in a.snap.points), "the session gone: its turns in its place"
+    assert shards[1][1]["embed"].startswith("How does beta relate to it?"), "embedded alone: not by its session's title"
+    assert [p["words"] for _, p in shards] == ["Topic 1.1", "Topic 1.2", "Topic 2.1"], "named two at a time"
+    assert not a.sharded(), "none ringed about a session"
+
+    a.__context_empty__((5, 5))
+    assert a.popup is not None, "a plain right click on empty disk: the menu, as ever"
+    a.popup = None
+    a.__shift_context_point__(shards[0][0], (100, 100))
+    assert isinstance(a.popup, docs.TilePicker), "Shift+right click on a turn shattered: placed, as a right click"
+    a.popup = None
+    a.hover = None
+    _shift_right_click_(a, monkeypatch)
+    assert not _shards_(a) and len(a.snap.points) == turns.n and not a.shattered(), "whole again"
+
+
+def test_a_session_filed_while_shattered_is_shattered_again_its_new_turn_among_them(turns, monkeypatch):
+    a = turns.app
+    a.hover = None
+    _shift_right_click_(a, monkeypatch)
+    a.__click_point__(_shards_(a)[0][0], 0.0)
+    monkeypatch.setenv("FAKE_REPLY", "Delta it is.")
+    _type_(a._claude_window_(), "And delta?")
+    a.drain(0.0)
+    assert [p["words"] for _, p in _shards_(a)] == ["Topic 1.1", "Topic 1.2", "Topic 1.3", "Topic 2.1"]
+    assert a.shattered() and not any(p.get("kind") == claude.KIND for p in a.snap.points)

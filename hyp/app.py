@@ -57,6 +57,7 @@ ERROR_S = 15
 DRAG_RADIUS = 0.97
 LABEL_RADIUS = 0.72
 MAX_LABELS = 48
+LABEL_CHARS = 32  # of a point's label, as drawn beside it: a longer one is cut short
 SUBLABEL_CHARS = 48  # of each line under a point's label: a longer one is cut short
 KEY_REPEAT_DELAY_MS, KEY_REPEAT_MS = 400, 35  # a key held: repeats after this long, then this often
 # Keys whose repeat is dropped: held, Esc would close one window after another, and Enter send twice.
@@ -1146,8 +1147,8 @@ class Hyp:
     corpus comes from and how it is embedded (`__source__`, `__embedder__`, `__default_data__`,
     `__data_origin__`, `__storage_options__`), what opening a point
     does (`__open_point__`), what clicking one does (`__click_point__`,
-    `__context_point__`), what a text typed on empty disk does
-    (`__context_empty__`, `__submit_text__`, `BOX_HINT`), and how a point is labeled (`__point_label__`,
+    `__context_point__`, `__shift_context_point__`), what a right click on empty disk does
+    (`__context_empty__`, `__shift_context_empty__`, `__submit_text__`, `BOX_HINT`), and how a point is labeled (`__point_label__`,
     `__point_tag__`, `__point_name__`, `__point_version__`, `__point_datetime__`,
     `__point_tooltip__`). The hooks are the only methods
     a specialization is meant to override; everything else is shared.
@@ -1204,6 +1205,10 @@ class Hyp:
         """A right click on empty disk, at screen *pos*: here, a box to type a text in, at *pos* (`__submit_text__`)."""
         self.box = TextBox(pos, self.BOX_HINT)
 
+    def __shift_context_empty__(self, pos):
+        """Shift+right click on empty disk, at screen *pos*: here, what a right click there does."""
+        self.__context_empty__(pos)
+
     def __submit_text__(self, text):
         """What the box a right click on empty disk opens does with *text*, on Enter: here, embed it as a point of its own."""
         self.submit(text)
@@ -1216,6 +1221,10 @@ class Hyp:
     def __context_point__(self, i, pos):
         """Right click on point *i*, at screen *pos*: open it."""
         self.__open_point__(i)
+
+    def __shift_context_point__(self, i, pos):
+        """Shift+right click on point *i*, at screen *pos*: here, what a right click does."""
+        self.__context_point__(i, pos)
 
     def __open_point__(self, i):
         """Right click on point *i*: show its stored text."""
@@ -1429,19 +1438,44 @@ class Hyp:
     # -- events ---------------------------------------------------------------
 
     def on_snapshot(self, snap, focus, now):
-        if self.snap is not None and len(self.snap.positions) and len(self.snap.positions) <= len(snap.positions):
-            old = self.positions(now)
-            start = snap.positions.copy()
-            start[: len(old)] = old
+        start = self._starts_(snap, now) if self.snap is not None and len(self.snap.positions) else None
+        if start is not None:
             self.tween = (start, snap.positions, now)
         else:
-            # First layout -- or another corpus, or fewer points: open on its center.
+            # First layout -- or another corpus: open on its center.
             self.view.M, self.view.anim, self.tween = P.Mobius(), None, None
         self.snap, self.arrows = snap, {}
         if focus is not None:
             M = self.view.isometry(now)
             self.view.center_on(M(snap.positions[focus]), now)
         self.__snapshot_arrived__()
+
+    def _starts_(self, snap, now):
+        """Where *snap*'s points slide from: each from where the disk shows it now; None for none to slide -- another corpus.
+
+        Points are matched by key, where every point shown has one: a point
+        gone is dropped, without the rest being reset -- a session's shards
+        folded back -- and a new one slides from its "origin", the key of
+        the point it is a shard of, where that was, or else appears where it
+        is. Without keys, the first points shown are the first given, and
+        fewer points are another corpus.
+        """
+        old, before = self.positions(now), self.snap.points or ()
+        start = np.array(snap.positions, dtype=complex)
+        keys = [p.get("key") for p in before]
+        if not keys or None in keys:
+            if len(old) > len(start):
+                return None
+            start[: len(old)] = old
+            return start
+        at = dict(zip(keys, old))
+        if not any(p.get("key") in at for p in snap.points):
+            return None
+        for k, p in enumerate(snap.points):
+            was = at.get(p.get("key"), at.get(p.get("origin")))
+            if was is not None:
+                start[k] = was
+        return start
 
     def reload(self):
         """Read the corpus's source again, re-embed what changed, lay it all out afresh, and redraw it."""
@@ -1560,8 +1594,12 @@ class Hyp:
         elif ev.type == pygame.MOUSEBUTTONDOWN and ev.button == 3:
             if self.box is not None:
                 self.box = None
-            if self.hover is not None:
+            if self.hover is not None and pygame.key.get_mods() & pygame.KMOD_SHIFT:
+                self.__shift_context_point__(self.hover, ev.pos)
+            elif self.hover is not None:
                 self.__context_point__(self.hover, ev.pos)
+            elif pygame.key.get_mods() & pygame.KMOD_SHIFT:
+                self.__shift_context_empty__(ev.pos)
             else:
                 self.__context_empty__(ev.pos)
         elif ev.type == pygame.MOUSEWHEEL:
@@ -1614,7 +1652,7 @@ class Hyp:
         """Point *i*'s label: *text*, and below it, dimmer, *sub* -- its `sublabel`."""
         key = (i, text, sub)
         if key not in self.labels:
-            short = text if len(text) <= 32 else text[:31] + "…"
+            short = text if len(text) <= LABEL_CHARS else text[: LABEL_CHARS - 1] + "…"
             lines = [self.small.render(short, True, LABEL)]
             for line in sub.split("\n") if sub else ():
                 line = line if len(line) <= SUBLABEL_CHARS else line[: SUBLABEL_CHARS - 1] + "…"
@@ -1938,13 +1976,18 @@ class Hyp:
             self.error = None
         msg = f"error: {self.error}" if self.error else self.status
         left = self.small.render(f"{n} texts · zoom {self.view.k:.2f} · {msg}", True, (240, 120, 110) if self.error else STATUS)
-        right = self.small.render(self.HINT, True, STATUS)
         x = 10
         if self.busy():
             self.spinner((x + 8, h - 20 + left.get_height() // 2), now)
             x += 24
         self.screen.blit(left, (x, h - 20))
-        self.screen.blit(right, (w - right.get_width() - 10, h - 20))
+        # The controls, as many of them as fit beside the status, from the first: the status is not written over.
+        hint, room = self.HINT.split(" · "), w - 10 - (x + left.get_width() + 24)
+        while hint and self.small.size(" · ".join(hint))[0] > room:
+            hint.pop()
+        if hint:
+            right = self.small.render(" · ".join(hint), True, STATUS)
+            self.screen.blit(right, (w - right.get_width() - 10, h - 20))
 
     def raise_window(self):
         # Launched from a terminal, macOS leaves the window behind it.

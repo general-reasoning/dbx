@@ -1098,10 +1098,17 @@ class DocWindow:
         self.anchor = self.cursor = None  # the selection's two ends, as (run, character) of the layout; None for none
         self.selecting = False  # pressed on text and not yet let go: a drag selects
         self._last_press_ = (0.0, None)  # (when, where): what tells a double click
+        self.pinned = None  # a block of the document kept at the top of the view, till it is scrolled: a session opened at a turn
 
     def set_doc(self, doc):
         self.doc, self.sx, self.sy = doc, 0, 0
         self.anchor = self.cursor = None
+
+    def pin_heading(self, text, n):
+        """Keep the *n*-th heading of the document reading *text* -- `## You`, a session's *n*-th turn -- at the top of the view, till it is scrolled."""
+        found = [k for k, b in enumerate(getattr(self.doc, "blocks", ()))
+                 if b.kind == "heading" and "".join(t for t, _ in b.spans).strip() == text]
+        self.pinned = found[n] if 0 <= n < len(found) else None
 
     def header(self):
         """The window's title bar, as last drawn: its title and the lines beneath, above the document."""
@@ -1131,6 +1138,8 @@ class DocWindow:
         """Returns "close" or None."""
         if ev.type == pygame.MOUSEBUTTONDOWN and ev.button == 1 and self.close.collidepoint(ev.pos):
             return "close"
+        if ev.type in (pygame.KEYDOWN, pygame.MOUSEWHEEL) or ev.type == pygame.MOUSEBUTTONDOWN and self.body.collidepoint(ev.pos):
+            self.pinned = None  # scrolled, or about to be: the view is the reader's again
         if ev.type == pygame.KEYDOWN:
             k, shift = ev.key, bool(ev.mod & pygame.KMOD_SHIFT)
             cmd = (ev.mod | pygame.key.get_mods()) & (pygame.KMOD_META | pygame.KMOD_CTRL)
@@ -1218,6 +1227,8 @@ class DocWindow:
             return
         laid = self.doc.layout(self.body.width - 10, round(self.zoom, 4))
         self._size = (laid.width, laid.height)
+        if self.pinned is not None:
+            self.sy = next((r.y - pad for r in laid.runs if r.block == self.pinned), self.sy)
         self._clamp_()
         old = surf.get_clip()
         surf.set_clip(self.body.clip(old) if old else self.body)

@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- **hyp: the Claude Code it runs has a login of its own.** `--claude-config-dir
+  DIR`, else `$HYP_CLAUDE_CONFIG_DIR`, else `--docs`'s `<dir>/.claude`, is the
+  `CLAUDE_CONFIG_DIR` of every Claude Code hyp runs, so a directory's sessions
+  -- and the phone they are handed to -- can be on another account than Claude
+  Code elsewhere. A session begun under another login is carried over as it
+  is resumed. `hyp --docs --claude-login [EMAIL]` logs it in -- `claude auth
+  login --claudeai` there -- and answers its one-time questions for remote
+  handoffs. The window shows the account first, and says how to log in
+  there. The phone button is **remote**.
+- **hyp: a session handed to the phone shows it whole.** A handoff resumes
+  the conversation and types `/remote-control` at its prompt once the screen
+  has settled: started with `--remote-control`, the phone was shown only what
+  came after. A conversation that has a claude.ai session already -- which a
+  resume reconnects to, and which has only what came after it began -- goes
+  as a fresh copy without it.
 - **hyp --docs: a Claude session handed to a phone, and back.** Remote
   Control needs a session that stays, and hyp runs one turn at a time, so a
   session handed off is resumed interactively -- `--resume <id>
@@ -12,7 +27,12 @@ All notable changes to this project will be documented in this file.
   its screen read for the session's url, shown as a QR code (segno). It is
   saved first. **take back** ends it there and adds the turns made on the
   phone, from Claude Code's own `<id>.jsonl`, to the session's markdown.
-  Closing a session's window hands it off (**hand off on close**), reopening
+  Every session not open in hyp is on remote (**sessions on remote**): handed
+  off as hyp starts and as its window closes; opening it in hyp takes it back.
+  Handed off before, or begun under another account, it goes as a fresh copy
+  of its conversation -- its claude.ai session's records and history
+  suppression left out, its chain mended -- so the phone has all of it.
+  Closing a session's window hands it off, reopening
   it takes it back; reopened after a quit, what was said since its save comes
   in all the same.
 - **hyp gives the terminal back.** Run from one, it goes on in the

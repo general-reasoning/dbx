@@ -1197,6 +1197,9 @@ class Hyp:
         """Whether anything is being typed into, so that text input is on: here, the box, or a field of the top bar being edited."""
         return self.box is not None or any(getattr(c, "editing", False) for c in self.controls)
 
+    def __snapshot_arrived__(self):
+        """What the specialization does as the points are read in, or again: here, nothing."""
+
     def __context_empty__(self, pos):
         """A right click on empty disk, at screen *pos*: here, a box to type a text in, at *pos* (`__submit_text__`)."""
         self.box = TextBox(pos, self.BOX_HINT)
@@ -1438,6 +1441,7 @@ class Hyp:
         if focus is not None:
             M = self.view.isometry(now)
             self.view.center_on(M(snap.positions[focus]), now)
+        self.__snapshot_arrived__()
 
     def reload(self):
         """Read the corpus's source again, re-embed what changed, lay it all out afresh, and redraw it."""
@@ -2073,6 +2077,28 @@ def _detach_(argv):
     return code or 1
 
 
+def _claude_login_(config, root, email=""):
+    """Log in the Claude Code hyp runs, in *config*, here in the terminal: a claude.ai account -- `--claudeai`, never the
+    Console's API billing, which has no Remote Control -- then its one-time questions answered, in *root*. Its exit status.
+    """
+    from . import claude  # here, not at the top: claude imports docview, which imports this module
+
+    command = claude.claude_command()
+    env = {**os.environ, "CLAUDE_CONFIG_DIR": config}
+    print(f"hyp: logging in the Claude Code hyp runs, in {config} (its CLAUDE_CONFIG_DIR): choose a claude.ai account")
+    done = subprocess.run([command, "auth", "login", "--claudeai", *(("--email", email) if email else ())], env=env, cwd=root)
+    if done.returncode:
+        return done.returncode
+    subprocess.run([command, "auth", "status", "--text"], env=env, cwd=root)
+    if sys.stdin.isatty():
+        answer = input(f"\nAnswer Claude Code's one-time questions for remote handoffs now -- a text style, trusting {root}, "
+                       "accepting Remote Control? A Claude Code session opens: answer them, then /exit. [Y/n] ")
+        if answer.strip().lower() in ("", "y", "yes"):
+            subprocess.run([command, "--remote-control"], env=env, cwd=root)
+    print(f"hyp: done. hyp's Claude sessions -- and their remote handoffs -- now run on this login: {claude.account(command)}")
+    return 0
+
+
 def _say_ready_():
     """Tell the hyp that started this one in the background, if one did, that the window is up -- once."""
     fd = os.environ.pop(READY_FD, None)
@@ -2087,30 +2113,59 @@ def _say_ready_():
 
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="hyp", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--data", default=None, help="corpus directory, local or an fsspec url (default: ~/.hyp/seeds; with --journal, {DBX_DATALAKE}/.hyp, or .hyp/anchors/ANCHOR)")
-    ap.add_argument("--journal", nargs="?", const="pipelines", default=None, metavar="ANCHOR",
-                    help="a journal of dbx's datalake (DBX_DATALAKE): with no ANCHOR, or 'pipelines', its pipelines, from "
-                         "dbx.pipejournal(), one point each; with an ANCHOR, that anchor's blocks, from its build journal")
-    ap.add_argument("--filter", default=None, metavar="'KEY=PATTERN, ...'",
-                    help="with --journal ANCHOR: the anchor's journal filtered, each KEY a column, each PATTERN matched against it; "
-                         "the filter field in the top bar changes it")
-    ap.add_argument("--extra-construction-events", "--ece", nargs="+", default=[], metavar="EVENT",
-                    help="with --journal (pipelines): events that also make an entry block count as constructed -- each alone, or "
-                         "followed by = or : and the rest: `--ece ckpt` takes a block that has checkpointed (ckpt=<tag>)")
-    ap.add_argument("--docs", action="store_true", help="the documents -- markdowns and pdfs -- under --dir, one point each")
-    ap.add_argument("--dir", default=None, help="with --docs: the directory scanned, local or an fsspec url (default: the current one)")
-    ap.add_argument("--claude-dir", default=None, metavar="REL",
-                    help="with --docs: where Claude sessions are saved -- a directory relative to --dir, scanned with it (default: --dir itself)")
-    ap.add_argument("--remote-python", default=None, help="with --journal: the python, on the datalake's host, that read runs trueinst() in -- with dbx, ray and the project (default: $HYP_REMOTE_PYTHON, else the one each entry records its build ran in, else python3)")
-    ap.add_argument("--n-workers", type=int, default=16, help="threads reading a remote source, e.g. the dbx journal and its side files (default: 16)")
-    ap.add_argument("--embedder", choices=["ollama", "deepseek"], default="ollama", help="ollama: an Ollama embedding model; deepseek: pooled DeepSeek hidden states via transformers")
-    ap.add_argument("--embed-model", default=None, help=f"default: {EMBED_MODEL} for ollama")
-    ap.add_argument("--summary-model", default=SUMMARY_MODEL)
-    ap.add_argument("--reset", action="store_true", help="discard the stored corpus and start over")
-    ap.add_argument("--seed", type=int, default=0, help="UMAP random state")
-    ap.add_argument("--fg", action="store_true",
-                    help="keep the terminal: run here, its output here, Ctrl+C stopping it (default: run in the background "
-                         "once the window is up, the output to ~/.hyp/logs)")
+    # Which corpus is shown, and the options each takes: none of them, the seed texts.
+    general = ap.add_argument_group("every corpus")
+    general.add_argument("--data", default=None,
+                         help="the corpus's own directory, where its embeddings and layout are kept, local or an fsspec url "
+                              "(default: ~/.hyp/seeds; with --docs, ~/.hyp/docs/<one per --dir>; with --journal, "
+                              "{DBX_DATALAKE}/.hyp, or .hyp/anchors/ANCHOR)")
+    general.add_argument("--reset", action="store_true", help="discard the stored corpus and start over")
+    general.add_argument("--n-workers", type=int, default=16,
+                         help="threads reading the corpus's source: the documents under --dir, the dbx journal and its "
+                              "side files (default: 16)")
+    general.add_argument("--embedder", choices=["ollama", "deepseek"], default="ollama",
+                         help="ollama: an Ollama embedding model; deepseek: pooled DeepSeek hidden states via transformers")
+    general.add_argument("--embed-model", default=None, help=f"default: {EMBED_MODEL} for ollama")
+    general.add_argument("--summary-model", default=SUMMARY_MODEL)
+    general.add_argument("--seed", type=int, default=0, help="UMAP random state")
+    general.add_argument("--fg", action="store_true",
+                         help="keep the terminal: run here, its output here, Ctrl+C stopping it (default: run in the "
+                              "background once the window is up, the output to ~/.hyp/logs)")
+    docs = ap.add_argument_group("--docs: a directory's documents, and Claude sessions about them")
+    docs.add_argument("--docs", action="store_true",
+                      help="the documents -- markdowns and pdfs -- under --dir, one point each, and Claude sessions on them, "
+                           "saved there as markdowns of their own. The sessions run on a Claude Code login of their own, in "
+                           "--claude-config-dir: log in there once, before the first, with `hyp --docs --claude-login`")
+    docs.add_argument("--dir", default=None, help="the directory scanned, local or an fsspec url (default: the current one)")
+    docs.add_argument("--claude-dir", default=None, metavar="REL",
+                      help="where in --dir each Claude session is saved, as a markdown: a directory relative to --dir, and "
+                           "scanned with it, so that the sessions are points too (default: --dir itself)")
+    journal = ap.add_argument_group("--journal: dbx's datalake (DBX_DATALAKE)")
+    journal.add_argument("--journal", nargs="?", const="pipelines", default=None, metavar="ANCHOR",
+                         help="with no ANCHOR, or 'pipelines', the datalake's pipelines, from dbx.pipejournal(), one point "
+                              "each; with an ANCHOR, that anchor's blocks, from its build journal")
+    journal.add_argument("--filter", default=None, metavar="'KEY=PATTERN, ...'",
+                         help="with an ANCHOR: its journal filtered, each KEY a column, each PATTERN matched against it; the "
+                              "filter field in the top bar changes it")
+    journal.add_argument("--extra-construction-events", "--ece", nargs="+", default=[], metavar="EVENT",
+                         help="with the pipelines: events that also make an entry block count as constructed -- each alone, "
+                              "or followed by = or : and the rest: `--ece ckpt` takes a block that has checkpointed "
+                              "(ckpt=<tag>)")
+    journal.add_argument("--remote-python", default=None,
+                         help="the python, on the datalake's host, that read runs trueinst() in -- with dbx, ray and the "
+                              "project (default: $HYP_REMOTE_PYTHON, else the one each entry records its build ran in, "
+                              "else python3)")
+    claude_code = ap.add_argument_group(
+        "Claude Code: what hyp runs it for -- every corpus's arrows' lines; --docs's sessions, and their remote handoffs")
+    claude_code.add_argument("--claude-config-dir", default=os.environ.get("HYP_CLAUDE_CONFIG_DIR"), metavar="DIR",
+                             help="the Claude Code login, and its record of every conversation, that hyp uses: for "
+                                  "arrows' lines in every corpus, and for --docs's sessions and their remote handoffs "
+                                  "(default: $HYP_CLAUDE_CONFIG_DIR; with --docs and a local --dir, that directory's "
+                                  ".claude, made if missing; else Claude Code's own, ~/.claude)")
+    claude_code.add_argument("--claude-login", nargs="?", const="", default=None, metavar="EMAIL",
+                             help="log that Claude Code in, once, with a claude.ai account (claude auth login "
+                                  "--claudeai, EMAIL filled in if given), answer its one-time questions for remote "
+                                  "handoffs, and exit")
     argv = sys.argv[1:] if argv is None else list(argv)
     args = ap.parse_args(argv)
 
@@ -2138,6 +2193,22 @@ def main(argv=None):
             ap.error(f"--filter: {e}")
     elif args.docs:
         from .docs import HypDocs as cls
+    if args.docs and not args.claude_config_dir:
+        root = cls.root(args)
+        if "://" not in root:  # a directory of its own: its sessions, and their login, with it
+            args.claude_config_dir = os.path.join(root, ".claude")
+            os.makedirs(args.claude_config_dir, exist_ok=True)
+    if args.claude_config_dir:
+        config = os.path.abspath(os.path.expanduser(args.claude_config_dir))
+        if not os.path.isdir(config):
+            ap.error(f"--claude-config-dir {args.claude_config_dir}: no such directory -- log Claude Code in there first: "
+                     f"CLAUDE_CONFIG_DIR={config} claude auth login")
+        os.environ["CLAUDE_CONFIG_DIR"] = config  # for every Claude Code hyp runs, and the run in the background too
+    if args.claude_login is not None:
+        if not args.claude_config_dir:
+            ap.error("--claude-login logs in the Claude Code of --docs, in --dir's .claude, or of --claude-config-dir")
+        raise SystemExit(_claude_login_(os.environ["CLAUDE_CONFIG_DIR"], cls.root(args) if args.docs else os.getcwd(),
+                                        args.claude_login))
     if not args.fg and READY_FD not in os.environ and sys.stdout.isatty():
         raise SystemExit(_detach_(argv))
     origin = "--data" if args.data is not None else cls.__data_origin__(args)

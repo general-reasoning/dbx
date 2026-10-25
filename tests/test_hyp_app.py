@@ -1,6 +1,7 @@
 """The hyp window's busy spinner: on while data are loaded or prepared, off once they are."""
 
 import os
+import re
 import sys
 import threading
 import time
@@ -684,21 +685,24 @@ def test_the_box_keeps_its_hint_inside_it():
     assert box.rect.width == TextBox.WIDTH and box.rect.height >= 2 * font.get_linesize() * 2
 
 
-def test_hyp_gives_the_terminal_back_only_with_one_and_not_in_the_foreground(monkeypatch):
+def test_hyp_gives_the_terminal_back_only_with_one_and_not_in_the_foreground(monkeypatch, tmp_path):
     from hyp import app as app_mod
 
+    for var in ("CLAUDE_CONFIG_DIR", "HYP_CLAUDE_CONFIG_DIR"):
+        monkeypatch.setenv(var, "")  # what main sets, put back after
+    d = str(tmp_path)
     detached = []
     monkeypatch.setattr(app_mod, "_detach_", lambda argv: detached.append(argv) or 0)
     monkeypatch.delenv(app_mod.READY_FD, raising=False)
     monkeypatch.setattr(sys.stdout, "isatty", lambda: True)
     with pytest.raises(SystemExit) as done:
-        app_mod.main(["--docs", "--dir", "/tmp"])
-    assert done.value.code == 0 and detached == [["--docs", "--dir", "/tmp"]], "run again, in the background, as asked"
+        app_mod.main(["--docs", "--dir", d])
+    assert done.value.code == 0 and detached == [["--docs", "--dir", d]], "run again, in the background, as asked"
     from hyp.docs import HypDocs
 
     monkeypatch.setattr(HypDocs, "__default_data__", classmethod(lambda cls, args: (_ for _ in ()).throw(RuntimeError("ran here"))))
-    for argv in (["--docs", "--fg"], ["--docs"]):
-        if argv == ["--docs"]:
+    for argv in (["--docs", "--dir", d, "--fg"], ["--docs", "--dir", d]):
+        if "--fg" not in argv:
             monkeypatch.setenv(app_mod.READY_FD, "99")  # the run in the background itself
         with pytest.raises(RuntimeError, match="ran here"):
             app_mod.main(argv)
@@ -727,3 +731,27 @@ def test_a_start_that_fails_in_the_background_is_said_in_the_terminal(tmp_path, 
     err = capsys.readouterr().err
     assert code == 1 and "cannot open the corpus ssh://no-such-host.invalid/corpus" in err
     assert len(list((tmp_path / "logs").glob("hyp-*.log"))) == 1
+
+
+
+def test_a_docs_directorys_claude_runs_on_its_own_dot_claude_unless_one_is_named(monkeypatch, tmp_path):
+    import os
+    from hyp import app as app_mod
+    from hyp.docs import HypDocs
+
+    stop = classmethod(lambda cls, args: (_ for _ in ()).throw(RuntimeError(os.environ["CLAUDE_CONFIG_DIR"])))
+    monkeypatch.setattr(HypDocs, "__default_data__", stop)
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", "")
+    monkeypatch.delenv("HYP_CLAUDE_CONFIG_DIR", raising=False)
+    notes = tmp_path / "notes"
+    notes.mkdir()
+    with pytest.raises(RuntimeError, match=re.escape(str(notes / ".claude"))):
+        app_mod.main(["--docs", "--dir", str(notes), "--fg"])
+    assert (notes / ".claude").is_dir(), "made, if missing"
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.setenv("HYP_CLAUDE_CONFIG_DIR", str(elsewhere))
+    with pytest.raises(RuntimeError, match=re.escape(str(elsewhere))):
+        app_mod.main(["--docs", "--dir", str(notes), "--fg"])
+    with pytest.raises(SystemExit):
+        app_mod.main(["--docs", "--dir", str(notes), "--fg", "--claude-config-dir", str(tmp_path / "missing")])

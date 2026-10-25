@@ -53,15 +53,18 @@ SYSTEM = (
 )
 SYSTEM_TOOLS = "You may read, list and search those documents, to answer from them; you cannot change them."
 SYSTEM_NO_TOOLS = "You cannot see the documents unless the user pastes them in."
+# Where Claude Code keeps its login and conversations, unless CLAUDE_CONFIG_DIR says elsewhere.
+DEFAULT_CONFIG = os.path.expanduser("~/.claude")
 # The models a session's window switches among, by Claude Code's names for them; None is Claude Code's own default.
 MODELS = (None, "opus", "sonnet", "haiku")
 # The session's url on claude.ai, as a session handed off to a phone shows it: what its QR code is of.
 SESSION_URL = re.compile(r"https://claude\.ai/code/session_[A-Za-z0-9]+")
+# Remote Control's own consent, asked as /remote-control first connects -- spaces gone: accepted, as what was asked for.
+CONSENT = "enableremotecontrolopens"
 # What Claude Code asks only once, interactively -- spaces gone, as its screen draws them -- and what to do instead.
 FIRST_RUN = {
     "choosethetextstyle": "Claude Code has not been set up to run interactively",
     "doyoutrustthefiles": "Claude Code does not yet trust this directory",
-    "enableremotecontrol": "Remote Control has not been accepted yet",
 }
 
 
@@ -127,6 +130,8 @@ class Session:
         The turn joins the transcript only once its reply is whole. One that
         fails raises `Failed`, saying why.
         """
+        if self.resumable:
+            carry_over(self.id)  # begun under another login, Claude Code's: resumed under this one
         args = self._args_()
         try:
             proc = subprocess.Popen(args, cwd=self._cwd_(), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
@@ -304,11 +309,16 @@ class Session:
         except ValueError:
             return None
 
-    def handoff_args(self, name):
-        """The command Claude Code is run with to take the session elsewhere: interactive, with Remote Control, as *name*."""
+    def handoff_args(self):
+        """The command Claude Code is run with to take the session elsewhere: the conversation resumed, interactively.
+
+        Remote Control is not asked for here, but typed in once it is up
+        (`Handoff`): started with the session, it shows the phone only what
+        comes after, and the conversation there would begin empty.
+        """
         tools = ",".join(TOOLS) if self._local_() else ""
         system = SYSTEM.format(root=self.root, tools=SYSTEM_TOOLS if tools else SYSTEM_NO_TOOLS)
-        return [self.command or claude_command(), "--resume", self.id, "--remote-control", name,
+        return [self.command or claude_command(), "--resume", self.id,
                 f"--tools={tools}", f"--allowedTools={tools}", "--permission-mode", "dontAsk",
                 "--append-system-prompt", system, *(("--model", self.choice) if self.choice else ())]
 
@@ -326,16 +336,21 @@ class Handoff:
 
     hyp drives a session through `claude -p`, a run a turn, and Remote
     Control needs a session that stays: so to hand one off, the conversation
-    is resumed interactively -- `claude --resume <id> --remote-control` --
-    in a terminal no one sees, whose screen is read for the session's url
+    is resumed interactively -- `claude --resume <id>` -- in a terminal no
+    one sees, `/remote-control` typed at its prompt, so that the phone is
+    given the conversation whole, and its screen read for the session's url
     (`url`), shown as a QR code to open it on a phone. It goes on there, and
     `stop` ends it; `Session.take_back` brings in what was said meanwhile.
     Claude Code asks some things once, interactively -- a theme, whether to
-    trust the directory, whether to accept Remote Control -- and those it
-    asks here are not answered: `problem` says to run it once in a terminal.
+    trust the directory -- and those it asks here are not answered: `problem`
+    says to run it once in a terminal. Remote Control's own consent is: it is
+    what was asked for.
     """
 
     SCREEN_CHARS = 20_000  # of the screen, the last, kept to read
+    PROMPT_S = 1.5  # how long, at the least, before /remote-control is typed in
+    QUIET_S = 1.0  # and how long the screen must have said nothing new: the resumed conversation laid out first
+    CONNECT_S = 30  # how long Remote Control has to say its url, before the handoff is given up
 
     def __init__(self, session):
         self.session = session
@@ -343,11 +358,19 @@ class Handoff:
         self.problem = None  # why it is not handed off, where it is not
         self.started = None  # when it was, as time.time(): what was said since is the phone's
         self.pid = self.fd = None
+        self.name = f"hyp · {session.title()}"  # the session's, on claude.ai and the phone
         self._screen_ = ""
+        self._typed_ = False  # /remote-control typed in, at its prompt
+        self._said_ = 0.0  # when the screen last showed something new
+        self._accepted_ = False  # Remote Control's consent accepted, where it was asked
 
     def start(self):
         """Run Claude Code with the session, in the background; its url is read off its screen as it comes."""
-        args = self.session.handoff_args(f"hyp · {self.session.title()}")
+        carry_over(self.session.id)
+        # Handed off before -- here, or under another login -- it would reconnect to that claude.ai session, which shows
+        # the phone only what came after it began: a fresh copy has none, and so begins with the whole conversation.
+        self.session.id = fresh_copy(self.session.id) or self.session.id
+        args = self.session.handoff_args()
         self.started = time.time()
         pid, fd = pty.fork()
         if pid == 0:  # the child: Claude Code, where the session runs
@@ -406,9 +429,27 @@ class Handoff:
                 time.sleep(0.1)
         return False
 
+    def _type_(self, text):
+        """Type *text* at Claude Code's prompt, and Enter."""
+        try:
+            os.write(self.fd, text.encode())
+            time.sleep(0.3)
+            os.write(self.fd, b"\r")
+        except OSError:
+            pass
+
     def _read_(self):
-        """Read its screen till it ends: the url as it appears, or what it asks that is not answered here."""
+        """Read its screen till it ends: the url as it appears, or what it asks that is not answered here.
+
+        At its prompt, /remote-control is typed in, and Remote Control's
+        consent, where it is asked, accepted.
+        """
         while self.pid is not None:
+            if self.url is None and time.time() - self.started > self.CONNECT_S:
+                tail = " ".join(self._screen_.split())[-160:]
+                self.stop()
+                self.problem = f"Remote Control did not connect in {self.CONNECT_S} s{': ' + tail if tail else ''}"
+                return
             try:
                 ready, _, _ = select.select([self.fd], [], [], 0.5)
                 chunk = os.read(self.fd, 65536) if ready else b""
@@ -416,27 +457,160 @@ class Handoff:
                 break
             if ready and not chunk:
                 break
-            if not chunk:
-                continue
+            if chunk:
+                self._said_ = time.time()
             self._screen_ = (self._screen_ + _plain_(chunk.decode("utf-8", "replace")))[-self.SCREEN_CHARS:]
             if self.url is None and (m := SESSION_URL.search(self._screen_)):
                 self.url = m[0]
             squashed = re.sub(r"\s+", "", self._screen_).lower()
+            if self.url is None and "apiusagebilling" in squashed:
+                self.stop()
+                self.problem = ("Claude Code is logged in for API usage billing, not a claude.ai plan, and Remote Control "
+                                f"needs one: {login_hint()}, with a claude.ai account")
+                return
             for asked, said in FIRST_RUN.items():
                 if self.url is None and asked in squashed:
                     self.stop()  # stopped first: a problem said is one with nothing left running
                     self.problem = f"{said}: run `claude --remote-control` once in a terminal, in {self.session._cwd_()}, and answer it"
                     return
+            settled = time.time() - self.started > self.PROMPT_S and time.time() - self._said_ > self.QUIET_S
+            if self.url is None and not self._typed_ and "❯" in self._screen_ and settled:
+                # Typed in, not passed as --remote-control: so it carries the conversation, history and all, to the phone.
+                self._type_(f"/remote-control {self.name}")
+                self._typed_ = True
+            if self.url is None and self._typed_ and not self._accepted_ and CONSENT in squashed:
+                self._type_("")  # its first choice, Enable Remote Control: what hyp was asked to do
+                self._accepted_ = True
         if self.url is None and self.problem is None:
             tail = " ".join(self._screen_.split())[-200:]
             self.problem = f"Claude Code ended before it connected{': ' + tail if tail else ''}"
 
 
-def conversation_path(session_id):
-    """Where Claude Code keeps the conversation *session_id*: `<config>/projects/<directory>/<id>.jsonl`; None if nowhere."""
-    config = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude")
-    found = glob.glob(os.path.join(config, "projects", "*", f"{session_id}.jsonl"))
+def config_dir():
+    """Where Claude Code keeps its login and its conversations, for what hyp runs: `$CLAUDE_CONFIG_DIR`, else its own default."""
+    return os.environ.get("CLAUDE_CONFIG_DIR") or DEFAULT_CONFIG
+
+
+def conversation_path(session_id, config=None):
+    """Where Claude Code keeps the conversation *session_id*, in *config* or `config_dir`: `projects/<directory>/<id>.jsonl`; None if nowhere."""
+    found = glob.glob(os.path.join(config or config_dir(), "projects", "*", f"{session_id}.jsonl"))
     return max(found, key=os.path.getmtime) if found else None
+
+
+def login_hint():
+    """How to log in the Claude Code hyp runs, as the window says it: in its own configuration directory, where it has one."""
+    if config_dir() == DEFAULT_CONFIG:
+        return "run `claude auth login` in a terminal"
+    return f"run `hyp --docs --claude-login` -- or `CLAUDE_CONFIG_DIR={config_dir()} claude auth login` -- in a terminal"
+
+
+def fresh_copy(session_id):
+    """The conversation copied as a new one, without its record of any claude.ai session -- the original removed: its id.
+
+    Left out too: what keeps its history from a claude.ai session, written
+    as it was resumed under another login than it began in; and what of it
+    ran under another account's organization is given this one's -- Claude
+    Code shows a claude.ai session only what ran under its own. The user,
+    whose both accounts are, asked for it whole. None, nothing
+    done, where it has neither: never handed off, it gets a claude.ai session
+    with all of it, as it is. In `config_dir`; the
+    original is removed only there, never from Claude Code's own default.
+    """
+    path = conversation_path(session_id)
+    if path is None:
+        return None
+    with open(path, encoding="utf-8") as f:
+        lines = f.readlines()
+    events = [_event_(line) for line in lines]
+    org = organization()
+    foreign = lambda e: org is not None and _org_(e) not in (None, org)
+    if not any(_remote_(e) or foreign(e) for e in events) and not _broken_(events):
+        return None
+    copy = str(uuid.uuid4())
+    # The records left out are links in the chain a conversation is read back by, from its newest record to its first:
+    # what pointed to one points past it, to its parent. Left as they were, the chain broke there, and a resume -- Claude,
+    # and the phone -- had only what came after. Where it already broke, its link is the record before it in the file.
+    skipped = {e["uuid"]: e.get("parentUuid") for e in events if _remote_(e) and e.get("uuid")}
+    kept, previous, out = set(), None, []
+    for line, event in zip(lines, events):
+        if _remote_(event):
+            continue
+        changed = False
+        if event and event.get("parentUuid"):
+            parent = event["parentUuid"]
+            while parent in skipped:
+                parent = skipped[parent]
+            if parent is not None and parent not in kept:
+                parent = previous
+            changed = parent != event["parentUuid"]
+            event["parentUuid"] = parent
+        if foreign(event):  # run under another account's organization: the one it goes on in now, so the phone is shown it
+            event["attachment"]["organizationUuid"] = org
+            changed = True
+        if changed:
+            line = json.dumps(event, ensure_ascii=False) + "\n"
+        if event and event.get("uuid"):
+            kept.add(event["uuid"])
+            if not event.get("isSidechain"):
+                previous = event["uuid"]
+        out.append(line.replace(session_id, copy))
+    with open(os.path.join(os.path.dirname(path), f"{copy}.jsonl"), "w", encoding="utf-8") as f:
+        f.writelines(out)
+    if config_dir() != DEFAULT_CONFIG:
+        os.remove(path)
+        shutil.rmtree(path[: -len(".jsonl")], ignore_errors=True)
+    return copy
+
+
+def carry_over(session_id):
+    """The conversation *session_id* copied into `config_dir`, from Claude Code's default one, where only that has it: whether it was.
+
+    A session begun under the default login and resumed under hyp's own
+    (`--claude-config-dir`) is found there by `--resume` only once its record is.
+    """
+    if config_dir() == DEFAULT_CONFIG or conversation_path(session_id) is not None:
+        return False
+    source = conversation_path(session_id, DEFAULT_CONFIG)
+    if source is None:
+        return False
+    target = os.path.join(config_dir(), "projects", os.path.basename(os.path.dirname(source)))
+    os.makedirs(target, exist_ok=True)
+    shutil.copy2(source, target)
+    return True
+
+
+def organization(command=None):
+    """The organization Claude Code is logged in under, its id, from `claude auth status`; None if it says none."""
+    try:
+        done = subprocess.run([command or claude_command(), "auth", "status", "--json"], capture_output=True, text=True,
+                              timeout=20, cwd=os.path.expanduser("~"))
+    except (OSError, subprocess.TimeoutExpired, Failed):
+        return None
+    status = _event_(done.stdout.strip()) if done.stdout.strip() else None
+    return (status or {}).get("orgId")
+
+
+def _org_(event):
+    """The organization a record of a conversation says it ran under -- a `credential_org` attachment's -- or None."""
+    attachment = (event or {}).get("attachment") if isinstance((event or {}).get("attachment"), dict) else {}
+    return attachment.get("organizationUuid") if attachment.get("type") == "credential_org" else None
+
+
+def _broken_(events):
+    """Whether a conversation's chain -- each record's parent, back to its first -- names a parent it does not have."""
+    known = {e["uuid"] for e in events if e and e.get("uuid")}
+    return any(e and e.get("parentUuid") and e["parentUuid"] not in known for e in events)
+
+
+def _remote_(event):
+    """Whether a record of a conversation is of its claude.ai session -- what a resume reconnects to -- or keeps its history
+    from one: `history-suppression`, written as it is restored under another account than it began in, which the user,
+    whose both accounts are, asked to have shown all the same."""
+    if not event:
+        return False
+    attachment = event.get("attachment") if isinstance(event.get("attachment"), dict) else {}
+    return (event.get("type") in ("bridge-session", "history-suppression") or event.get("subtype") == "bridge_status"
+            or attachment.get("type") == "remote_session_change")
 
 
 def _at_(event):
@@ -485,7 +659,7 @@ def account(command=None, timeout=20):
         return None
     status = _event_(done.stdout.strip()) if done.stdout.strip() else None
     if not status or not status.get("loggedIn"):
-        return "not logged in: run `claude` once in a terminal and log in" if status else None
+        return f"not logged in: {login_hint()}" if status else None
     plan = status.get("subscriptionType")
     return " · ".join(str(p) for p in (status.get("email"), status.get("orgName"), plan and f"{plan} plan") if p) or None
 
@@ -518,7 +692,7 @@ def explain(said):
     said = str(said).strip()
     low = said.lower()
     if "not logged in" in low or "/login" in low or "authentication" in low:
-        return "Claude Code is not logged in: run `claude` once in a terminal and log in, then send again"
+        return f"Claude Code is not logged in: {login_hint()}, then send again"
     if "no conversation found" in low:
         return "Claude Code has no record of this session here: it keeps them per machine and directory"
     return said.splitlines()[-1] if said else "Claude Code failed, saying nothing"
@@ -536,7 +710,7 @@ class ClaudeWindow(EditableTitle, DocWindow):
     session's usage, and what is left of the plan's quota; at the right of
     the box, the model, which a click switches, from the next turn on.
 
-    **phone**, at the title row's right, hands the session off --
+    **remote**, at the title row's right, hands the session off --
     *on_hand_off(window)*, for its owner to start a `Handoff` -- and while it
     is, its QR code covers the transcript, to open it on a phone, nothing is
     sent from the box, and the button, **take back**, brings it back --
@@ -551,7 +725,9 @@ class ClaudeWindow(EditableTitle, DocWindow):
         self.session, self.on_send, self.on_rename = session, on_send, on_rename
         self.on_hand_off, self.on_take_back = on_hand_off, on_take_back
         self.handoff = None  # the Handoff, while the session is elsewhere
-        self.phone_button = pygame.Rect(0, 0, 0, 0)
+        self.handoff_lines = []  # what its panel says beneath the QR code, as last drawn
+        self._shown_ = (None, None)  # the handoff's (url, problem), as its panel last drew them
+        self.remote_button = pygame.Rect(0, 0, 0, 0)
         self.edit = AreaEdit()  # what is typed in the box
         self._box_selecting_ = False  # the mouse pressed in the box, and not yet let go: a drag selects
         self._init_title_()
@@ -611,8 +787,11 @@ class ClaudeWindow(EditableTitle, DocWindow):
         self.cancelled = True
 
     def animating(self):
-        waiting = self.handoff is not None and self.handoff.url is None and self.handoff.problem is None
-        return self.busy() or self.doc.pending() or waiting
+        # A handoff's url, or why it failed, comes on a thread of its own: drawn again till what is shown is what it says --
+        # else the QR code waited, drawn only at the next event, a mouse moved.
+        h = self.handoff
+        unshown = h is not None and (h.url is None and h.problem is None or (h.url, h.problem) != self._shown_)
+        return self.busy() or self.doc.pending() or unshown
 
     def handle(self, ev):
         """Returns "close" or None."""
@@ -622,7 +801,7 @@ class ClaudeWindow(EditableTitle, DocWindow):
             if not self.busy():
                 self.session.switch()
             return None
-        if ev.type == pygame.MOUSEBUTTONDOWN and ev.button == 1 and self.phone_button.collidepoint(ev.pos):
+        if ev.type == pygame.MOUSEBUTTONDOWN and ev.button == 1 and self.remote_button.collidepoint(ev.pos):
             self.keep_title()
             if self.handoff is not None and self.on_take_back is not None:
                 self.on_take_back(self)
@@ -683,17 +862,19 @@ class ClaudeWindow(EditableTitle, DocWindow):
             hint = "Enter: send · Shift+Enter: new line · click the title: rename · Esc: close and save"
         box_h = 2 * pad + lh * shown + small.get_linesize() + 4
         self.title = "" if self.naming is not None else f"Claude · {self.session.title()}"  # being edited: drawn below
-        phone = small.render("take back" if self.handoff is not None else "phone", True, TEXT)
-        self.header_reserve = phone.get_width() + 22
-        self.sub = "\n".join([f"{posixpath.basename(self.session.md_url)} · {self.account or 'account: reading …'}",
+        remote = small.render("take back" if self.handoff is not None else "remote", True, TEXT)
+        self.header_reserve = remote.get_width() + 22
+        # The account first: what the session runs on, and where a session handed off goes.
+        account = f"Claude Code as {self.account}" if self.account else "Claude Code's account: reading …"
+        self.sub = "\n".join([f"{account} · {posixpath.basename(self.session.md_url)}",
                               f"{self.session.usage_line()} · {self.quota_line()}"])
         super().draw(surf, pygame.Rect(rect.x, rect.y, rect.width, rect.height - box_h), font, small)
         self._draw_title_(surf, font, small)
         zoom_w = small.size(f"{self.zoom:.0%}")[0]
-        self.phone_button = phone.get_rect(topright=(self.close.x - zoom_w - 22, self.rect.y + 12)).inflate(10, 4)
-        hot = self.phone_button.collidepoint(pygame.mouse.get_pos()) and (self.handoff is not None or not self.busy())
-        pygame.draw.rect(surf, (52, 60, 76) if hot or self.handoff else (36, 42, 54), self.phone_button, border_radius=4)
-        surf.blit(phone, phone.get_rect(center=self.phone_button.center))
+        self.remote_button = remote.get_rect(topright=(self.close.x - zoom_w - 22, self.rect.y + 12)).inflate(10, 4)
+        hot = self.remote_button.collidepoint(pygame.mouse.get_pos()) and (self.handoff is not None or not self.busy())
+        pygame.draw.rect(surf, (52, 60, 76) if hot or self.handoff else (36, 42, 54), self.remote_button, border_radius=4)
+        surf.blit(remote, remote.get_rect(center=self.remote_button.center))
         if self.handoff is not None:
             self._draw_handoff_(surf, font, small)
         self.rect = rect  # the box's too: a click on it is the window's, not the disk's
@@ -714,8 +895,8 @@ class ClaudeWindow(EditableTitle, DocWindow):
     def _draw_handoff_(self, surf, font, small):
         """Over the transcript, while the session is elsewhere: its QR code and url, or why it is not there."""
         h, b = self.handoff, self.body
+        self._shown_ = (h.url, h.problem)
         pygame.draw.rect(surf, (24, 28, 36), b)
-        lines = []
         qr = h.qr()
         if qr is not None:
             n = len(qr)
@@ -728,10 +909,14 @@ class ClaudeWindow(EditableTitle, DocWindow):
                     if dark:
                         pygame.draw.rect(surf, (0, 0, 0), (x0 + c * cell, y0 + r * cell, cell, cell))
             top = y0 + side + 10
-            lines = [(font, h.url, TEXT), (small, "scan with the phone: the Claude app, or claude.ai/code -- the session goes on there", DIM)]
+            # Whose claude.ai it is on: a phone signed into another account cannot open it.
+            whose = (self.account or "").split(" · ")[0] or "the account Claude Code is logged in as"
+            lines = [(font, h.url, TEXT), (small, "scan with the phone: the Claude app, or claude.ai/code -- the session goes on there", DIM),
+                     (small, f"on {whose}'s claude.ai: sign the phone into it, or switch Claude Code with `claude auth login`", DIM)]
         else:
             top = b.y + 20
             lines = [(small, h.problem, (240, 120, 110))] if h.problem else [(font, "handing off: connecting to Remote Control …", DIM)]
+        self.handoff_lines = [text for _, text, _ in lines]  # as drawn
         for f, text, color in lines:
             img = f.render(fit(f, text, b.width - 20), True, color)
             surf.blit(img, img.get_rect(midtop=(b.centerx, top)))

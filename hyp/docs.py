@@ -431,8 +431,10 @@ class HypDocs(Hyp):
         self.controls = []  # a Claude session is opened by a right click: on empty disk, or on a document
         self.claude_account = None  # who Claude Code runs as, as last read: when a session's window opens, and after each turn
         self.handoffs = {}  # session id -> its Handoff, while a session closed here goes on on the phone
-        # A session's window closed, the session handed off to the phone; reopened here, taken back.
-        self.settings = {**self.settings, "hand off on close": True}
+        # Every session not open here is on remote -- handed off as hyp starts, and as its window closes -- and one
+        # opened here is taken back.
+        self.settings = {**self.settings, "sessions on remote": True}
+        self._remoted_ = False  # the sessions put on remote as hyp started: once
 
     def __click_point__(self, i, now):
         """Left click on a document: open it in the center; on a saved Claude session, the session, to go on with."""
@@ -624,7 +626,12 @@ class HypDocs(Hyp):
         self._file_(window.session)  # embedded, in the background
         window.note = None
         window.handoff = claude.Handoff(window.session)
+        before = window.session.id
         window.handoff.start()
+        if window.session.id != before:
+            window.session.save()  # a fresh copy of it handed off: its id, the copy's, in the markdown
+        # Read again as it goes: whose claude.ai it goes to, said on its panel, is who Claude Code is logged in as now.
+        self.run_async(claude.account, lambda said: self._account_(window, said))
 
     def _take_back_(self, window, then=None):
         """Bring *window*'s session back from the phone: Claude Code there ended, the turns made there added, and filed."""
@@ -644,6 +651,48 @@ class HypDocs(Hyp):
                 then()
 
         self.run_async(back, done)
+
+    def __snapshot_arrived__(self):
+        """The first time the points are in: every Claude session among them put on remote, but one open here."""
+        if self._remoted_ or not self.settings.get("sessions on remote") or self.snap is None:
+            return
+        self._remoted_ = True
+        urls = [p["path"] for p in self.snap.points if p.get("kind") == claude.KIND and p.get("path")]
+        root, subdir = self.root(self.args), self.claude_dir(self.args)
+
+        def open_here(session):
+            return any(isinstance(w, claude.ClaudeWindow) and w.session.md_url == session.md_url for w in self.windows())
+
+        def job():
+            handed = []
+            for url in urls:  # one at a time: each is a Claude Code started, and its conversation copied where it must be
+                try:
+                    session = claude.Session.load(url, root, subdir)
+                except (OSError, ValueError):
+                    continue
+                if open_here(session) or session.id in self.handoffs:
+                    continue
+                claude.carry_over(session.id)
+                if claude.conversation_path(session.id) is None:
+                    continue  # no record of it to resume: it stays here
+                before = session.id
+                handoff = claude.Handoff(session)
+                handoff.start()
+                if session.id != before:
+                    session.save()  # a fresh copy of it gone: its id in the markdown, for when it is taken back
+                handed.append(handoff)
+            return handed
+
+        def done(handed):
+            for handoff in handed:
+                if open_here(handoff.session):  # opened here meanwhile: it stays here
+                    handoff.stop()
+                else:
+                    self.handoffs[handoff.session.id] = handoff
+            n = len(self.handoffs)
+            self.status = f"on remote: {n} Claude session{'s' * (n != 1)} -- open one here to take it back"
+
+        self.run_async(job, done)
 
     def _reclaim_(self, window):
         """A session reopened here: taken back from the phone, if it is there; else what was said elsewhere since it was saved, added."""
@@ -700,7 +749,7 @@ class HypDocs(Hyp):
         if isinstance(window, notes.NoteWindow) and window.dirty():
             self._file_(window.note)  # what is not saved, saved as it closes
         if isinstance(window, claude.ClaudeWindow):
-            handing = window.handoff is None and self.settings.get("hand off on close") and window.session.resumable \
+            handing = window.handoff is None and self.settings.get("sessions on remote") and window.session.resumable \
                 and not window.busy()
             window.close_input()
             if handing:

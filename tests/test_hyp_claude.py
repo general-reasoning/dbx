@@ -20,18 +20,36 @@ from hyp import claude, docs, docview
 # FAKE_REPLY (words streamed), or FAKE_FAIL's message as a failed result, or FAKE_STDERR on stderr with no result.
 FAKE = r'''#!{python}
 import json, os, sys
+if sys.argv[1:3] == ["auth", "login"]:  # logged, as a run is, with the login's directory: what hyp ran it in
+    with open(os.environ["FAKE_LOG"], "a") as f:
+        f.write(json.dumps({{"argv": sys.argv[1:], "cwd": os.getcwd(), "config": os.environ.get("CLAUDE_CONFIG_DIR")}}) + "\n")
+    sys.exit(0)
 if sys.argv[1:3] == ["auth", "status"]:  # FAKE_ACCOUNT, as `claude auth status --json` says it; read before stdin, which it never gets
     print(os.environ.get("FAKE_ACCOUNT", json.dumps({{"loggedIn": True, "email": "me@example.com", "orgName": "Example Org",
-                                                      "subscriptionType": "team"}})))
+                                                      "orgId": "org-now", "subscriptionType": "team"}})))
     sys.exit(0)
-if "--remote-control" in sys.argv:  # a session handed off: run interactively, its screen read for its url, till stopped
+if "--resume" in sys.argv and "-p" not in sys.argv:  # a session handed off: interactive, /remote-control typed at its prompt
     import time
     from datetime import datetime, timezone
     with open(os.environ["FAKE_LOG"], "a") as f:
         f.write(json.dumps({{"argv": sys.argv[1:], "cwd": os.getcwd(), "stdin": ""}}) + "\n")
+    if os.environ.get("FAKE_SILENT"):
+        print("Claude Code, saying nothing of Remote Control", flush=True)
+        time.sleep(30)
+    if os.environ.get("FAKE_API_BILLING"):
+        print("Claude Code  Opus 5.5 \u00b7 API Usage Billing", flush=True)
+        time.sleep(30)
     if os.environ.get("FAKE_FIRST_RUN"):
         print("Let's get started. Choose the text style that looks best with your terminal", flush=True)
         time.sleep(30)
+    print("Claude Code  resumed\n\u276f ", flush=True)
+    typed = sys.stdin.readline().strip()
+    with open(os.environ["FAKE_LOG"], "a") as f:
+        f.write(json.dumps({{"typed": typed}}) + "\n")
+    if os.environ.get("FAKE_CONSENT"):
+        print("Remote Control  1. Enable Remote Control Opens a secure connection to claude.ai.  2. Never mind", flush=True)
+        with open(os.environ["FAKE_LOG"], "a") as f:
+            f.write(json.dumps({{"consent": sys.stdin.readline().strip() == ""}}) + "\n")
     sid = sys.argv[sys.argv.index("--resume") + 1]
     home = os.path.join(os.environ["CLAUDE_CONFIG_DIR"], "projects", "here")
     os.makedirs(home, exist_ok=True)
@@ -83,7 +101,8 @@ def cli(tmp_path, monkeypatch):
     monkeypatch.setenv("HYP_CLAUDE", str(path))
     monkeypatch.setenv("FAKE_LOG", str(log))
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "claude-config"))  # where the conversations handed off are recorded
-    for v in ("FAKE_REPLY", "FAKE_FAIL", "FAKE_STDERR", "FAKE_TOOL", "FAKE_ACCOUNT", "FAKE_PHONE", "FAKE_FIRST_RUN"):
+    for v in ("FAKE_REPLY", "FAKE_FAIL", "FAKE_STDERR", "FAKE_TOOL", "FAKE_ACCOUNT", "FAKE_PHONE", "FAKE_FIRST_RUN",
+              "FAKE_API_BILLING", "FAKE_SILENT", "FAKE_CONSENT"):
         monkeypatch.delenv(v, raising=False)
     return NS(runs=lambda: [json.loads(ln) for ln in log.read_text().splitlines()] if log.exists() else [])
 
@@ -200,7 +219,7 @@ def app(saved, monkeypatch):
     a = docs.HypDocs(engine=None, worker=Worker(), args=NS(dir=str(tree), claude_dir="sessions"))
     a.run_async = lambda fn, then: then(fn())
     a.refreshed = 0
-    a.settings["hand off on close"] = False  # on, by default: the tests of handing off turn it on
+    a.settings["sessions on remote"] = False  # on, by default: the tests of handing off turn it on
 
     def refresh(progress):
         a.refreshed += 1
@@ -429,7 +448,7 @@ def test_the_account_is_read_as_a_window_opens_and_after_each_turn(app, cli, mon
     app.open_claude()
     window = app.center
     app.draw(0)
-    assert window.sub.split("\n")[0].endswith("me@example.com · Example Org · team plan")
+    assert window.sub.split("\n")[0].startswith("Claude Code as me@example.com · Example Org · team plan · "), "the account first"
     assert "quota: known after a turn" in window.sub.split("\n")[1]
     _type_(window, "Hello")
     app.drain(0)
@@ -453,7 +472,7 @@ def test_an_account_switched_to_is_shown_and_the_quota_said_to_be_the_old_ones_t
     again = app.center
     app.draw(0)
     head, usage = again.sub.split("\n")
-    assert head.endswith("other@example.com · Other · max plan"), "the account switched to"
+    assert head.startswith("Claude Code as other@example.com · Other · max plan"), "the account switched to"
     assert usage.endswith("-- me@example.com's; a turn shows this account's")
     _type_(again, "Again")
     app.drain(0)
@@ -1209,8 +1228,11 @@ def test_a_handoff_runs_the_session_with_remote_control_reads_its_url_and_the_ph
     h.start()
     assert _until_(lambda: h.url is not None), h.problem
     assert h.url == "https://claude.ai/code/session_01FAKEurl" and h.problem is None
-    argv = cli.runs()[-1]["argv"]
-    assert argv[:4] == ["--resume", s.id, "--remote-control", "hyp · Here first"] and "-p" not in argv, "interactive"
+    runs = cli.runs()
+    argv = next(r["argv"] for r in runs if "argv" in r and r["argv"][:2] == ["--resume", s.id] and "-p" not in r["argv"])
+    assert "--remote-control" not in argv, "resumed, interactive: Remote Control asked for at its prompt, not with it"
+    assert "--fork-session" not in argv, "resumed as itself: the phone is given its history"
+    assert {"typed": "/remote-control hyp · Here first"} in runs, "so the phone is given the conversation, history and all"
     qr = h.qr()
     assert len(qr) == len(qr[0]) > 20 and any(any(row) for row in qr)
     h.stop()
@@ -1229,7 +1251,7 @@ def test_what_claude_code_asks_only_once_is_said_not_answered(cli, tree, monkeyp
     assert "run `claude --remote-control` once in a terminal" in h.problem and h.url is None and not h.alive()
 
 
-def test_the_phone_button_saves_hands_off_shows_the_qr_and_take_back_writes_the_phones_turns_into_the_md(app, saved, monkeypatch):
+def test_the_remote_button_saves_hands_off_shows_the_qr_and_take_back_writes_the_phones_turns_into_the_md(app, saved, monkeypatch):
     _, url = saved
     monkeypatch.setenv("FAKE_PHONE", PHONE)
     i = next(k for k, p in enumerate(app.snap.points) if p["kind"] == claude.KIND)
@@ -1239,14 +1261,15 @@ def test_the_phone_button_saves_hands_off_shows_the_qr_and_take_back_writes_the_
     app.drain(0)
     window.session.turns.append(("typed, not yet saved", "nor this"))  # unsaved, as the button is clicked
     app.draw(0)
-    window.handle(pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1, pos=window.phone_button.center))
+    window.handle(pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1, pos=window.remote_button.center))
     assert "typed, not yet saved" in open(url).read(), "saved before it goes"
     assert _until_(lambda: window.handoff.url is not None)
     app.draw(0)  # the QR code over the transcript
+    assert any("on me@example.com's claude.ai" in line for line in window.handoff_lines), "whose account it is on"
     window.handle(pygame.event.Event(pygame.TEXTINPUT, text="not now"))
     _key_(window, pygame.K_RETURN)
     assert "on the phone" in window.note and window.session.turns[-1][0] != "not now"
-    window.handle(pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1, pos=window.phone_button.center))
+    window.handle(pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1, pos=window.remote_button.center))
     assert window.handoff is None and "1 turn from the phone" in window.note
     assert "And on the phone?" in open(url).read() and "Answered there." in open(url).read(), "the .md brought up to date"
 
@@ -1254,7 +1277,7 @@ def test_the_phone_button_saves_hands_off_shows_the_qr_and_take_back_writes_the_
 def test_a_session_closed_goes_to_the_phone_and_reopened_comes_back(app, saved, monkeypatch):
     _, url = saved
     monkeypatch.setenv("FAKE_PHONE", PHONE)
-    app.settings["hand off on close"] = True
+    app.settings["sessions on remote"] = True
     i = next(k for k, p in enumerate(app.snap.points) if p["kind"] == claude.KIND)
     app.__click_point__(i, 0.0)
     window = app.center
@@ -1272,7 +1295,7 @@ def test_a_session_closed_goes_to_the_phone_and_reopened_comes_back(app, saved, 
 
 
 def test_a_session_with_no_turn_is_closed_not_handed_off(app):
-    app.settings["hand off on close"] = True
+    app.settings["sessions on remote"] = True
     app.open_claude()
     app._close_(app.center)
     assert app.handoffs == {}
@@ -1295,3 +1318,212 @@ def test_reopened_what_was_said_elsewhere_since_its_save_comes_in_without_a_hand
     window = app.center
     assert window.session.turns == [("From a terminal, later", "Noted.")], "only what is newer than the save"
     assert "From a terminal, later" in open(url).read()
+
+
+
+def test_a_conversation_begun_under_the_default_login_is_carried_over_to_hyps_own(tmp_path, monkeypatch):
+    default, own = tmp_path / "default", tmp_path / "own"
+    (default / "projects" / "here").mkdir(parents=True)
+    (default / "projects" / "here" / "abc.jsonl").write_text('{"type": "user"}\n')
+    monkeypatch.setattr(claude, "DEFAULT_CONFIG", str(default))
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(own))
+    assert claude.carry_over("abc") and (own / "projects" / "here" / "abc.jsonl").exists()
+    assert not claude.carry_over("abc"), "there already: not again"
+    assert "CLAUDE_CONFIG_DIR=" + str(own) in claude.login_hint()
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(default))
+    assert not claude.carry_over("abc") and claude.login_hint() == "run `claude auth login` in a terminal"
+
+
+
+def test_an_api_billing_login_is_said_to_need_a_claude_ai_one(cli, tree, monkeypatch):
+    monkeypatch.setenv("FAKE_API_BILLING", "1")
+    s = claude.Session(str(tree))
+    s.send("Here first")
+    h = claude.Handoff(s)
+    h.start()
+    assert _until_(lambda: h.problem is not None)
+    assert "API usage billing" in h.problem and "claude auth login" in h.problem and not h.alive()
+
+
+def test_a_handoff_that_never_connects_is_given_up_saying_what_the_screen_said(cli, tree, monkeypatch):
+    monkeypatch.setenv("FAKE_SILENT", "1")
+    monkeypatch.setattr(claude.Handoff, "CONNECT_S", 1)
+    s = claude.Session(str(tree))
+    s.send("Here first")
+    h = claude.Handoff(s)
+    h.start()
+    assert _until_(lambda: h.problem is not None)
+    assert "did not connect in 1 s" in h.problem and "saying nothing of Remote Control" in h.problem and not h.alive()
+
+
+
+def test_claude_login_logs_in_hyps_own_claude_code_with_a_claude_ai_account(cli, tmp_path, monkeypatch, capsys):
+    from hyp import app as app_mod
+
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", "")  # what main sets, put back after
+    monkeypatch.delenv("HYP_CLAUDE_CONFIG_DIR", raising=False)
+    notes = tmp_path / "notes"
+    notes.mkdir()
+    with pytest.raises(SystemExit) as done:
+        app_mod.main(["--docs", "--dir", str(notes), "--claude-login", "me@example.com"])
+    assert done.value.code == 0
+    (login,) = [r for r in cli.runs() if r["argv"][:2] == ["auth", "login"]]
+    assert login["argv"] == ["auth", "login", "--claudeai", "--email", "me@example.com"], "a claude.ai account, never the Console's"
+    assert login["config"] == str(notes / ".claude") and login["cwd"] == os.path.realpath(notes)
+    assert "me@example.com · Example Org · team plan" in capsys.readouterr().out, "the login said, as it now is"
+    with pytest.raises(SystemExit) as done:
+        app_mod.main(["--claude-login"])
+    assert done.value.code == 2, "nothing to log in: no --docs, no --claude-config-dir"
+
+
+
+def test_remote_controls_consent_where_asked_is_accepted_as_what_was_asked_for(cli, tree, monkeypatch):
+    monkeypatch.setenv("FAKE_CONSENT", "1")
+    s = claude.Session(str(tree))
+    s.send("Here first")
+    h = claude.Handoff(s)
+    h.start()
+    assert _until_(lambda: h.url is not None), h.problem
+    assert {"consent": True} in cli.runs() and h.problem is None
+    h.stop()
+
+
+
+
+def test_a_conversation_handed_off_before_goes_as_a_fresh_copy_so_the_phone_has_all_of_it(app, saved, tmp_path):
+    _, url = saved
+    sid = docview.front_matter(open(url).read())[0]["session"]
+    home = tmp_path / "claude-config" / "projects" / "here"
+    home.mkdir(parents=True, exist_ok=True)
+    old = home / f"{sid}.jsonl"
+    old.write_text("\n".join(json.dumps(e) for e in [
+        {"type": "user", "sessionId": sid, "message": {"role": "user", "content": "What is alpha?"}},
+        {"type": "bridge-session", "sessionId": sid, "bridgeSessionId": "cse_01OLD"},
+        {"type": "system", "subtype": "bridge_status", "sessionId": sid, "url": "https://claude.ai/code/session_01OLD"},
+        {"type": "history-suppression", "sessionId": sid, "cause": "restored_owner_mismatch"},
+    ]) + "\n")
+    i = next(k for k, p in enumerate(app.snap.points) if p["kind"] == claude.KIND)
+    app.__click_point__(i, 0.0)
+    window = app.center
+    app.draw(0)
+    window.handle(pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1, pos=window.remote_button.center))
+    copy = window.session.id
+    assert copy != sid and not old.exists(), "a fresh copy, the old one gone: one copy still"
+    text = (home / f"{copy}.jsonl").read_text()
+    assert "What is alpha?" in text and "01OLD" not in text and sid not in text, "all of it, its own, no claude.ai session"
+    assert "history-suppression" not in text, "its history not kept from the phone"
+    assert docview.front_matter(open(url).read())[0]["session"] == copy, "the markdown follows it"
+    assert _until_(lambda: window.handoff.url is not None)
+    window.handle(pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1, pos=window.remote_button.center))
+
+
+def test_a_conversation_never_handed_off_goes_as_it_is(tmp_path, monkeypatch):
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+    (tmp_path / "projects" / "here").mkdir(parents=True)
+    (tmp_path / "projects" / "here" / "abc.jsonl").write_text(json.dumps({"type": "user", "sessionId": "abc"}) + "\n")
+    assert claude.fresh_copy("abc") is None and (tmp_path / "projects" / "here" / "abc.jsonl").exists()
+
+
+
+def test_a_handoffs_qr_code_is_drawn_as_its_url_comes_not_at_the_next_event(app):
+    app.open_claude()
+    window = app.center
+    window.handoff = NS(url=None, problem=None, qr=lambda: None)
+    app.draw(0)
+    assert window.animating(), "waiting: drawn again"
+    window.handoff.url = "https://claude.ai/code/session_01X"  # come on its thread, between frames
+    window.handoff.qr = lambda: [[1, 0], [0, 1]]
+    assert window.animating(), "come, and not yet shown: drawn again, with no event to ask for it"
+    app.draw(0)
+    assert not window.animating(), "shown: nothing more to draw"
+
+
+
+def test_a_conversation_run_under_another_organization_goes_as_a_copy_under_this_one(cli, tmp_path, monkeypatch):
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+    home = tmp_path / "projects" / "here"
+    home.mkdir(parents=True)
+    rows = [{"type": "user", "uuid": "u1", "sessionId": "abc", "message": {"role": "user", "content": "Begun at work"}},
+            {"type": "attachment", "uuid": "a1", "parentUuid": "u1", "sessionId": "abc",
+             "attachment": {"type": "credential_org", "organizationUuid": "org-before"}},
+            {"type": "assistant", "uuid": "r1", "parentUuid": "a1", "sessionId": "abc", "message": {"content": [{"type": "text", "text": "ok"}]}}]
+    (home / "abc.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows))
+    copy = claude.fresh_copy("abc")
+    out = [json.loads(line) for line in (home / f"{copy}.jsonl").read_text().splitlines()]
+    assert [r["uuid"] for r in out] == ["u1", "a1", "r1"], "every record kept: none of them the claude.ai session's"
+    assert out[1]["attachment"]["organizationUuid"] == "org-now" and all(r["sessionId"] == copy for r in out)
+    assert claude.fresh_copy(copy) is None, "under this organization already, never handed off: as it is"
+
+
+
+def _chain_(rows):
+    """The uuids read back from the newest record, as Claude Code reads a conversation."""
+    by = {r["uuid"]: r for r in rows if r.get("uuid")}
+    r, out = [r for r in rows if r.get("uuid")][-1], []
+    while r is not None:
+        out.append(r["uuid"])
+        r = by.get(r.get("parentUuid"))
+    return out[::-1]
+
+
+def test_a_copy_keeps_the_conversations_chain_whole_where_records_are_left_out(cli, tmp_path, monkeypatch):
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+    home = tmp_path / "projects" / "here"
+    home.mkdir(parents=True)
+    rows = [{"type": "user", "uuid": "u1", "parentUuid": None, "sessionId": "abc", "message": {"role": "user", "content": "first"}},
+            {"type": "assistant", "uuid": "a1", "parentUuid": "u1", "sessionId": "abc", "message": {"content": []}},
+            {"type": "system", "subtype": "bridge_status", "uuid": "b1", "parentUuid": "a1", "sessionId": "abc", "url": "x"},
+            {"type": "user", "uuid": "u2", "parentUuid": "b1", "sessionId": "abc", "message": {"role": "user", "content": "second"}},
+            {"type": "assistant", "uuid": "a2", "parentUuid": "u2", "sessionId": "abc", "message": {"content": []}}]
+    (home / "abc.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows))
+    copy = claude.fresh_copy("abc")
+    out = [json.loads(line) for line in (home / f"{copy}.jsonl").read_text().splitlines()]
+    assert _chain_(out) == ["u1", "a1", "u2", "a2"], "read back whole: the record left out passed over, not a break"
+
+
+def test_a_conversation_already_broken_is_mended_in_its_copy(cli, tmp_path, monkeypatch):
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+    home = tmp_path / "projects" / "here"
+    home.mkdir(parents=True)
+    rows = [{"type": "user", "uuid": "u1", "parentUuid": None, "sessionId": "abc", "message": {"role": "user", "content": "first"}},
+            {"type": "assistant", "uuid": "a1", "parentUuid": "u1", "sessionId": "abc", "message": {"content": []}},
+            {"type": "user", "uuid": "u2", "parentUuid": "gone", "sessionId": "abc", "message": {"role": "user", "content": "second"}},
+            {"type": "assistant", "uuid": "a2", "parentUuid": "u2", "sessionId": "abc", "message": {"content": []}}]
+    (home / "abc.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows))
+    copy = claude.fresh_copy("abc")
+    assert copy is not None, "broken: copied, to mend it"
+    out = [json.loads(line) for line in (home / f"{copy}.jsonl").read_text().splitlines()]
+    assert _chain_(out) == ["u1", "a1", "u2", "a2"]
+
+
+
+def test_every_session_goes_on_remote_as_hyp_starts_but_one_open_here(app, saved, tmp_path, monkeypatch):
+    tree, url = saved
+    monkeypatch.setenv("FAKE_PHONE", PHONE)
+    sid = docview.front_matter(open(url).read())[0]["session"]
+    home = tmp_path / "claude-config" / "projects" / "here"
+    home.mkdir(parents=True, exist_ok=True)
+    (home / f"{sid}.jsonl").write_text(json.dumps({"type": "user", "uuid": "u1", "sessionId": sid,
+                                                   "message": {"role": "user", "content": "What is alpha?"}}) + "\n")
+    app.settings["sessions on remote"] = True
+    app.__snapshot_arrived__()
+    assert list(app.handoffs) == [sid] and "on remote: 1 Claude session" in app.status
+    handoff = app.handoffs[sid]
+    assert _until_(lambda: handoff.url is not None)
+    app.__snapshot_arrived__()
+    assert list(app.handoffs) == [sid], "once, as hyp starts: not at every snapshot"
+    i = next(k for k, p in enumerate(app.snap.points) if p["kind"] == claude.KIND)
+    app.__click_point__(i, 0.0)
+    window = app.center
+    assert app.handoffs == {} and not handoff.alive(), "opened here: taken back"
+    assert window.session.turns[-1] == ("And on the phone?", "Answered there.")
+    app._close_(window)
+    assert list(app.handoffs) == [window.session.id], "closed: on remote again"
+    for h in app.handoffs.values():
+        h.stop()
+
+
+def test_sessions_stay_here_with_the_setting_off(app):
+    app.settings["sessions on remote"] = False
+    app.__snapshot_arrived__()
+    assert app.handoffs == {}

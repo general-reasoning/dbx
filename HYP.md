@@ -343,9 +343,40 @@ in.
 **The model, and the usage.** At the right of the box, `model: default ▾`:
 a click switches it -- Claude Code's default, `opus`, `sonnet`, `haiku` --
 from the next turn on, which resumes the session on that model
-(`--model`). Beneath the window's title, two lines. First, the session's
-file and the account Claude Code runs as -- email, organization and plan,
-from `claude auth status`, read once in the background. Then the session's
+(`--model`). Beneath the window's title, two lines. First, the account
+Claude Code runs as -- `Claude Code as <email> · <organization> · <plan>`,
+from `claude auth status`, read in the background as the window opens, after
+each turn and as the session is handed off -- then the session's file. That
+is the account the session runs on, and the one whose claude.ai a session
+handed off goes to.
+
+**Its own login.** The Claude Code hyp runs has a configuration directory --
+its login, and its record of every conversation -- of its own:
+`--claude-config-dir DIR`, else `$HYP_CLAUDE_CONFIG_DIR`, else, with `--docs` and a
+local `--dir`, that directory's `.claude` (made if missing), else Claude Code's
+own `~/.claude`. hyp runs every Claude Code with `CLAUDE_CONFIG_DIR` set to it,
+and nothing else on the machine is changed: the directory's sessions, and the
+phone they are handed to, can be on another account than Claude Code
+elsewhere. Log in there once, before the first session:
+
+```bash
+hyp --docs --claude-login                  # in the directory scanned, or with --dir
+hyp --docs --claude-login me@example.com   # the email filled in on the login page
+```
+
+It runs `claude auth login --claudeai` with that `CLAUDE_CONFIG_DIR` -- a
+claude.ai account, never the Console's API billing, which has no Remote
+Control -- shows the login it made, then offers to answer Claude Code's
+one-time questions for remote handoffs -- a text style, trusting the
+directory, accepting Remote Control -- in a session it opens (answer them,
+then `/exit`), and exits.
+
+`ant auth login` -- the Claude Developer Platform's CLI -- logs in nothing of
+Claude Code's, and Remote Control needs a claude.ai login. A session begun
+under another directory's login is carried over -- its record copied in --
+the first time it is resumed under this one. On macOS the login itself is in
+the Keychain; what the directory holds -- transcripts, history -- travels with
+it, synced where the directory is. Then the session's
 usage: the model the last turn ran on, the tokens in (cached or not) and
 out over every turn, what they would cost at API rates -- a subscription is
 not billed them -- and the quota: what is left of the plan's 5-hour and
@@ -359,27 +390,44 @@ the totals are kept in the front matter (`choice`, `tokens_in`,
 app, or claude.ai/code -- through Claude Code's Remote Control, and comes back.
 hyp runs a turn at a time (`claude -p`), and Remote Control needs a session
 that stays, so a session handed off is resumed interactively --
-`claude --resume <id> --remote-control "hyp · <title>"` -- in a terminal of
-hyp's own that no one sees (`claude.Handoff`); its screen is read for the
-session's url. It is saved to its markdown first, there and then.
+`claude --resume <id>` -- in a terminal of hyp's own that no one sees
+(`claude.Handoff`), and `/remote-control hyp · <title>` typed at its prompt
+once its screen has settled: typed in, not passed as `--remote-control`, which
+shows the phone only what comes after, so that the phone is given the
+conversation whole. (Not `--fork-session`: a fork's claude.ai session showed
+the phone nothing of what came before.) Its screen is
+read for the session's url, and Remote Control's own consent, where it is
+asked, accepted: it is what was asked for. It is saved to its markdown first, there and then. Handed off before -- or
+run under another account's organization -- it goes as a fresh copy of its
+conversation, under a new id: its record of a claude.ai session left out, and
+what keeps its history from one (`history-suppression`; `credential_org`,
+given this account's organization), each link of its chain past what is left
+out mended, so that the phone is given all of it; the original is removed, in
+hyp's own configuration directory only, and the markdown follows the copy.
 
-- **phone**, at the window's title row, hands it off: its QR code covers the
+- **remote**, at the window's title row, hands it off: its QR code covers the
   transcript, to scan, and nothing is sent from the box while it is away.
   **take back** brings it back: Claude Code there is ended, and the turns made
   on the phone -- read from Claude Code's own record of the conversation,
   `~/.claude/projects/<directory>/<id>.jsonl` (`$CLAUDE_CONFIG_DIR` where set)
   -- are added, and the session saved and embedded.
-- **Closing** a session's window hands it off, with the setting **hand off on
-  close** (on by default) and a turn to hand off: it is in the phone's list of
-  sessions as `hyp · <title>`. **Reopening** it takes it back. A session closed
-  goes on only while hyp runs; quit, it goes offline, and reopened later, what
+- **Every session is on remote** but the one open here, with the setting
+  **sessions on remote** (on by default): each with a turn to hand off is
+  handed off as hyp starts, one at a time, and again as its window closes; it
+  is in the phone's list of sessions as `hyp · <title>`. **Opening** one here
+  takes it back. Each on remote is a Claude Code of its own, about 250 MB. A
+  session on remote goes on only while hyp runs; quit, it goes offline, and reopened later, what
   was said anywhere since it was saved -- the phone, a terminal -- comes in all
   the same.
 - Claude Code asks some things once, interactively: a text style, whether to
-  trust the directory, whether to accept Remote Control. Asked in the terminal
-  no one sees, they are not answered: the window says to run
+  trust the directory. Asked in the terminal no one sees, they are not
+  answered: the window says to run
   `claude --remote-control` once, in a terminal, in the directory, and answer
-  them.
+  them. A login for API usage billing -- the Claude Developer Platform's,
+  which Claude Code takes from `ant` where it has none of its own -- has no
+  Remote Control: the window says to log in with a claude.ai account. One
+  that does not connect within 30 s is given up, saying what Claude Code's
+  screen said.
 
 **Titling a session.** The window's title is the session's -- `Claude ·
 <title>`, its first line until it is given one. A click on it edits it, the

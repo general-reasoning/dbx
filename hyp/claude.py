@@ -202,15 +202,18 @@ class Session:
 
     def held(self, k):
         """`(conversation, message)`: where turn *k* of `path` (1-based) ends, in the Claude Code conversation that holds it; None where none here does."""
-        if k > self.start:
-            conversation, n = self.id, k - self.start
-        else:
-            conversation, n = next(((e, k - s) for e, s, u in reversed(self.earlier) if s < k <= u), (None, 0))
-            if conversation is None:
-                return None
+        conversation, start = self.holder(k)
+        if conversation is None:
+            return None
         carry_over(conversation)
-        at = anchor(conversation, n)
+        at = anchor(conversation, k - start)
         return (conversation, at) if at is not None else None
+
+    def holder(self, k):
+        """`(conversation, start)`: the Claude Code conversation holding turn *k* of `path`, and the turns before its own; (None, 0) for none."""
+        if k > self.start:
+            return self.id, self.start
+        return next(((e, s) for e, s, u in reversed(self.earlier) if s < k <= u), (None, 0))
 
     def upstream(self):
         """The turns before its own, `(asked, answered)` each: the first `fork` of its parent's `path`; none for a conversation's first branch."""
@@ -605,7 +608,7 @@ class CloudHandoff:
 
     The cloud can only be given files, not a conversation: so the
     conversation's files -- its own, and its parents' -- are committed and
-    pushed to the GitHub repository --dir's `.hyp-github` names (`_repository_`),
+    pushed to the GitHub repository --dir's `.hyp-github` names (`repository`),
     and a cloud session begun on it -- `claude --cloud` -- told to read them as
     the conversation so far (CLOUD_PROMPT). Its url, read off Claude Code's
     screen, is shown as a QR code, to open it in the Claude app, and kept in
@@ -636,7 +639,39 @@ class CloudHandoff:
     def start(self):
         """Push the conversation's files and begin its cloud session, on a thread of its own: its url, or why not, as it comes."""
         self.started = time.time()
-        threading.Thread(target=self._begin_, daemon=True).start()
+        threading.Thread(target=self.begin, daemon=True).start()
+
+    def begin(self, push=True):
+        """Push the conversation's files -- unless *push* is false, for files pushed already -- and begin its cloud session, here: its url, or why not.
+
+        A conversation with a file of its own has the cloud session's id kept
+        in it; a new branch, which has none till something is said in it, is
+        its owner's to keep.
+        """
+        s = self.session
+        self.started = self.started or time.time()
+        try:
+            top, remote, branch = repository(s.root)
+            files = _conversation_files_(s, top)
+            if push:
+                push_files(s.root, [f for f, _ in files], f"hyp: {s.title()}, to the cloud")
+        except Failed as e:
+            self.problem = str(e)
+            return
+        said = ", then ".join(f"{f} ({how})" for f, how in files)
+        self._spawn_([claude_command(), "--cloud", HYP_MARK + CLOUD_PROMPT.format(files=said)])
+        deadline = time.time() + self.CONNECT_S
+        while self.pid is not None and time.time() < deadline:
+            self._drain_(0.5)
+            if (m := CLOUD_SESSION.search(self._screen_)) is not None:
+                self.stop()  # the cloud session goes on: what began it here is done
+                s.cloud, self.url = m[1], m[0]
+                if s.resumable:
+                    s.save()  # where it went, in its file: a restart of hyp takes it back from there
+                return
+        tail = " ".join(self._screen_.split())[-200:]
+        self.stop()
+        self.problem = f"Claude Code did not begin a cloud session{': ' + tail if tail else ''}"
 
     def alive(self):
         return self.session.cloud is not None
@@ -687,7 +722,7 @@ class CloudHandoff:
         Raises `Failed`, saying why, where it cannot be brought back.
         """
         s = self.session
-        top, remote, branch = _repository_(s.root)
+        top, remote, branch = repository(s.root)
         began = time.time()
         stashed = bool(_git_(top, "status", "--porcelain"))
         if stashed:
@@ -716,7 +751,14 @@ class CloudHandoff:
         came = exchanges(record) if record is not None else []
         if came:
             before = len(s.path())
-            s.earlier.append((s.id, s.start, before))
+            if s.resumable:
+                s.earlier.append((s.id, s.start, before))
+            else:  # a new branch, made in the cloud: the turns before its own held by the conversation it was to fork
+                holder, start = s.source.holder(before) if s.source is not None else (None, 0)
+                s.earlier = [e for e in s.source.earlier if e[2] <= start] if s.source is not None else []
+                if holder is not None:
+                    s.earlier.append((holder, start, before))
+                s.source = None
             s.id, s.start, s.resumable = posixpath.splitext(os.path.basename(record))[0], before, True
             s.turns += came
             s.model = _model_(record) or s.model
@@ -724,33 +766,6 @@ class CloudHandoff:
         return len(came)
 
     # 4. Helpers ----------------------------------------------------------------
-
-    def _begin_(self):
-        s = self.session
-        try:
-            top, remote, branch = _repository_(s.root)
-            files = _conversation_files_(s, top)
-            _git_(top, "add", "--", *(f for f, _ in files))
-            if _git_(top, "diff", "--cached", "--name-only"):
-                _git_(top, "commit", "-m", f"hyp: {s.title()}, to the cloud", "--", *(f for f, _ in files))
-            _git_(top, "push", remote, branch)
-        except Failed as e:
-            self.problem = str(e)
-            return
-        said = ", then ".join(f"{f} ({how})" for f, how in files)
-        prompt = HYP_MARK + CLOUD_PROMPT.format(files=said)
-        self._spawn_([claude_command(), "--cloud", prompt])
-        deadline = time.time() + self.CONNECT_S
-        while self.pid is not None and time.time() < deadline:
-            self._drain_(0.5)
-            if (m := CLOUD_SESSION.search(self._screen_)) is not None:
-                self.stop()  # the cloud session goes on: what began it here is done
-                s.cloud, self.url = m[1], m[0]
-                s.save()  # where it went, in its file: a restart of hyp takes it back from there
-                return
-        tail = " ".join(self._screen_.split())[-200:]
-        self.stop()
-        self.problem = f"Claude Code did not begin a cloud session{': ' + tail if tail else ''}"
 
     def _teleport_(self):
         """Run `claude --teleport` on the session's cloud session, type TAKE_BACK once it is loaded, then /exit; raises `Failed` where it does not load."""
@@ -829,7 +844,7 @@ def github_repo(root):
     return m[1] if m else None
 
 
-def _repository_(root):
+def repository(root):
     """`(top, remote, branch)` of --dir *root*'s git repository: its top directory, the remote GITHUB_FILE names, the branch checked out.
 
     Raises `Failed`, saying what to do, where there is no such thing.
@@ -881,21 +896,38 @@ def _git_(cwd, *args):
     return done.stdout.strip()
 
 
+def push_files(root, paths, message):
+    """Commit *paths* -- of --dir *root*'s repository, relative to its top -- with *message*, if any changed, and push the branch."""
+    top, remote, branch = repository(root)
+    _git_(top, "add", "--", *paths)
+    if _git_(top, "diff", "--cached", "--name-only", "--", *paths):
+        _git_(top, "commit", "-m", message, "--", *paths)
+    _git_(top, "push", remote, branch)
+
+
 def _conversation_files_(session, top):
-    """The files a conversation's turns are in, oldest first, relative to *top*, each with how many of its turns are the conversation's: `[(path, how)]`."""
+    """The files a conversation's turns are in, oldest first, relative to *top*, each with how many of its turns are the conversation's: `[(path, how)]`.
+
+    A new branch, with no turn of its own yet, has no file: its parent's
+    are the conversation's, up to the turn it goes on from.
+    """
     chain, s = [], session
     while s is not None:
         chain.append(s)
         s = s.above
     chain.reverse()
+    stop = None
+    if not (session.resumable or session.prior or session.turns):
+        chain, stop = chain[:-1], session.fork
     out = []
     for n, s in enumerate(chain):
-        rel = os.path.relpath(s.md_url, top)
-        if n + 1 < len(chain):
-            keep = chain[n + 1].fork - s.fork  # its own turns, up to where the next goes on from it
-            out.append((rel, f"its first {keep} turn{'s' * (keep != 1)}"))
+        upto = chain[n + 1].fork if n + 1 < len(chain) else stop
+        if upto is None:
+            how = "all of its turns"
         else:
-            out.append((rel, "all of its turns"))
+            keep = upto - s.fork  # its own turns, up to where the next goes on from it
+            how = f"its first {keep} turn{'s' * (keep != 1)}"
+        out.append((os.path.relpath(s.md_url, top), how))
     return out
 
 

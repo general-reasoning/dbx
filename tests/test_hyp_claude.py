@@ -1994,3 +1994,40 @@ def test_a_message_queued_while_claude_answered_is_a_turn_of_its_own(cli):
         f.writelines(json.dumps(e) + "\n" for e in events)
     assert claude.exchanges(path) == [("And cherry?", "Read. Cherry too."), ("And date?", "Date.")]
     assert [claude.anchor("queued", k) for k in (1, 2)] == ["a1", "a2"]
+
+
+def test_all_to_the_cloud_sends_every_turn_a_session_each_and_a_click_takes_a_new_branch_back(app, saved, github, cli, tmp_path, monkeypatch):
+    tree, url = saved
+    s = claude.Session.load(url, str(tree), "sessions")
+    s.send("And beta?")
+    s.save()
+    data = tmp_path / "data"
+    data.mkdir()
+    app.args.data = str(data)
+    app.settings["hand off to the cloud"] = True
+    app.snap = _snap_of_(tree)
+    app.all_to_cloud()
+    _settle_(app)
+    told = [r["cloud"] for r in cli.runs() if "cloud" in r]
+    name = os.path.relpath(url, tree)
+    assert sorted(t.split(": ", 1)[1].split(". Read")[0] for t in told) == sorted([
+        f"{name} (its first 1 turn)", f"{name} (all of its turns)"]), "a session each: up to its turn"
+    assert docview.front_matter(open(url).read())[0]["cloud"] == "session_01FAKEcloud", "the last turn: the branch itself"
+    assert json.loads((data / "clouds.json").read_text()) == {f"{url}#0": "session_01FAKEcloud"}, "the first: a new branch after it"
+    assert "hyp: every conversation, to the cloud" in github.log(), "the conversations pushed once, first"
+    app.snap = _snap_of_(tree)
+    assert "a branch after it in the cloud" in app.__point_tooltip__(_turn_(app, url, 0))
+    assert "in the cloud: open it here" in app.__point_tooltip__(_turn_(app, url, 1))
+    app.all_to_cloud()
+    assert app.status == "every turn is in the cloud already"
+
+    monkeypatch.setenv("FAKE_CLOUD", json.dumps([["What of gamma?", "Gamma, from the phone."]]))
+    app.__click_point__(_turn_(app, url, 0), 0.0)
+    window = app._claude_window_()
+    assert window.note == "1 turn from the cloud" and window.session.resumable and window.session.fork == 1
+    branch = window.session.md_url
+    fields = docview.front_matter(open(branch).read())[0]
+    assert fields["parent"] == os.path.relpath(url, os.path.dirname(branch)) and fields["fork"] == 1 and "cloud" not in fields
+    assert window.session.path() == [("What is alpha?", "An answer."), ("What of gamma?", "Gamma, from the phone.")]
+    assert window.session.earlier == [(s.id, 0, 1)], "its first turn held by the conversation it went on from"
+    assert json.loads((data / "clouds.json").read_text()) == {}, "back: no turn's any more"

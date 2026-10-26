@@ -443,6 +443,20 @@ session of its own; they stay on claude.ai, to archive there. With the
 setting off, **remote** hands the conversation to the phone by Remote
 Control, below.
 
+**all to the cloud**, in the top bar, hands off every turn on the disk at
+once, a cloud session each, so that any turn can be gone on from on the
+phone: a branch's last turn, the branch itself, its cloud session kept in
+its file as **remote** keeps it; any other, a new branch going on after it,
+which has no file till something is said in it -- its cloud session kept in
+the corpus's `clouds.json`, the cloud told to read the conversation up to
+that turn. The conversations' files are pushed once, first, and the
+sessions begun one at a time, as an engine job (its card, its bar, Esc to
+stop it); turns in the cloud already, or open here, are left as they are. A
+turn's tooltip says when it, or a branch after it, is in the cloud. Opened
+here -- a click on it -- it is taken back, and a new branch with turns made
+in the cloud is saved then, as a branch of the conversation it went on
+from.
+
 **Handing a session to a phone.** A session goes on on a phone -- the Claude
 app, or claude.ai/code -- through Claude Code's Remote Control, and comes back.
 hyp runs a turn at a time (`claude -p`), and Remote Control needs a session

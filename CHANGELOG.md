@@ -18,7 +18,10 @@ All notable changes to this project will be documented in this file.
   `earlier`), so a branch forks the right one. hyp's own messages begin
   `[hyp]` and are no turns; a message queued while Claude answered is one.
   The setting **hand off to the cloud** off, handoffs go by Remote Control,
-  as before.
+  as before. **all to the cloud** hands off every turn on the disk, a cloud
+  session each: a branch's last turn, the branch; any other, a new branch
+  after it, kept in the corpus's `clouds.json` and saved once taken back
+  with turns made there.
 - **hyp --docs: a conversation, turn by turn, a tree.** Every turn of a
   Claude conversation is a point of its own, keyed `<file>#<n>`, embedded by
   what was asked and answered in it alone, labeled by a few words Claude

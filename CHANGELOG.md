@@ -5,43 +5,30 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Added
-- **hyp --docs: a conversation branches.** A click on a turn's heading in
-  a session's window opens a new branch going on after it, the turns after
-  it left where they are; its first turn forks Claude Code's conversation
+- **hyp --docs: a conversation, turn by turn, a tree.** Every turn of a
+  Claude conversation is a point of its own, keyed `<file>#<n>`, embedded by
+  what was asked and answered in it alone, labeled by a few words Claude
+  names its question by -- asked in the background, 40 at a time, and kept
+  in the corpus's `words.json` -- and joined by a line to the turn before
+  it. A click on a turn opens the conversation up to it, the box beneath:
+  sent from there, it goes on after it, a new branch unless it is its
+  branch's last. A branch's first turn forks Claude Code's conversation
   there (`--resume-session-at`, `--fork-session`). A branch is a markdown of
   its own turns only, naming its parent's file and the turns it keeps
   (`parent`, `fork`), its earlier turns assembled from its parents as it is
-  opened (`Session.branch`, `Session.path`). On the disk a branch is one
-  point, embedded by its own turns, joined to its parent's by a faint
-  geodesic (`__point_link__`), labeled by its parent's label squeezed to a
-  line and, beneath, its own. A point's `link` -- another's key -- draws the
+  opened (`Session.branch`, `Session.path`), and its first turn joined to
+  the turn it goes on from. A point's `link` -- another's key -- draws the
   two together in the layout, not the embeddings: their distance shortened
   (`layout.LINK_PULL`), each in the other's neighbor graph, and the linked
-  point kept within reach of the other (`layout.LINK_REACH`).
+  point kept within reach of the other (`layout.LINK_REACH`); a new point
+  slides in from the one it is linked to, and points that come and go no
+  longer reset the view. The points a source gives are laid out from where
+  they were, not afresh, when it gives fewer than are stored.
 - **hyp --docs: web access.** A setting, off by default and kept with the
   corpus (its `settings.json`), that gives a session's Claude `WebSearch`
   and `WebFetch` besides its read-only tools, from the next turn on and in
   handoffs to the phone; the system prompt and the window say so. Settings
   toggled reach a specialization through `__setting_changed__`.
-- **hyp --docs: a session's turns, as points of their own.** Cmd+right
-  click on a Claude session's point rings its turns about it, each labeled
-  `Claude · <title> · <words>`, the words Claude's, naming its question --
-  asked of every turn at once, and kept in the corpus's `words.json`. A turn
-  is embedded by the session's title and what was said in it, averaged with
-  the session's embedding, and placed about the session by classical scaling
-  of what the turns say, carried to wherever the session lies: the map does
-  not move (`Engine.shard`, `layout.about`). Turns are embedded as an
-  engine job, with the loading card's bar in the middle of the window, and
-  Esc to stop it. A click on a turn opens the
-  session at it; a right click on empty disk folds the turns back. A
-  snapshot now slides its points from where they were by key, so points that
-  come and go no longer reset the view.
-- **hyp --docs: every session shattered into its turns.** Cmd+right click
-  on empty disk replaces every session's point with its turns, each embedded
-  by what was said in it alone and laid out by UMAP among the documents,
-  seeded with where everything was (`Engine.shatter`); again, the sessions
-  are whole. Claude names their questions 40 at a time. The status line's
-  controls now give way to the status rather than run into it.
 - **hyp: the Claude Code it runs has a login of its own.** `--claude-config-dir
   DIR`, else `$HYP_CLAUDE_CONFIG_DIR`, else `--docs`'s `<dir>/.claude`, is the
   `CLAUDE_CONFIG_DIR` of every Claude Code hyp runs, so a directory's sessions

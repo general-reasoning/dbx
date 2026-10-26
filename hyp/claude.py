@@ -856,21 +856,17 @@ class ClaudeWindow(EditableTitle, DocWindow):
     *on_take_back(window)*, the turns made there added.
 
     The transcript is the conversation's whole `path`, a branch's upstream
-    turns too, a line marking where its own begin. Each turn's headings
-    are a click away from going on after it: *on_branch(window, k)*, turn
-    *k*, for its owner to open the branch (`Session.branch`).
+    turns too, a line marking where its own begin: a branch is opened from
+    a turn's point on the disk, by its owner (`Session.branch`).
     """
 
     INPUT_LINES = 8  # the box grows to this many lines, then scrolls
     TITLE_PREFIX = "Claude · "
-    BRANCH_HINT = "click: go on from here"
-    HOVER = (90, 120, 170, 60)  # a turn's headings, under the mouse: RGBA
 
-    def __init__(self, session, on_send, on_rename=lambda window: None, on_hand_off=None, on_take_back=None, on_branch=None):
+    def __init__(self, session, on_send, on_rename=lambda window: None, on_hand_off=None, on_take_back=None):
         super().__init__("Claude", posixpath.basename(session.md_url))
         self.session, self.on_send, self.on_rename = session, on_send, on_rename
-        self.on_hand_off, self.on_take_back, self.on_branch = on_hand_off, on_take_back, on_branch
-        self.turn_blocks = {}  # the transcript's block of each turn's `You` and `Claude` heading -> the turn, 1-based
+        self.on_hand_off, self.on_take_back = on_hand_off, on_take_back
         self.handoff = None  # the Handoff, while the session is elsewhere
         self.handoff_lines = []  # what its panel says beneath the QR code, as last drawn
         self._shown_ = (None, None)  # the handoff's (url, problem), as its panel last drew them
@@ -903,10 +899,6 @@ class ClaudeWindow(EditableTitle, DocWindow):
         self.sending, self.partial, self.note = text, "", None
         self.pinned = None  # the reply followed, not a turn kept in view
         self._render_(follow=True)
-
-    def show_turn(self, n):
-        """Keep turn *n* -- its `## You`, the *n*-th of `turns` -- at the top of the transcript's view, till it is scrolled."""
-        self.pin_heading("You", n)
 
     def delta(self, text):
         if self.partial is not None:
@@ -962,11 +954,6 @@ class ClaudeWindow(EditableTitle, DocWindow):
             return None
         if self._title_event_(ev):  # a click off the title, while edited, keeps it and goes on: into the box, say
             return None
-        if ev.type == pygame.MOUSEBUTTONDOWN and ev.button == 1 and self.on_branch is not None:
-            k = self._turn_at_(ev.pos)
-            if k is not None:
-                self.on_branch(self, k)
-                return None
         if ev.type == pygame.MOUSEBUTTONUP and ev.button == 1:
             self._box_selecting_ = False
         if ev.type == pygame.MOUSEBUTTONDOWN and ev.button == 1 and self.input.collidepoint(ev.pos):
@@ -1018,7 +1005,7 @@ class ClaudeWindow(EditableTitle, DocWindow):
         elif self.session.above is not None and not self.session.own():
             hint = f"Enter: send -- a new branch, after turn {self.session.fork} · Esc: close, leaving no branch"
         else:
-            hint = "Enter: send · Shift+Enter: new line · click a turn: go on from it · click the title: rename · Esc: close"
+            hint = "Enter: send · Shift+Enter: new line · click the title: rename · Esc: close and save"
         box_h = 2 * pad + lh * shown + small.get_linesize() + 4
         self.title = "" if self.naming is not None else f"Claude · {self.session.title()}"  # being edited: drawn below
         remote = small.render("take back" if self.handoff is not None else "remote", True, TEXT)
@@ -1029,7 +1016,6 @@ class ClaudeWindow(EditableTitle, DocWindow):
         self.sub = "\n".join([f"{account}{web} · {posixpath.basename(self.session.md_url)}",
                               f"{self.session.usage_line()} · {self.quota_line()}"])
         super().draw(surf, pygame.Rect(rect.x, rect.y, rect.width, rect.height - box_h), font, small)
-        self._draw_hover_(surf, small)
         self._draw_title_(surf, font, small)
         zoom_w = small.size(f"{self.zoom:.0%}")[0]
         self.remote_button = remote.get_rect(topright=(self.close.x - zoom_w - 22, self.rect.y + 12)).inflate(10, 4)
@@ -1087,15 +1073,6 @@ class ClaudeWindow(EditableTitle, DocWindow):
         at_end = self.sy >= self._size[1] - self.body.height - 4
         self.anchor = self.cursor = None  # laid out again: a selection of the old layout would point anywhere
         self.doc = MarkdownDoc(self._transcript_())
-        path = len(self.session.path())
-        heads = [k for k, b in enumerate(self.doc.blocks)
-                 if b.kind == "heading" and b.level == 2 and "".join(t for t, _ in b.spans).strip() in ("You", "Claude")]
-        self.turn_blocks, turn = {}, 0
-        for k in heads:
-            b = self.doc.blocks[k]
-            turn += "".join(t for t, _ in b.spans).strip() == "You"
-            if 1 <= turn <= path:  # the turn being sent is none yet
-                self.turn_blocks[k] = turn
         if follow or at_end:
             self.sy = 10**9  # clamped to the end at the next draw
 
@@ -1116,35 +1093,6 @@ class ClaudeWindow(EditableTitle, DocWindow):
             lines += ["## You", "", self.sending, "", "## Claude", "", self.partial or "…", ""]
         return "\n".join(lines)
 
-    def _turn_at_(self, pos):
-        """The turn whose `You` or `Claude` heading is at screen *pos* -- the whole row, across the transcript -- or None; not the last, which the box goes on from."""
-        laid = self._laid_
-        if laid is None or not self.body.collidepoint(pos) or self.busy() or self.handoff is not None:
-            return None
-        _, y = self._content_(pos)
-        last = len(self.session.path())
-        for r in laid.runs:
-            k = self.turn_blocks.get(r.block)
-            if k is not None and r.y <= y < r.y + r.h:
-                return k if k < last else None
-        return None
-
-    def _draw_hover_(self, surf, small):
-        """The turn's heading under the mouse, highlighted across the transcript, and what a click on it does."""
-        if self.on_branch is None or self._laid_ is None:
-            return
-        k = self._turn_at_(pygame.mouse.get_pos())
-        if k is None:
-            return
-        rows = [r for r in self._laid_.runs if self.turn_blocks.get(r.block) == k]
-        mouse_y = self._content_(pygame.mouse.get_pos())[1]
-        row = next(r for r in rows if r.y <= mouse_y < r.y + r.h)
-        band = pygame.Rect(self.body.x, self.body.y + row.y - round(self.sy) - 2, self.body.width, row.h + 4).clip(self.body)
-        veil = pygame.Surface(band.size, pygame.SRCALPHA)
-        veil.fill(self.HOVER)
-        surf.blit(veil, band)
-        hint = small.render(f"turn {k} · {self.BRANCH_HINT}", True, TEXT)
-        surf.blit(hint, hint.get_rect(midright=(band.right - 12, band.centery)))
 
 
 def said(body):

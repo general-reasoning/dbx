@@ -1148,8 +1148,8 @@ class Hyp:
     corpus comes from and how it is embedded (`__source__`, `__embedder__`, `__default_data__`,
     `__data_origin__`, `__storage_options__`), what opening a point
     does (`__open_point__`), what clicking one does (`__click_point__`,
-    `__context_point__`, `__cmd_context_point__`), what a right click on empty disk does
-    (`__context_empty__`, `__cmd_context_empty__`, `__submit_text__`, `BOX_HINT`), what a setting toggled does
+    `__context_point__`), what a right click on empty disk does
+    (`__context_empty__`, `__submit_text__`, `BOX_HINT`), what a setting toggled does
     (`__setting_changed__`), and how a point is labeled (`__point_label__`,
     `__point_tag__`, `__point_name__`, `__point_version__`, `__point_datetime__`,
     `__point_tooltip__`), and what it is joined to (`__point_link__`). The hooks are the only methods
@@ -1210,10 +1210,6 @@ class Hyp:
         """A right click on empty disk, at screen *pos*: here, a box to type a text in, at *pos* (`__submit_text__`)."""
         self.box = TextBox(pos, self.BOX_HINT)
 
-    def __cmd_context_empty__(self, pos):
-        """Cmd+right click on empty disk, at screen *pos*: here, what a right click there does."""
-        self.__context_empty__(pos)
-
     def __submit_text__(self, text):
         """What the box a right click on empty disk opens does with *text*, on Enter: here, embed it as a point of its own."""
         self.submit(text)
@@ -1226,10 +1222,6 @@ class Hyp:
     def __context_point__(self, i, pos):
         """Right click on point *i*, at screen *pos*: open it."""
         self.__open_point__(i)
-
-    def __cmd_context_point__(self, i, pos):
-        """Cmd+right click on point *i*, at screen *pos*: here, what a right click does."""
-        self.__context_point__(i, pos)
 
     def __open_point__(self, i):
         """Right click on point *i*: show its stored text."""
@@ -1473,11 +1465,11 @@ class Hyp:
         """Where *snap*'s points slide from: each from where the disk shows it now; None for none to slide -- another corpus.
 
         Points are matched by key, where every point shown has one: a point
-        gone is dropped, without the rest being reset -- a session's shards
-        folded back -- and a new one slides from its "origin", the key of
-        the point it is a shard of, where that was, or else appears where it
-        is. Without keys, the first points shown are the first given, and
-        fewer points are another corpus.
+        gone is dropped, without the rest being reset, and a new one slides
+        from where the point its "link" names was -- a conversation's new
+        turn from the one before it -- or else appears where it is. Without
+        keys, the first points shown are the first given, and fewer points
+        are another corpus.
         """
         old, before = self.positions(now), self.snap.points or ()
         start = np.array(snap.positions, dtype=complex)
@@ -1491,7 +1483,7 @@ class Hyp:
         if not any(p.get("key") in at for p in snap.points):
             return None
         for k, p in enumerate(snap.points):
-            was = at.get(p.get("key"), at.get(p.get("origin")))
+            was = at.get(p.get("key"), at.get(p.get("link")))
             if was is not None:
                 start[k] = was
         return start
@@ -1613,12 +1605,8 @@ class Hyp:
         elif ev.type == pygame.MOUSEBUTTONDOWN and ev.button == 3:
             if self.box is not None:
                 self.box = None
-            if self.hover is not None and pygame.key.get_mods() & pygame.KMOD_META:
-                self.__cmd_context_point__(self.hover, ev.pos)
-            elif self.hover is not None:
+            if self.hover is not None:
                 self.__context_point__(self.hover, ev.pos)
-            elif pygame.key.get_mods() & pygame.KMOD_META:
-                self.__cmd_context_empty__(ev.pos)
             else:
                 self.__context_empty__(ev.pos)
         elif ev.type == pygame.MOUSEWHEEL:

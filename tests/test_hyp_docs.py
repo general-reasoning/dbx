@@ -354,7 +354,7 @@ def test_a_click_on_a_layer_brings_it_to_the_front(app):
     assert app.layer_at(inside_tile_and_disk) == "disk", "now in front, the disk takes what it covers"
 
 
-def test_shards_slide_out_of_their_point_and_back_without_the_view_resetting(app):
+def test_a_new_turn_slides_out_of_the_one_it_follows_and_a_point_gone_does_not_reset_the_view(app):
     def snap(positions, points):
         return NS(positions=np.array(positions), summaries=[p["key"] for p in points], texts=[""] * len(points),
                   neighbors=np.zeros((len(points), 0), dtype=int), points=points)
@@ -364,13 +364,13 @@ def test_shards_slide_out_of_their_point_and_back_without_the_view_resetting(app
     app.view.M = poincare.Mobius.translation(0.2 + 0j)  # the view moved: a reset would put it back
     moved = app.view.M
     sharded = snap([0.1 + 0.1j, -0.4 + 0.2j, -0.5 + 0.3j, -0.3 + 0.1j],
-                   [{"key": "a"}, {"key": "s"}, {"key": "s#0", "origin": "s"}, {"key": "s#1", "origin": "s"}])
+                   [{"key": "a"}, {"key": "s"}, {"key": "s#0", "link": "s"}, {"key": "s#1", "link": "s"}])
     app.on_snapshot(sharded, None, 1.0)
     start, end, _ = app.tween
-    assert np.array_equal(start, [0.1 + 0.1j, -0.4 + 0.2j, -0.4 + 0.2j, -0.4 + 0.2j]), "out of their session's point"
+    assert np.array_equal(start, [0.1 + 0.1j, -0.4 + 0.2j, -0.4 + 0.2j, -0.4 + 0.2j]), "out of the point each is linked to"
     assert np.array_equal(end, sharded.positions) and app.view.M is moved
     app.on_snapshot(whole, None, 5.0)
     start, end, _ = app.tween
-    assert np.array_equal(start, whole.positions) and app.view.M is moved, "folded back: the rest stays where it was"
+    assert np.array_equal(start, whole.positions) and app.view.M is moved, "points gone: the rest stays where it was"
     app.on_snapshot(snap([0.3j], [{"key": "elsewhere"}]), None, 9.0)
     assert app.tween is None and app.view.M is not moved, "another corpus: opened on its center"

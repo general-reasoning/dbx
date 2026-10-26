@@ -233,12 +233,13 @@ def saved(cli, tree, monkeypatch):
     return tree, s.save()
 
 
-def test_a_saved_session_is_a_document_labeled_as_one(saved):
+def test_a_saved_conversation_is_a_point_a_turn_its_first_labeled_by_its_title(saved):
     tree, url = saved
     found = {d.key: d for d in docs.documents(str(tree), progress=lambda *a: None)}
-    assert set(found) == {str(tree / "a.md"), url}
-    d = found[url]
-    assert d.extra["kind"] == claude.KIND and d.summary == "Claude · What is alpha?" and "An answer." in d.embed
+    assert set(found) == {str(tree / "a.md"), f"{url}#0"}
+    d = found[f"{url}#0"]
+    assert d.extra["kind"] == docs.TURN and d.extra["path"] == url and d.extra["turn"] == 0
+    assert d.summary == "Claude · What is alpha?" and "An answer." in d.embed and "link" not in d.extra
 
 
 @pytest.fixture
@@ -261,6 +262,18 @@ def app(saved, monkeypatch):
                 texts=[d.text for d in found], neighbors=np.array([[1], [0]]), points=[dict(d.extra) for d in found])
     monkeypatch.setenv("FAKE_REPLY", "Reply one.")
     return a
+
+
+def _snap_of_(tree, **kw):
+    """The disk's points as the source gives them from the files under *tree*: positions none to speak of."""
+    found = docs.documents(str(tree), progress=lambda *a: None, **kw)
+    return NS(positions=np.zeros(len(found), dtype=complex), summaries=[d.summary for d in found], texts=[d.text for d in found],
+              neighbors=np.zeros((len(found), 0), dtype=int), points=[{"key": d.key, **d.extra} for d in found])
+
+
+def _turn_(app, url, n):
+    """Where turn *n* of the conversation saved at *url* is among *app*'s points."""
+    return next(k for k, p in enumerate(app.snap.points) if p.get("path") == url and p.get("turn") == n)
 
 
 def _type_(window, text):
@@ -305,7 +318,7 @@ def test_a_window_closed_unused_saves_nothing(app, saved):
 
 def test_a_click_on_a_saved_session_resumes_it_where_it_was_saved(app, saved, cli):
     _, url = saved
-    i = next(k for k, p in enumerate(app.snap.points) if p["kind"] == claude.KIND)
+    i = next(k for k, p in enumerate(app.snap.points) if p["kind"] == docs.TURN)
     app.__click_point__(i, 0.0)
     window = app.center
     assert isinstance(window, claude.ClaudeWindow) and window.session.md_url == url and window.session.resumable
@@ -358,7 +371,7 @@ def test_a_session_is_embedded_whole_and_no_document_by_its_front_matter(tree):
     url = s.save()
     found = {d.key: d for d in docs.documents(str(tree), progress=lambda *a: None)}
     assert found[str(tree / "fm.md")].embed == "fm.md\n\n# Body" , "front matter is not embedded"
-    session = found[url]
+    session = found[f"{url}#0"]
     assert session.embed.endswith("the end of it") and s.id not in session.embed and "hyp:" not in session.embed
     assert len(session.text) <= docs.TEXT_CHARS, "what the point keeps to show is as any document's"
 
@@ -519,7 +532,7 @@ def _click_title_(window):
 
 def test_a_sessions_title_is_edited_in_its_window_and_relabels_its_point(app, saved):
     tree, url = saved
-    i = next(k for k, p in enumerate(app.snap.points) if p["kind"] == claude.KIND)
+    i = next(k for k, p in enumerate(app.snap.points) if p["kind"] == docs.TURN)
     app.__click_point__(i, 0.0)
     window = app.center
     app.draw(0)
@@ -535,7 +548,8 @@ def test_a_sessions_title_is_edited_in_its_window_and_relabels_its_point(app, sa
     fields, body = docview.front_matter(open(url).read())
     assert fields["title"] == "Alpha, explained" and body.lstrip().startswith("# Claude · Alpha, explained")
     found = {d.key: d for d in docs.documents(str(tree), progress=lambda *a: None)}
-    assert found[url].summary == "Claude · Alpha, explained" and found[url].extra["updated"] == fields["updated"]
+    first = found[f"{url}#0"]
+    assert first.summary == "Claude · Alpha, explained" and first.extra["updated"] == fields["updated"]
 
 
 def test_escape_puts_the_title_back_and_keeps_the_window_open(app):
@@ -565,7 +579,7 @@ def test_a_title_given_before_any_turn_waits_for_the_first(app, saved):
 
 def test_a_sessions_point_is_dated_by_its_last_turn(app, saved):
     _, url = saved
-    i = next(k for k, p in enumerate(app.snap.points) if p["kind"] == claude.KIND)
+    i = next(k for k, p in enumerate(app.snap.points) if p["kind"] == docs.TURN)
     app.snap.points[i]["updated"] = "2026-10-20T08:15:42"
     assert app.__point_datetime__(i) == "2026-10-20 08:15"
 
@@ -862,12 +876,10 @@ def test_a_drag_off_the_text_still_pans(app):
     assert window.press is not None and not window.selecting
 
 
-def test_a_session_is_embedded_by_its_title_and_what_was_said_not_its_file_or_markup(saved):
+def test_a_turn_is_embedded_by_what_was_asked_and_answered_not_its_file_title_or_markup(saved):
     tree, url = saved
-    d = {d.key: d for d in docs.documents(str(tree), progress=lambda *a: None)}[url]
-    assert d.embed.split("\n", 1)[0] == "What is alpha?", "its title first: what each piece is embedded under"
-    assert "claude-session-" not in d.embed and "## You" not in d.embed and "# Claude ·" not in d.embed
-    assert "What is alpha?" in d.embed and "An answer." in d.embed
+    d = {d.key: d for d in docs.documents(str(tree), progress=lambda *a: None)}[f"{url}#0"]
+    assert d.embed == "What is alpha?\n\nAn answer.", "the question first: what each piece is embedded under"
 
 
 def test_said_leaves_out_the_markup_and_keeps_what_was_said():
@@ -1284,7 +1296,7 @@ def test_what_claude_code_asks_only_once_is_said_not_answered(cli, tree, monkeyp
 def test_the_remote_button_saves_hands_off_shows_the_qr_and_take_back_writes_the_phones_turns_into_the_md(app, saved, monkeypatch):
     _, url = saved
     monkeypatch.setenv("FAKE_PHONE", PHONE)
-    i = next(k for k, p in enumerate(app.snap.points) if p["kind"] == claude.KIND)
+    i = next(k for k, p in enumerate(app.snap.points) if p["kind"] == docs.TURN)
     app.__click_point__(i, 0.0)
     window = app.center
     _type_(window, "One more here")
@@ -1308,7 +1320,7 @@ def test_a_session_closed_goes_to_the_phone_and_reopened_comes_back(app, saved, 
     _, url = saved
     monkeypatch.setenv("FAKE_PHONE", PHONE)
     app.settings["sessions on remote"] = True
-    i = next(k for k, p in enumerate(app.snap.points) if p["kind"] == claude.KIND)
+    i = next(k for k, p in enumerate(app.snap.points) if p["kind"] == docs.TURN)
     app.__click_point__(i, 0.0)
     window = app.center
     _type_(window, "Last word here")
@@ -1317,7 +1329,8 @@ def test_a_session_closed_goes_to_the_phone_and_reopened_comes_back(app, saved, 
     handoff = app.handoffs[window.session.id]
     assert "Last word here" in open(url).read(), "saved before it went"
     assert _until_(lambda: handoff.url is not None) and "on the phone" in app.status
-    app.__click_point__(i, 0.0)
+    app.snap = _snap_of_(saved[0])  # the disk brought up to date: the turn typed, a point of its own
+    app.__click_point__(_turn_(app, url, 1), 0.0)  # the conversation's last turn: the conversation, to go on with
     again = app.center
     assert again.handoff is None and window.session.id not in app.handoffs and not handoff.alive()
     assert again.session.turns[-1] == ("And on the phone?", "Answered there.")
@@ -1343,7 +1356,7 @@ def test_reopened_what_was_said_elsewhere_since_its_save_comes_in_without_a_hand
         {"type": "user", "timestamp": at, "message": {"role": "user", "content": "From a terminal, later"}},
         {"type": "assistant", "timestamp": at, "message": {"role": "assistant", "content": [{"type": "text", "text": "Noted."}]}},
     ]) + "\n")
-    i = next(k for k, p in enumerate(app.snap.points) if p["kind"] == claude.KIND)
+    i = next(k for k, p in enumerate(app.snap.points) if p["kind"] == docs.TURN)
     app.__click_point__(i, 0.0)
     window = app.center
     assert window.session.turns == [("From a terminal, later", "Noted.")], "only what is newer than the save"
@@ -1432,7 +1445,7 @@ def test_a_conversation_handed_off_before_goes_as_a_fresh_copy_so_the_phone_has_
         {"type": "system", "subtype": "bridge_status", "sessionId": sid, "url": "https://claude.ai/code/session_01OLD"},
         {"type": "history-suppression", "sessionId": sid, "cause": "restored_owner_mismatch"},
     ]) + "\n")
-    i = next(k for k, p in enumerate(app.snap.points) if p["kind"] == claude.KIND)
+    i = next(k for k, p in enumerate(app.snap.points) if p["kind"] == docs.TURN)
     app.__click_point__(i, 0.0)
     window = app.center
     app.draw(0)
@@ -1542,7 +1555,7 @@ def test_every_session_goes_on_remote_as_hyp_starts_but_one_open_here(app, saved
     assert _until_(lambda: handoff.url is not None)
     app.__snapshot_arrived__()
     assert list(app.handoffs) == [sid], "once, as hyp starts: not at every snapshot"
-    i = next(k for k, p in enumerate(app.snap.points) if p["kind"] == claude.KIND)
+    i = next(k for k, p in enumerate(app.snap.points) if p["kind"] == docs.TURN)
     app.__click_point__(i, 0.0)
     window = app.center
     assert app.handoffs == {} and not handoff.alive(), "opened here: taken back"
@@ -1594,7 +1607,7 @@ def turns(cli, tree, tmp_path, monkeypatch):
     a.run_async = lambda fn, then: then(fn())
     a.settings["sessions on remote"] = False
     a.on_snapshot(engine.snapshot(), None, 0.0)
-    session = next(n for n, p in enumerate(a.snap.points) if p.get("kind") == claude.KIND)
+    session = next(n for n, p in enumerate(a.snap.points) if p.get("kind") == docs.TURN and p["turn"] == 0)
     return NS(app=a, url=url, asked=asked, embedder=embedder, data=data, session=session, n=len(a.snap.points))
 
 
@@ -1607,125 +1620,6 @@ def _settle_(app, timeout=30):
             return
         time.sleep(0.01)
     raise AssertionError(f"still under way after {timeout} s: {app.status}")
-
-
-def _shards_(app):
-    return [(k, p) for k, p in enumerate(app.snap.points) if p.get("kind") == docs.SHARD]
-
-
-def test_cmd_right_click_on_a_session_shows_its_turns_about_it_named_by_claude(turns, monkeypatch):
-    a = turns.app
-    whole = a.snap.positions.copy()
-    a.hover = turns.session
-    monkeypatch.setattr(pygame.key, "get_mods", lambda: pygame.KMOD_META)
-    cx, cy, _ = a.frame()
-    a.handle(pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=3, pos=(int(cx), int(cy))), 0.0)
-    assert a.loading(), "an engine job: its card, with its bar, in the middle of the window"
-    _settle_(a)
-
-    shards = _shards_(a)
-    assert [p["turn"] for _, p in shards] == [0, 1, 2] and a.sharded() == {turns.url}
-    assert [a.snap.summaries[k] for k, _ in shards] == [f"Claude · What is alpha? · Topic 1.{n}" for n in (1, 2, 3)]
-    assert len(turns.asked) == 1 and all(q in turns.asked[0] for q in ("What is alpha?", "beta relate", "gamma, finally"))
-    assert sorted(json.loads((turns.data / "words.json").read_text()).values()) == ["Topic 1.1", "Topic 1.2", "Topic 1.3"]
-    assert np.array_equal(a.snap.positions[: turns.n], whole), "the rest of the disk stays where it was"
-    k = shards[0][0]
-    label = a.__point_label__(k)
-    assert label == "Claude · What is al… · Topic 1.1" and len(label) == 32, "the session's label cut short, the turn's words kept"
-    assert "What is alpha?" in a.__point_tooltip__(k)
-
-    a.__context_empty__((5, 5))
-    _settle_(a)
-    assert not _shards_(a) and len(a.snap.points) == turns.n and a.popup is None, "folded back, rather than the menu"
-    seen = len(turns.embedder.seen)
-    a.__cmd_context_point__(turns.session, (0, 0))
-    _settle_(a)
-    assert len(_shards_(a)) == 3 and len(turns.asked) == 1 and len(turns.embedder.seen) == seen, "named and embedded once"
-    a.__cmd_context_point__(_shards_(a)[1][0], (0, 0))
-    _settle_(a)
-    assert not _shards_(a), "Cmd+right click on a turn folds its session's back too"
-
-
-def test_a_click_on_a_turn_opens_its_session_at_that_turn(turns):
-    a = turns.app
-    a.__cmd_context_point__(turns.session, (0, 0))
-    _settle_(a)
-    k = _shards_(a)[1][0]
-    a.__click_point__(k, 0.0)
-    window = a._claude_window_()
-    a.draw(0.0)
-    run = next(r for r in window._laid_.runs if r.block == window.pinned)
-    assert run.text == "You" and window.sy > 0 and run.y - window.sy == 12, "the second turn's You, at the top"
-    window.handle(pygame.event.Event(pygame.MOUSEWHEEL, x=0, y=-1, precise_x=0.0, precise_y=-1.0))
-    assert window.pinned is None, "scrolled: the reader's again"
-
-
-def test_a_session_filed_with_its_turns_shown_shows_the_new_one_too(turns, monkeypatch):
-    a = turns.app
-    a.__cmd_context_point__(turns.session, (0, 0))
-    _settle_(a)
-    a.__click_point__(turns.session, 0.0)
-    monkeypatch.setenv("FAKE_REPLY", "Delta it is.")
-    _type_(a._claude_window_(), "And delta?")
-    _settle_(a)
-    assert [p["words"] for _, p in _shards_(a)] == ["Topic 1.1", "Topic 1.2", "Topic 1.3", "Topic 2.1"]
-    assert "And delta?" in turns.asked[1] and "What is alpha?" not in turns.asked[1], "only the new question asked"
-
-
-def test_turns_claude_cannot_name_are_named_by_their_first_words(turns, monkeypatch):
-    def down(prompt, timeout=180, command=None):
-        raise claude.Failed("Claude Code is not logged in")
-
-    monkeypatch.setattr(claude, "ask", down)
-    a = turns.app
-    a.__cmd_context_point__(turns.session, (0, 0))
-    _settle_(a)
-    assert [p["words"] for _, p in _shards_(a)] == ["What is alpha?", "How does beta relate to …", "And gamma, finally?"]
-    assert "Claude could not name them: Claude Code is not logged in" in a.status
-    assert not (turns.data / "words.json").exists()
-
-
-def _cmd_right_click_(app, monkeypatch, pos=None):
-    monkeypatch.setattr(pygame.key, "get_mods", lambda: pygame.KMOD_META)
-    cx, cy, _ = app.frame()
-    app.handle(pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=3, pos=pos or (int(cx), int(cy))), 0.0)
-    monkeypatch.setattr(pygame.key, "get_mods", lambda: 0)
-    _settle_(app)
-
-
-def test_cmd_right_click_on_empty_disk_shatters_every_session_and_again_makes_them_whole(turns, monkeypatch):
-    monkeypatch.setattr(docs, "WORDS_BATCH", 2)
-    a = turns.app
-    a.hover = None
-    _cmd_right_click_(a, monkeypatch)
-    shards = _shards_(a)
-    assert [p["turn"] for _, p in shards] == [0, 1, 2] and all(p["shattered"] for _, p in shards) and a.shattered()
-    assert not any(p.get("kind") == claude.KIND for p in a.snap.points), "the session gone: its turns in its place"
-    assert shards[1][1]["embed"].startswith("How does beta relate to it?"), "embedded alone: not by its session's title"
-    assert [p["words"] for _, p in shards] == ["Topic 1.1", "Topic 1.2", "Topic 2.1"], "named two at a time"
-    assert not a.sharded(), "none ringed about a session"
-
-    a.__context_empty__((5, 5))
-    assert a.popup is not None, "a plain right click on empty disk: the menu, as ever"
-    a.popup = None
-    a.__cmd_context_point__(shards[0][0], (100, 100))
-    assert isinstance(a.popup, docs.TilePicker), "Cmd+right click on a turn shattered: placed, as a right click"
-    a.popup = None
-    a.hover = None
-    _cmd_right_click_(a, monkeypatch)
-    assert not _shards_(a) and len(a.snap.points) == turns.n and not a.shattered(), "whole again"
-
-
-def test_a_session_filed_while_shattered_is_shattered_again_its_new_turn_among_them(turns, monkeypatch):
-    a = turns.app
-    a.hover = None
-    _cmd_right_click_(a, monkeypatch)
-    a.__click_point__(_shards_(a)[0][0], 0.0)
-    monkeypatch.setenv("FAKE_REPLY", "Delta it is.")
-    _type_(a._claude_window_(), "And delta?")
-    _settle_(a)
-    assert [p["words"] for _, p in _shards_(a)] == ["Topic 1.1", "Topic 1.2", "Topic 1.3", "Topic 2.1"]
-    assert a.shattered() and not any(p.get("kind") == claude.KIND for p in a.snap.points)
 
 
 # -- web access ---------------------------------------------------------------------------------------------------------
@@ -1825,58 +1719,6 @@ def test_a_branch_whose_parent_is_gone_shows_its_own_turns_and_says_so(three, tr
     assert claude.parent_url(lost.md_url, docview.front_matter(open(lost.md_url).read())[0]) == three.md_url, "the link kept"
 
 
-def test_a_click_on_a_turns_heading_goes_on_from_it_but_not_on_the_last(three, tree):
-    clicked = []
-    window = claude.ClaudeWindow(claude.Session.load(three.md_url, str(tree)), lambda w, t: None, on_branch=lambda w, k: clicked.append(k))
-    surf = pygame.display.set_mode((900, 1400))
-    window.draw(surf, pygame.Rect(0, 0, 900, 1400), docview.FONTS.get(15), docview.FONTS.get(12))
-    heads = {}
-    for r in window._laid_.runs:
-        if r.block in window.turn_blocks:
-            heads.setdefault(window.turn_blocks[r.block], []).append(r)
-    assert sorted(heads) == [1, 2, 3] and all(len(rs) == 2 for rs in heads.values()), "each turn: its You and Claude headings"
-    for k in (1, 2, 3):
-        for r in heads[k]:
-            pos = (window.body.x + 300, window.body.y + r.y - round(window.sy) + r.h // 2)  # anywhere along the heading's row
-            window.handle(pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1, pos=pos))
-    assert clicked == [1, 1, 2, 2], "the last turn is no branch: the box goes on from it"
-
-
-def test_a_click_on_a_turn_in_docs_opens_a_new_branch_saved_with_its_first_turn_and_linked_on_the_disk(three, cli, tree, monkeypatch):
-    a = docs.HypDocs(engine=None, worker=Worker(), args=NS(dir=str(tree), claude_dir=""))
-    a.run_async = lambda fn, then: then(fn())
-    a.settings["sessions on remote"] = False
-    a.open_claude(claude.Session.load(three.md_url, str(tree)))
-    a._branch_(a._claude_window_(), 2)
-    window = a._claude_window_()
-    assert window.session.above.md_url == three.md_url and window.session.fork == 2 and not window.session.resumable
-    assert "a new branch, after turn 2" in a.status
-    a._close_(window)
-    assert len(docs.documents(str(tree), progress=lambda *x: None)) == 2, "closed unasked: no branch kept"
-
-    a.open_claude(claude.Session.load(three.md_url, str(tree)))
-    a._branch_(a._claude_window_(), 2)
-    monkeypatch.setenv("FAKE_REPLY", "Noted.")
-    _type_(a._claude_window_(), "date")
-    found = {d.key: d for d in docs.documents(str(tree), progress=lambda *x: None)}
-    (new,) = set(found) - {three.md_url, str(tree / "a.md")}
-    assert found[new].extra["link"] == three.md_url and found[new].summary == "Claude · date"
-    assert "banana" not in found[new].embed and "date" in found[new].embed, "embedded by its own turns only"
-    order = list(found)
-    a.snap = NS(positions=np.zeros(len(order), dtype=complex), summaries=[found[k].summary for k in order],
-                texts=[""] * len(order), neighbors=np.zeros((len(order), 0), dtype=int),
-                points=[{"key": k, **found[k].extra} for k in order])
-    assert a.__point_link__(order.index(new)) == order.index(three.md_url) and a.__point_link__(order.index(three.md_url)) is None
-    assert a.links() == [(order.index(new), order.index(three.md_url))]
-    assert a.__point_label__(order.index(new)) == "Claude · apple\n↳ date", "its parent's label, then its own"
-    long = list(a.snap.summaries)
-    long[order.index(three.md_url)] = "Claude · a parent whose title runs on and on to its very end"
-    a.snap = NS(**{**vars(a.snap), "summaries": long})
-    first, second = a.__point_label__(order.index(new)).split("\n")
-    assert len(first) <= docs.LABEL_CHARS and "…" in first and second == "↳ date", "squeezed to a line: its start and its end"
-    assert first.startswith("Claude · a pare") and first.endswith("to its very end")
-
-
 def test_a_turn_counts_as_claude_code_records_prompts(cli):
     events = [{"type": "user", "uuid": "u1", "message": {"content": "one"}},
               {"type": "assistant", "uuid": "a1", "message": {"content": [{"type": "tool_use"}]}},
@@ -1891,3 +1733,86 @@ def test_a_turn_counts_as_claude_code_records_prompts(cli):
     with open(os.path.join(home, "conv.jsonl"), "w") as f:
         f.writelines(json.dumps(e) + "\n" for e in events)
     assert [claude.anchor("conv", k) for k in (0, 1, 2, 3)] == [None, "a1b", "a2", None]
+
+
+def test_every_turn_is_a_point_joined_to_the_one_before_and_a_click_goes_on_from_it(three, cli, tree, monkeypatch):
+    a = docs.HypDocs(engine=None, worker=Worker(), args=NS(dir=str(tree), claude_dir=""))
+    a.run_async = lambda fn, then: then(fn())
+    a.settings["sessions on remote"] = False
+    a.snap = _snap_of_(tree)
+    url = three.md_url
+    first, second, last = (_turn_(a, url, n) for n in range(3))
+    assert sorted(a.links()) == sorted([(second, first), (last, second)]), "each turn joined to the one before"
+    assert a.snap.summaries[first] == "Claude · apple" and a.snap.summaries[second] == "banana", "named by its words, or its first"
+    assert a.__point_datetime__(last) and a.__point_datetime__(second) is None, "dated: its branch's last turn"
+
+    a.__click_point__(second, 0.0)
+    window = a._claude_window_()
+    assert window.session.above.md_url == url and window.session.fork == 2 and not window.session.resumable
+    assert "banana" in window._transcript_() and "cherry" not in window._transcript_(), "up to the turn clicked"
+    a._close_(window)
+    assert len(docs.documents(str(tree), progress=lambda *x: None)) == 4, "closed unasked: no branch kept"
+    a.__click_point__(last, 0.0)
+    assert a._claude_window_().session.md_url == url and a._claude_window_().session.resumable, "its last: the branch itself"
+
+    a.__click_point__(second, 0.0)
+    monkeypatch.setenv("FAKE_REPLY", "Noted.")
+    _type_(a._claude_window_(), "date")
+    branch = a._claude_window_().session.md_url
+    assert cli.runs()[-1]["argv"][cli.runs()[-1]["argv"].index("--resume") + 1] == three.id, "forked from the conversation"
+    a.snap = _snap_of_(tree)
+    new = _turn_(a, branch, 0)
+    assert a.snap.points[new]["link"] == f"{url}#1" and a.__point_link__(new) == _turn_(a, url, 1), "joined to the turn it goes on from"
+    assert a.snap.texts[new].endswith("Noted.") and "banana" not in a.snap.texts[new], "the turn's own words only"
+
+
+def test_a_branch_of_a_branch_is_joined_to_the_turn_it_goes_on_from_whichever_file_holds_it(three, tree):
+    b = claude.Session.load(three.md_url, str(tree)).branch(2)
+    b.send("date")
+    b.send("elder")
+    b.save()
+    c = claude.Session.load(b.md_url, str(tree)).branch(3)  # after b's own first turn, not its last: a branch of b
+    assert c.above.md_url == b.md_url and c.fork == 3
+    c.send("fig")
+    c.save()
+    d = claude.Session.load(c.md_url, str(tree)).branch(1)  # after the first turn of all: a branch of the conversation's first file
+    assert d.above.md_url == three.md_url
+    d.send("grape")
+    d.save()
+    links = {p["key"]: p.get("link") for p in _snap_of_(tree).points}
+    assert links[f"{b.md_url}#0"] == f"{three.md_url}#1"
+    assert links[f"{c.md_url}#0"] == f"{b.md_url}#0", "turn 3 of the path: b's own first, after the 2 it keeps"
+    assert links[f"{d.md_url}#0"] == f"{three.md_url}#0"
+
+
+def test_turns_not_yet_named_are_named_by_claude_in_the_background_and_relabeled(turns):
+    a = turns.app
+    _settle_(a)
+    labels = sorted(a.snap.summaries[k] for k, p in enumerate(a.snap.points) if p.get("kind") == docs.TURN)
+    assert labels == ["Claude · What is alpha?", "Topic 1.2", "Topic 1.3"], "named at once, as the points came in; the first by its title"
+    assert len(turns.asked) == 1 and sorted(json.loads((turns.data / "words.json").read_text()).values()) == [
+        "Topic 1.1", "Topic 1.2", "Topic 1.3"]
+    a.__snapshot_arrived__()
+    assert len(turns.asked) == 1, "named once"
+
+
+def test_turns_claude_cannot_name_keep_their_first_words_and_are_not_asked_again(cli, tree, monkeypatch):
+    s = claude.Session(str(tree))
+    s.send("What is alpha, at length and in detail?")
+    s.save()
+    asked = []
+
+    def down(prompt, timeout=180, command=None):
+        asked.append(prompt)
+        raise claude.Failed("Claude Code is not logged in")
+
+    monkeypatch.setattr(claude, "ask", down)
+    a = docs.HypDocs(engine=None, worker=Worker(), args=NS(dir=str(tree), claude_dir=""))
+    a.run_async = lambda fn, then: then(fn())
+    a.settings["sessions on remote"] = False
+    a.snap = _snap_of_(tree)
+    a.__snapshot_arrived__()
+    assert "Claude could not name them: Claude Code is not logged in" in a.status and len(asked) == 1
+    a.__snapshot_arrived__()
+    assert len(asked) == 1, "not asked again till hyp starts again"
+    assert a.snap.points[_turn_(a, s.md_url, 0)]["words"] == "What is alpha, at length …"

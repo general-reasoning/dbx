@@ -462,129 +462,78 @@ its front matter, not its name. Keep the `.md`, and reload. A file renamed
 while its window is open is written again under its old name at the next
 turn.
 
-**Saved and embedded at every turn.** As each reply comes in whole, the
-session is saved into the directory scanned (`--dir`), or into
-`--claude-dir`: a directory relative to it that the scan reaches, so not
-absolute, not above `--dir`, and not a hidden or skipped one. It is one
-markdown, `claude-session-<started>-<id>.md`, a `## You` / `## Claude` section a
-turn. Its front matter says what it is: `hyp: claude-session`, the session's
-id, the model, and the first line as its `title`. The disk is brought up to
-date with it at once, in the background, the window usable meanwhile: the
-directory is read again, the session embedded, and the layout nudged from
-where it was rather than laid out afresh. So the session's point,
-`Claude · <title>`, moves among the documents as the conversation goes, and
-its arcs and arrows relate it to them as they do any document. Closing the
-window saves nothing more, unless a turn is not yet saved.
+**Saved at every turn.** As each reply comes in whole, the session is saved
+into the directory scanned (`--dir`), or into `--claude-dir`: a directory
+relative to it that the scan reaches, so not absolute, not above `--dir`,
+and not a hidden or skipped one. It is one markdown,
+`claude-session-<started>-<id>.md`, a `## You` / `## Claude` section a turn.
+Its front matter says what it is: `hyp: claude-session`, the session's id,
+the model, and the first line as its `title`. The disk is brought up to date
+with it at once, in the background, the window usable meanwhile: the
+directory is read again, the new turn embedded, and the layout nudged from
+where it was rather than laid out afresh. Closing the window saves nothing
+more, unless a turn is not yet saved.
 
-**Embedded whole.** A document is embedded by its name and its first 4,000
-characters; a session by its title and what was said in it, up to 256,000
-characters -- not its file's name, nor the transcript's markup (the
-`# Claude ·` heading, the `## You` and `## Claude` lines), which are every
-session's: they lifted every pair of sessions' cosine by about 0.09, the
-unrelated as much as the related, and so drew all sessions together.
-Hence `ChunkedEmbedder` (`hyp/docs.py`): a text longer than that is
-embedded a 4,000-character piece at a time -- cut at paragraph breaks where
-it can be, the name -- a session's title -- before each piece -- and the pieces' unit vectors
-averaged, so a long session lies where all of it points, not where its
-first turns do. A text of one piece gets the embedder's own vector, as
-before. No markdown's front matter is embedded, a session's or any other's.
+**Every turn, a point.** A conversation is shown turn by turn: each turn is
+a point of its own, keyed `<file>#<n>`, embedded by what was asked and
+answered in it -- not its file's name, nor its title, nor the transcript's
+markup (the `# Claude ·` heading, the `## You` and `## Claude` lines), which
+are every turn's and would draw them all together. A long answer is
+embedded a 4,000-character piece at a time, its question's first line
+before each piece, and the pieces' unit vectors averaged (`ChunkedEmbedder`,
+`hyp/docs.py`). No markdown's front matter is embedded, a session's or any
+other's.
 
-**Reopened by its point.** A left click on a session's point opens it
-again: its transcript is shown, and the next turn resumes it by its id. Closed,
-it is saved over the same file, the new turns after the old. A right click
-places its transcript, as any document's. Claude Code keeps a session on the
-machine, and for the directory, it ran in. A session saved on one machine
-and reopened on another is shown, but Claude there has no record of it: the
-window says so.
+A turn is labeled by a few words naming its question -- a conversation's
+first turn by its title, `Claude · <title>` -- and its tooltip says its
+conversation and which turn of it it is, and how the question begins. The
+words are Claude's: the turns not named yet, as the points come in, are
+asked of it in the background, 40 at a time (`claude -p`, no tools), and
+kept in the corpus's `words.json`, so a question is named once; till then a
+turn is labeled by its question's first words. A turn Claude could not name
+-- not logged in, say -- is not asked again till hyp starts again, and the
+status line says why. A branch's last turn is dated by its file's last
+write; the others are not dated.
 
-**Branches.** A conversation is a tree. Its window shows it turn by turn,
-and each turn's `You` and `Claude` headings are a click away from going on
-after it: a click opens a new branch in the window's place -- the turns up
-to that one, those after it left where they are, and the box beneath it --
-and the first thing sent from it makes the branch. Closed before then, it
-leaves nothing. A click on the last turn of a branch the window's goes on
-from opens that branch, to go on with it; the window's own last turn is no
-branch -- the box goes on from it already. A branch's turns before its own
-are shown above a line saying where it goes on from.
+**Joined, turn to turn.** A faint geodesic joins each turn to the one before
+it, and a branch's first turn to the turn it goes on from (below): a
+conversation is drawn as the tree it is. Joined, turns are laid out near
+each other, whatever they go on to: a link adds proximity to the metric the
+layout measures by, not to the embeddings, which still say only what the
+texts say -- so a point's nearest, as the hover's arcs and the arrows have
+them, are as they were. The cosine distance between the two is shortened by
+`LINK_PULL` (70%), each is among the other's neighbors in the graph UMAP is
+given, and a new turn starts beside, and slides in from, the one it follows.
+One neighbor among fifteen does not hold a turn in place, so one laid out
+farther from the turn it follows than `LINK_REACH` -- 1.5 times the layout's
+median distance from a point to its nearest -- is moved in along the
+geodesic between them, in the order the conversation grew
+(`hyp/layout.py`). A link made or gone lays the disk out again, as a
+changed embedding does.
+
+**Going on from a turn.** A left click on a turn opens its conversation up
+to that turn, and the box beneath it: what is sent from there goes on after
+it. The turn its branch's last, that is the branch, going on; any other,
+it is a new branch, and the first thing sent from it makes the branch --
+closed before then, it leaves nothing. A branch's turns before its own are
+shown above a line saying where it goes on from. Claude Code keeps a
+conversation on the machine, and for the directory, it ran in: one saved on
+one machine and reopened on another is shown, but Claude there has no
+record of it, and the window says so. A right click on a turn places its
+conversation's file, at the turn, as any document's.
 
 A branch is a markdown of its own, holding only its own turns, its front
 matter naming its parent's file -- relative to its own -- and `fork`, the
-number of its parent's turns it keeps; the turns before its own are
-assembled from its parents as it is opened. Its parent is the branch whose
-own turns hold the turn clicked, so the tree is kept as it grew. On Claude
-Code's side, its first turn forks the conversation it was made from, at the
-last message of that turn (`claude -p --resume <id> --resume-session-at
-<message> --fork-session --session-id <new id>`): the branch has the turns
-before it, and not those after, and the conversation it came from is as it
-was. Claude Code keeps conversations per machine, so a branch is made where
-the conversation it comes from was held; elsewhere, the window says so.
-
-On the disk, a branch is one point, embedded by its own turns only --
-embedded with its upstream, every branch of a conversation would lie on top
-of the others -- and a faint geodesic joins it to its parent's point: a
-conversation is drawn as the tree it is. Its label is two lines: its
-parent's, squeezed to one -- its start, an ellipsis, its end -- and beneath
-it, `↳` and its own first turn's.
-
-Joined, a branch is laid out by its parent, whatever it goes on to: the
-link adds proximity to the metric the layout measures by, not to the
-embeddings, which still say only what the texts say -- so a point's
-nearest, as the hover's arcs and the arrows have them, are as they were.
-The cosine distance between the two is shortened by `LINK_PULL` (70%), each
-is among the other's neighbors in the graph UMAP is given, and a new branch
-starts beside its parent. One neighbor among fifteen does not hold a branch
-in place, so one laid out farther from its parent than `LINK_REACH` -- 1.5
-times the layout's median distance from a point to its nearest -- is moved
-in along the geodesic between them, parents first, so a branch of a branch
-follows its parent (`hyp/layout.py`). A link made or gone lays the disk out
-again, as a changed embedding does.
-A branch whose parent's file is gone shows its own turns, says so, and keeps
-the link.
-
-**Its turns, as points of their own.** Cmd+right click on a session's
-point shows each of its turns as a point -- a shard of the session's --
-ringed about it, and slides the view to it; a right click on empty disk
-folds every session's back, the disk as it was (instead of the
-Claude/Markdown menu, that once), and so does Cmd+right click on the
-session or on any of its turns. A turn is labeled by its session's label and a few
-words naming what it asked: `Claude · <title> · <words>`, the title cut
-short where both do not fit, the words kept whole. The words are Claude's,
-asked of every turn not named before at once (`claude -p`, no tools), and
-kept in the corpus's `words.json`, so a question is named once. The turns
-are read and embedded -- and, shattered, laid out -- as an engine job: the
-card in the middle of the window shows its bar, the turns done out of all,
-and Esc stops it, the disk left as it was. Then they appear, those not yet
-named by their first words, and are relabeled as Claude's come, in the
-background, the window usable meanwhile. A left click on a turn opens the session at it -- that
-turn's `## You` at the top of the window till it is scrolled -- and a right
-click places its session's transcript, at the turn.
-
-A turn is embedded by its session's title and what was said in it, and
-then averaged with its session's own embedding: its nearest are its session
-and its siblings, as the hover's arcs and the arrows have them. Where it is
-drawn is its session's neighborhood, whatever the embedding says: the turns
-are placed about the origin by classical scaling of what they themselves say
-(`layout.about`), between 0.1 and 0.45 from it, and carried by an isometry to
-wherever the session lies. So the map does not move for them; and the
-farther out the session is, the smaller its ring is drawn -- slide it to the
-center to read it. A session filed with its turns shown keeps them shown,
-a new turn among them. They are kept in memory, not in the corpus
-(`Engine.shard`): the next start shows the sessions whole.
-
-**Every session, shattered.** Cmd+right click on empty disk shatters every
-session into its turns at once, and again puts them back whole. Shattered,
-a turn is not anchored to its session: it is embedded by what was asked and
-answered in it alone -- not its session's title, nor its session's
-embedding -- and the sessions are gone from the disk, which is laid out
-again with their turns in their place, UMAP seeded with where everything
-was and each turn beside its nearest (`Engine.shatter`). So a turn lies by
-whatever it is about, a document or another session's turn, wherever its
-session was. The turns are labeled, named by Claude -- 40 questions a call --
-and opened by a click as a session's ringed turns are; a right click on one
-places its session's transcript, Cmd or not, and a plain right click on
-empty disk opens its menu as ever. The layout is kept, and computed again
-only when what is shown changes: a session filed meanwhile is shattered
-again, its new turn among the rest.
+number of the turns of its parent's whole conversation it keeps; the turns
+before its own are assembled from its parents as it is opened, and its
+first turn is joined to its parent's turn `fork`. Its parent is the branch
+whose own turns hold the turn clicked, so the tree is kept as it grew. On
+Claude Code's side, its first turn forks the conversation it was made from,
+at the last message of that turn (`claude -p --resume <id>
+--resume-session-at <message> --fork-session --session-id <new id>`): the
+branch has the turns before it, and not those after, and the conversation
+it came from is as it was. A branch whose parent's file is gone shows its
+own turns and says so.
 
 ## Arrows
 
@@ -642,8 +591,7 @@ a directory of markdowns, they are directions of content.
 | left drag | move the plane rigidly (a hyperbolic translation); the grabbed point stays under the cursor |
 | scroll | hyperbolic zoom: a point at distance *d* is drawn at *k·d* |
 | right click on a point | its stored text |
-| Cmd+right click on a session (`--docs`) | its turns, as points of their own ringed about it, each labeled by a few words of its question; again, or on a turn, folds them back. See [Claude sessions](#claude-sessions) |
-| Cmd+right click on empty disk (`--docs`) | every session shattered into its turns, each embedded and laid out on its own among the documents; again, the sessions whole |
+| left click on a Claude turn (`--docs`) | its conversation up to that turn, the box beneath: what is sent goes on after it -- a new branch, unless it is its branch's last. See [Claude sessions](#claude-sessions) |
 | right click elsewhere | type a text; Enter embeds, summarizes, stores and places it -- in `--docs`, asks it of Claude in a new session, or, while sessions' turns are shown, folds them back |
 | hover | the point's label, in full, and geodesics to the 5 nearest neighbors in embedding space -- by cosine over the whole vectors, so an arc may reach a point far off on the disk |
 | Shift, while hovering | each of those arcs labeled with what its direction means, named by Claude from where else it runs in the corpus, and what that rests on. See [Arrows](#arrows) |

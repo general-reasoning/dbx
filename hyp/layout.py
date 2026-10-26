@@ -87,20 +87,6 @@ def scaled(embeddings, radius=FEW_RADIUS, links=()):
     return w * (radius / far) if far > 1e-12 else np.zeros(n, dtype=complex)
 
 
-def about(embeddings, radius, inner):
-    """Points ringed about the origin, as `scaled` places them: the farthest at *radius*, none nearer than *inner*.
-
-    The origin is another's -- the point they are the shards of -- so each is
-    moved out by *inner*, along its own direction. One `scaled` left at the
-    origin -- the only one, or one in the middle of the rest -- has none, and
-    takes its place on the ring by its index.
-    """
-    w = scaled(embeddings, radius - inner)
-    r = np.abs(w)
-    angle = np.where(r > 1e-9, np.angle(w), 2 * np.pi * np.arange(len(w)) / max(len(w), 1))
-    return (inner + r) * np.exp(1j * angle)
-
-
 def _linked_knn_(embeddings, k, links):
     """UMAP's neighbor graph, given it: each row's *k* nearest -- itself first -- by `distances`, a linked row among them however far.
 

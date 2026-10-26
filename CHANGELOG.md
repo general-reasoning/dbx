@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- **hyp --docs: a conversation handed off to the cloud, by default.** The
+  directory's `.hyp-github` names the GitHub repository its notes are pushed
+  to. A handoff commits and pushes the conversation's files and begins a
+  Claude Code cloud session on the repository (`claude --cloud`), told to
+  read them as the conversation so far; the Mac is free to sleep. Its url is
+  a QR code in the window, and kept in the conversation's front matter.
+  Reopened -- after a restart too -- it is taken back: `claude --teleport`,
+  what is not committed set aside and put back, the cloud's changes merged
+  and pushed, and its turns added (`claude.CloudHandoff`). A conversation
+  records which Claude Code conversations hold which of its turns (`start`,
+  `earlier`), so a branch forks the right one. hyp's own messages begin
+  `[hyp]` and are no turns; a message queued while Claude answered is one.
+  The setting **hand off to the cloud** off, handoffs go by Remote Control,
+  as before.
 - **hyp --docs: a conversation, turn by turn, a tree.** Every turn of a
   Claude conversation is a point of its own, keyed `<file>#<n>`, embedded by
   what was asked and answered in it alone, labeled by a few words Claude

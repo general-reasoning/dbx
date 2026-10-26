@@ -59,6 +59,8 @@ SYSTEM_NO_TOOLS = "You cannot see the documents unless the user pastes them in."
 WEB_TOOLS = ("WebSearch", "WebFetch")
 SYSTEM_WEB = "You may also search the web and fetch web pages, to answer from them."
 SYSTEM_NO_WEB = "You cannot reach the web."
+# hyp's own messages to Claude begin so -- a cloud handoff's opening, a take-back's -- and are no turns of the conversation.
+HYP_MARK = "[hyp] "
 MAX_BRANCH_DEPTH = 256  # branches of branches, read up to a conversation's first: past this, a parent named is taken to be lost
 # Where Claude Code keeps its login and conversations, unless CLAUDE_CONFIG_DIR says elsewhere.
 DEFAULT_CONFIG = os.path.expanduser("~/.claude")
@@ -66,6 +68,19 @@ DEFAULT_CONFIG = os.path.expanduser("~/.claude")
 MODELS = (None, "opus", "sonnet", "haiku")
 # The session's url on claude.ai, as a session handed off to a phone shows it: what its QR code is of.
 SESSION_URL = re.compile(r"https://claude\.ai/code/session_[A-Za-z0-9]+")
+CLOUD_SESSION = re.compile(r"https://claude\.ai/code/(session_[A-Za-z0-9]+)")
+# In --dir: the GitHub repository its notes are pushed to, `owner/name`, for handing a conversation off to the cloud.
+GITHUB_FILE = ".hyp-github"
+# What a cloud session is first told: the conversation so far is in files of the repository it is given.
+CLOUD_PROMPT = (
+    "This conversation began in hyp, on a Mac, and goes on here. Its turns so far are in files of this repository: "
+    "{files}. Read them first, in that order, as the conversation so far: in each, a `## You` section is what the user "
+    "said, and the `## Claude` section after it what you answered. Change none of them. Then say in a line that you have "
+    "the conversation, and wait for the user's next message."
+)
+TAKE_BACK = "The conversation goes on on the Mac now. Reply only: OK."  # typed as a teleported one starts: so it is recorded here
+# What a pseudo-terminal's Claude Code is not told: that it runs inside another, whose transcripts it would then not save.
+CHILD_MARKERS = ("CLAUDECODE", "CLAUDE_CODE_CHILD_SESSION", "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_SESSION_ID", "CLAUDE_PID")
 # Remote Control's own consent, asked as /remote-control first connects -- spaces gone: accepted, as what was asked for.
 CONSENT = "enableremotecontrolopens"
 # What Claude Code asks only once, interactively -- spaces gone, as its screen draws them -- and what to do instead.
@@ -125,6 +140,11 @@ class Session:
         # The session whose conversation a new branch's first turn forks: one holding its first *fork* turns. The session,
         # not its id: handed off meanwhile, it may be given another (`fresh_copy`), and the old one's record go.
         self.source = source
+        # Which Claude Code conversations hold its path's turns (`held`): `id` those after its first *start*; *earlier*,
+        # [(id, start, upto)], those before -- each turns start+1..upto -- where it was taken back from the cloud, which
+        # went on from what it read of them, not from a conversation that holds them.
+        self.start, self.earlier = 0, []
+        self.cloud = None  # the claude.ai cloud session it is handed off to, while it is: `session_…` (`CloudHandoff`)
         stamp = self.started.replace("-", "").replace(":", "").replace("T", "-")
         # By its start and its id: two sessions begun in one second are two files, not one written over.
         name = f"{PREFIX}{stamp}-{self.id[:8]}.md"
@@ -144,6 +164,9 @@ class Session:
                       choice=fields.get("choice") if fields.get("choice") in MODELS else None, usage=usage,
                       updated=fields.get("updated"))
         session.model = fields.get("model")
+        session.start = int(fields.get("start") or 0)
+        session.earlier = [tuple(e) for e in fields.get("earlier") or () if isinstance(e, list) and len(e) == 3]
+        session.cloud = fields.get("cloud") or None
         parent = parent_url(md_url, fields)
         if parent is not None:
             session.fork = int(fields.get("fork") or 0)
@@ -169,8 +192,25 @@ class Session:
             owner = owner.above
         if k >= len(owner.path()):
             return owner
-        return Session(self.root, self.subdir, self.storage_options, self.command, choice=self.choice, above=owner, fork=k,
-                       source=self if self.resumable else owner)
+        source = self if self.resumable else owner
+        new = Session(self.root, self.subdir, self.storage_options, self.command, choice=self.choice, above=owner, fork=k,
+                      source=source)
+        # Its conversation is forked from whichever of the source's holds turn k: what that holds not, it holds not either.
+        start = source.start if k > source.start else next((s for _, s, u in source.earlier if s < k <= u), 0)
+        new.start, new.earlier = start, [e for e in source.earlier if e[2] <= start]
+        return new
+
+    def held(self, k):
+        """`(conversation, message)`: where turn *k* of `path` (1-based) ends, in the Claude Code conversation that holds it; None where none here does."""
+        if k > self.start:
+            conversation, n = self.id, k - self.start
+        else:
+            conversation, n = next(((e, k - s) for e, s, u in reversed(self.earlier) if s < k <= u), (None, 0))
+            if conversation is None:
+                return None
+        carry_over(conversation)
+        at = anchor(conversation, n)
+        return (conversation, at) if at is not None else None
 
     def upstream(self):
         """The turns before its own, `(asked, answered)` each: the first `fork` of its parent's `path`; none for a conversation's first branch."""
@@ -192,14 +232,13 @@ class Session:
         """
         if self.resumable:
             carry_over(self.id)  # begun under another login, Claude Code's: resumed under this one
-        at = None
+        held = None
         if not self.resumable and self.source is not None:
-            carry_over(self.source.id)
-            at = anchor(self.source.id, self.fork)
-            if at is None:
-                raise Failed(f"Claude Code has no record here of the conversation to branch from ({self.source.id}), or not of "
-                             f"its turn {self.fork}: it keeps them per machine and directory")
-        args = self._args_(at)
+            held = self.source.held(self.fork)
+            if held is None:
+                raise Failed(f"Claude Code has no record here of the conversation to branch from ({self.source.title()}), or "
+                             f"not of its turn {self.fork}: it keeps them per machine and directory")
+        args = self._args_(held)
         try:
             proc = subprocess.Popen(args, cwd=self._cwd_(), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                     stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace")
@@ -274,6 +313,10 @@ class Session:
         parent = self.above.md_url if self.above is not None else self.lost
         if parent is not None:  # a branch: its parent's file, relative to its own where it can be, and its turns kept
             fields.update(parent=_relative_(parent, self.md_url), fork=self.fork)
+        if self.start or self.earlier:  # taken back from the cloud: which conversations hold which turns
+            fields.update(start=self.start, earlier=[list(e) for e in self.earlier])
+        if self.cloud:
+            fields["cloud"] = self.cloud
         if self.model:
             fields["model"] = self.model
         if self.choice:
@@ -354,23 +397,8 @@ class Session:
         path = conversation_path(self.id)
         if path is None:
             return 0
-        added, prompt, reply = [], None, []
-        with open(path, encoding="utf-8", errors="replace") as f:
-            for line in f:
-                e = _event_(line)
-                if not e or e.get("type") not in ("user", "assistant") or e.get("isMeta") or _at_(e) < since:
-                    continue
-                text = _text_(e.get("message", {}).get("content"))
-                if e["type"] == "user":
-                    if _prompt_(e):
-                        if prompt is not None:
-                            added.append((prompt, "\n\n".join(reply)))
-                        prompt, reply = text.strip(), []
-                elif prompt is not None and text.strip():
-                    reply.append(text.strip())
-                    self.model = e.get("message", {}).get("model") or self.model
-        if prompt is not None:
-            added.append((prompt, "\n\n".join(reply)))
+        added = exchanges(path, since)
+        self.model = _model_(path) or self.model
         self.turns += added
         return len(added)
 
@@ -402,14 +430,14 @@ class Session:
         said = [SYSTEM_TOOLS if self._local_() else SYSTEM_NO_TOOLS, SYSTEM_WEB if self.web else SYSTEM_NO_WEB]
         return ",".join(tools), SYSTEM.format(root=self.root, tools=" ".join(said))
 
-    def _args_(self, at=None):
-        """The command a turn runs: the conversation resumed by its id, or begun with it -- or, *at* the last message of a
-        branch's upstream, the conversation it branches from forked there, under its id."""
+    def _args_(self, held=None):
+        """The command a turn runs: the conversation resumed by its id, or begun with it -- or, *held* `(conversation,
+        message)` where a branch's upstream ends, that conversation forked there, under its id."""
         tools, system = self._tools_()
         if self.resumable:
             which = ("--resume", self.id)
-        elif at is not None:
-            which = ("--resume", self.source.id, "--resume-session-at", at, "--fork-session", "--session-id", self.id)
+        elif held is not None:
+            which = ("--resume", held[0], "--resume-session-at", held[1], "--fork-session", "--session-id", self.id)
         else:
             which = ("--session-id", self.id)
         return [self.command or claude_command(), "-p", "--output-format", "stream-json", "--include-partial-messages",
@@ -572,6 +600,312 @@ class Handoff:
             self.problem = f"Claude Code ended before it connected{': ' + tail if tail else ''}"
 
 
+class CloudHandoff:
+    """A conversation handed off to Claude Code in the cloud: it goes on there, the Mac free to sleep, and comes back.
+
+    The cloud can only be given files, not a conversation: so the
+    conversation's files -- its own, and its parents' -- are committed and
+    pushed to the GitHub repository --dir's `.hyp-github` names (`_repository_`),
+    and a cloud session begun on it -- `claude --cloud` -- told to read them as
+    the conversation so far (CLOUD_PROMPT). Its url, read off Claude Code's
+    screen, is shown as a QR code, to open it in the Claude app, and kept in
+    the session's front matter (`Session.cloud`), so a restart does not lose
+    it. `take_back` brings it back: Claude Code's `--teleport`, the turns
+    made there added. hyp's own messages there begin HYP_MARK, and are no
+    turns.
+    """
+
+    cloud = True  # where it went, as the window says it
+    SCREEN_CHARS = 20_000  # of the screen, the last, kept to read
+    CONNECT_S = 90  # how long `claude --cloud` has to say its session's url
+    TELEPORT_S = 240  # how long a take-back has, all told
+    QUIET_S = 2.0  # how long the screen must have said nothing new, before something is typed at it
+
+    def __init__(self, session):
+        self.session = session
+        self.url = f"https://claude.ai/code/{session.cloud}" if session.cloud else None
+        self.problem = None  # why it is not handed off, where it is not
+        self.started = time.time() if session.cloud else None
+        self.pid = self.fd = None
+        self._screen_ = ""
+        self._said_ = 0.0  # when its screen last said something new
+        self._trusted_ = False  # Claude Code's question, whether to trust --dir, answered
+
+    # 2. Declared API -----------------------------------------------------------
+
+    def start(self):
+        """Push the conversation's files and begin its cloud session, on a thread of its own: its url, or why not, as it comes."""
+        self.started = time.time()
+        threading.Thread(target=self._begin_, daemon=True).start()
+
+    def alive(self):
+        return self.session.cloud is not None
+
+    def stop(self, timeout=5):
+        """End the Claude Code running here for it, if one is: the cloud session goes on."""
+        if self.pid is None:
+            return
+        pid, self.pid = self.pid, None
+        for sig in (signal.SIGTERM, signal.SIGKILL):
+            try:
+                os.kill(pid, sig)
+            except ProcessLookupError:
+                break
+            deadline = time.time() + timeout
+            while time.time() < deadline:
+                try:
+                    if os.waitpid(pid, os.WNOHANG) != (0, 0):
+                        break
+                except ChildProcessError:
+                    break
+                self._drain_(0.1)
+            else:
+                continue
+            break
+        try:
+            os.close(self.fd)
+        except OSError:
+            pass
+
+    def qr(self):
+        """The url's QR code, as rows of 0 and 1 -- dark -- quiet zone included; None before the url is."""
+        if self.url is None:
+            return None
+        return [list(row) for row in segno.make(self.url, error="m").matrix_iter(border=2)]
+
+    def take_back(self):
+        """Bring the conversation back from the cloud: how many turns were made there, now added to the session's.
+
+        Claude Code's `--teleport` loads the cloud conversation here and checks
+        out the branch the cloud pushed its changes to, if any: so first what
+        is not committed is set aside (`git stash`), and after, the branch
+        the notes were on is checked out again, the cloud's merged into it and
+        pushed, and what was set aside put back. TAKE_BACK is typed at it, so
+        that Claude Code records the conversation here; the turns made there
+        are read from that record, and the session goes on in it -- the turns
+        before, held by the conversation it went on from (`Session.earlier`).
+        Raises `Failed`, saying why, where it cannot be brought back.
+        """
+        s = self.session
+        top, remote, branch = _repository_(s.root)
+        began = time.time()
+        stashed = bool(_git_(top, "status", "--porcelain"))
+        if stashed:
+            _git_(top, "stash", "push", "--include-untracked", "-m", f"hyp: taking back {s.title()}")
+        merged = None
+        try:
+            self._teleport_()
+            here = _git_(top, "branch", "--show-current")
+            if here and here != branch:  # the cloud's branch, checked out: its changes merged into the notes'
+                _git_(top, "checkout", branch)
+                try:
+                    _git_(top, "merge", "--no-edit", here)
+                    merged = here
+                except Failed as e:
+                    _git_(top, "merge", "--abort")
+                    raise Failed(f"what the cloud changed, on {here}, conflicts with {branch}: merge it by hand ({e})") from None
+        finally:
+            if stashed:
+                try:
+                    _git_(top, "stash", "pop")
+                except Failed as e:
+                    raise Failed(f"what was not committed is kept in git's stash, not put back: {e}") from None
+        if merged:
+            _git_(top, "push", remote, branch)
+        record = _teleported_(s.cloud, began)
+        came = exchanges(record) if record is not None else []
+        if came:
+            before = len(s.path())
+            s.earlier.append((s.id, s.start, before))
+            s.id, s.start, s.resumable = posixpath.splitext(os.path.basename(record))[0], before, True
+            s.turns += came
+            s.model = _model_(record) or s.model
+        s.cloud = None
+        return len(came)
+
+    # 4. Helpers ----------------------------------------------------------------
+
+    def _begin_(self):
+        s = self.session
+        try:
+            top, remote, branch = _repository_(s.root)
+            files = _conversation_files_(s, top)
+            _git_(top, "add", "--", *(f for f, _ in files))
+            if _git_(top, "diff", "--cached", "--name-only"):
+                _git_(top, "commit", "-m", f"hyp: {s.title()}, to the cloud", "--", *(f for f, _ in files))
+            _git_(top, "push", remote, branch)
+        except Failed as e:
+            self.problem = str(e)
+            return
+        said = ", then ".join(f"{f} ({how})" for f, how in files)
+        prompt = HYP_MARK + CLOUD_PROMPT.format(files=said)
+        self._spawn_([claude_command(), "--cloud", prompt])
+        deadline = time.time() + self.CONNECT_S
+        while self.pid is not None and time.time() < deadline:
+            self._drain_(0.5)
+            if (m := CLOUD_SESSION.search(self._screen_)) is not None:
+                self.stop()  # the cloud session goes on: what began it here is done
+                s.cloud, self.url = m[1], m[0]
+                s.save()  # where it went, in its file: a restart of hyp takes it back from there
+                return
+        tail = " ".join(self._screen_.split())[-200:]
+        self.stop()
+        self.problem = f"Claude Code did not begin a cloud session{': ' + tail if tail else ''}"
+
+    def _teleport_(self):
+        """Run `claude --teleport` on the session's cloud session, type TAKE_BACK once it is loaded, then /exit; raises `Failed` where it does not load."""
+        self._spawn_([claude_command(), "--teleport", self.session.cloud])
+        deadline, typed, exited = time.time() + self.TELEPORT_S, None, False
+        try:
+            while self.pid is not None and time.time() < deadline:
+                said = self._drain_(0.5)
+                squashed = re.sub(r"\s+", "", self._screen_).lower()
+                quiet = not said and time.time() - self._said_ > self.QUIET_S
+                if typed is None and "sessionresumed" in squashed and quiet:
+                    self._type_(HYP_MARK + TAKE_BACK)
+                    typed = len(squashed)
+                elif typed is not None and not exited and len(squashed) > typed + 40 and quiet:
+                    self._type_("/exit")
+                    exited = True
+                if os.waitpid(self.pid, os.WNOHANG) != (0, 0):
+                    self.pid = None
+            if typed is None:
+                tail = " ".join(self._screen_.split())[-200:]
+                raise Failed(f"Claude Code could not bring the cloud session back{': ' + tail if tail else ''}")
+        finally:
+            self.stop()
+
+    def _spawn_(self, args):
+        self._screen_, self._said_, self._trusted_ = "", time.time(), False
+        pid, fd = pty.fork()
+        if pid == 0:  # the child: Claude Code, in --dir
+            try:
+                os.chdir(self.session._cwd_())
+                for name in CHILD_MARKERS:
+                    os.environ.pop(name, None)
+                os.environ["TERM"] = "xterm-256color"
+                os.execv(args[0], args)
+            finally:
+                os._exit(127)
+        self.pid, self.fd = pid, fd
+
+    def _drain_(self, seconds):
+        """Read what its screen says for up to *seconds*, answering the trust question; whether it said anything."""
+        try:
+            ready, _, _ = select.select([self.fd], [], [], seconds)
+            chunk = os.read(self.fd, 65536) if ready else b""
+        except OSError:
+            return False
+        if not chunk:
+            return False
+        self._said_ = time.time()
+        self._screen_ = (self._screen_ + _plain_(chunk.decode("utf-8", "replace")))[-self.SCREEN_CHARS:]
+        if not self._trusted_ and "itrustthisfolder" in re.sub(r"\s+", "", self._screen_[-2000:]).lower():
+            self._trusted_ = True  # hyp's own --dir, which its sessions run in already: trusted
+            time.sleep(0.5)
+            os.write(self.fd, b"\x1b[B")
+            time.sleep(0.3)
+            os.write(self.fd, b"\r")
+        return True
+
+    def _type_(self, text):
+        try:
+            os.write(self.fd, text.encode())
+            time.sleep(0.5)
+            os.write(self.fd, b"\r")
+        except OSError:
+            pass
+
+
+def github_repo(root):
+    """The GitHub repository --dir *root*'s notes are pushed to, as its GITHUB_FILE names it: `owner/name`; None without one."""
+    try:
+        with open(os.path.join(root, GITHUB_FILE), encoding="utf-8") as f:
+            words = f.read().split()
+    except OSError:
+        return None
+    said = words[0] if words else ""
+    m = re.search(r"(?:github\.com[:/])?([\w.-]+/[\w.-]+?)(?:\.git)?/?$", said)
+    return m[1] if m else None
+
+
+def _repository_(root):
+    """`(top, remote, branch)` of --dir *root*'s git repository: its top directory, the remote GITHUB_FILE names, the branch checked out.
+
+    Raises `Failed`, saying what to do, where there is no such thing.
+    """
+    if "://" in str(root):
+        raise Failed("the cloud is given a git repository, and --dir is a url: hand off to the phone instead")
+    repo = github_repo(root)
+    if repo is None:
+        raise Failed(f"to hand off to the cloud, write the GitHub repository {root}'s notes go to -- owner/name -- into "
+                     f"{os.path.join(root, GITHUB_FILE)}")
+    try:
+        top = _git_(root, "rev-parse", "--show-toplevel")
+    except Failed:
+        raise Failed(f"{root} is not a git repository: git init there, git remote add origin git@github.com:{repo}.git, "
+                     "commit and push") from None
+    found = re.compile(rf"github\.com[:/]{re.escape(repo)}(\.git)?/?$", re.I)
+    try:  # each remote's url as configured, not as git's url.<base>.insteadOf would rewrite it
+        urls = _git_(top, "config", "--get-regexp", r"^remote\..*\.url$").splitlines()
+    except Failed:
+        urls = []
+    remote = next((line.split()[0][len("remote."):-len(".url")] for line in urls
+                   if len(line.split()) >= 2 and found.search(line.split()[1])), None)
+    if remote is None:
+        raise Failed(f"no remote of {top} is github.com/{repo}: git remote add origin git@github.com:{repo}.git")
+    branch = _git_(top, "branch", "--show-current")
+    if not branch:
+        raise Failed(f"{top} has no branch checked out: check one out, to push the notes to")
+    own = os.path.realpath(config_dir())
+    if own.startswith(os.path.realpath(top) + os.sep):
+        # A take-back sets aside what is not committed -- which would be Claude Code's own login and records, while it runs
+        # from them -- and a handoff could push them: so they must be no part of the repository.
+        try:
+            _git_(top, "check-ignore", "-q", own)
+        except Failed:
+            raise Failed(f"Claude Code's own directory, {own}, is in the repository and not ignored: add "
+                         f"{os.path.relpath(own, top)}/ to {os.path.join(top, '.gitignore')}") from None
+    return top, remote, branch
+
+
+def _git_(cwd, *args):
+    """git *args* run in *cwd*: what it printed; raises `Failed` with what it said, where it fails."""
+    try:
+        done = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, encoding="utf-8", errors="replace")
+    except OSError as e:
+        raise Failed(f"could not run git: {e}") from None
+    if done.returncode:
+        said = (done.stderr or done.stdout).strip().splitlines()
+        raise Failed(f"git {args[0]}: {said[-1] if said else f'exited with {done.returncode}'}")
+    return done.stdout.strip()
+
+
+def _conversation_files_(session, top):
+    """The files a conversation's turns are in, oldest first, relative to *top*, each with how many of its turns are the conversation's: `[(path, how)]`."""
+    chain, s = [], session
+    while s is not None:
+        chain.append(s)
+        s = s.above
+    chain.reverse()
+    out = []
+    for n, s in enumerate(chain):
+        rel = os.path.relpath(s.md_url, top)
+        if n + 1 < len(chain):
+            keep = chain[n + 1].fork - s.fork  # its own turns, up to where the next goes on from it
+            out.append((rel, f"its first {keep} turn{'s' * (keep != 1)}"))
+        else:
+            out.append((rel, "all of its turns"))
+    return out
+
+
+def _teleported_(cloud, since):
+    """Claude Code's record here of the cloud session *cloud*, as `--teleport` wrote it since *since*: the newest; None for none."""
+    found = [p for p in glob.glob(os.path.join(config_dir(), "projects", "*", "*.jsonl")) if os.path.getmtime(p) >= since]
+    found = [p for p in found if cloud in open(p, encoding="utf-8", errors="replace").read()]
+    return max(found, key=os.path.getmtime) if found else None
+
+
 def config_dir():
     """Where Claude Code keeps its login and its conversations, for what hyp runs: `$CLAUDE_CONFIG_DIR`, else its own default."""
     return os.environ.get("CLAUDE_CONFIG_DIR") or DEFAULT_CONFIG
@@ -716,19 +1050,67 @@ def anchor(session_id, k):
     path = conversation_path(session_id)
     if path is None:
         return None
-    count, last = 0, None
+    count, last, hyps = 0, None, False
+    for e in _records_(path):
+        if e["type"] == "user" and _prompt_(e):
+            if count == k:
+                return last
+            count, last, hyps = count + 1, None, False
+        elif e["type"] == "user" and _hyps_(e):
+            hyps = True  # hyp's own message: what answers it is no turn's
+        elif e["type"] == "assistant" and count == k and not hyps:
+            last = e.get("uuid") or last
+    return last if count == k else None
+
+
+def exchanges(path, since=None):
+    """The turns Claude Code's record at *path* holds, `(asked, answered)` each, in order -- those since *since*, a time, if given.
+
+    Each prompt typed, and what Claude answered in text; what Claude Code
+    adds besides -- its commands' output, its notes, tool results -- and
+    hyp's own messages, with what answered them, are left out.
+    """
+    out, prompt, reply = [], None, []
+    for e in _records_(path):
+        if since is not None and _at_(e) < since:
+            continue
+        if e["type"] == "user" and (_prompt_(e) or _hyps_(e)):
+            if prompt is not None:
+                out.append((prompt, "\n\n".join(reply)))
+            prompt = _text_(e.get("message", {}).get("content")).strip() if _prompt_(e) else None
+            reply = []
+        elif e["type"] == "assistant" and prompt is not None:
+            text = _text_(e.get("message", {}).get("content")).strip()
+            if text:
+                reply.append(text)
+    if prompt is not None:
+        out.append((prompt, "\n\n".join(reply)))
+    return out
+
+
+def _records_(path):
+    """The user's and Claude's records of Claude Code's record at *path*, in order: none of its notes.
+
+    A message that came while Claude was answering is recorded as a queued
+    command, not a user's: it is given as one, a prompt of its own.
+    """
     with open(path, encoding="utf-8", errors="replace") as f:
         for line in f:
             e = _event_(line)
-            if not e or e.get("type") not in ("user", "assistant") or e.get("isMeta"):
+            if not e:
                 continue
-            if e["type"] == "user" and _prompt_(e):
-                if count == k:
-                    return last
-                count, last = count + 1, None
-            elif e["type"] == "assistant" and count == k:
-                last = e.get("uuid") or last
-    return last if count == k else None
+            queued = e.get("attachment") if e.get("type") == "attachment" else None
+            if isinstance(queued, dict) and queued.get("type") == "queued_command" and queued.get("prompt"):
+                yield {"type": "user", "uuid": e.get("uuid"), "timestamp": e.get("timestamp"),
+                       "message": {"role": "user", "content": str(queued["prompt"])}}
+            elif e.get("type") in ("user", "assistant") and not e.get("isMeta"):
+                yield e
+
+
+def _model_(path):
+    """The model Claude last answered on, in Claude Code's record at *path*; None for none."""
+    models = [e.get("message", {}).get("model") for e in _records_(path) if e["type"] == "assistant"]
+    return next((m for m in reversed(models) if m), None)
 
 
 def parent_url(md_url, fields):
@@ -755,9 +1137,14 @@ def _relative_(url, start):
 
 
 def _prompt_(event):
-    """Whether Claude Code's record *event*, a user's, is a prompt typed: not a tool's result, a command's output, a reminder or a summary."""
+    """Whether Claude Code's record *event*, a user's, is a prompt typed: not a tool's result, a command's output, a reminder, a summary, or hyp's own."""
     text = _text_(event.get("message", {}).get("content"))
-    return bool(text.strip()) and not text.lstrip().startswith("<") and not event.get("isCompactSummary")
+    return bool(text.strip()) and not text.lstrip().startswith(("<", HYP_MARK)) and not event.get("isCompactSummary")
+
+
+def _hyps_(event):
+    """Whether Claude Code's record *event*, a user's, is hyp's own message: a cloud handoff's opening, a take-back's."""
+    return _text_(event.get("message", {}).get("content")).lstrip().startswith(HYP_MARK)
 
 
 def _text_(content):
@@ -999,7 +1386,8 @@ class ClaudeWindow(EditableTitle, DocWindow):
         if self.naming is not None:
             hint = "Enter: keep this title · Esc: put it back"
         elif self.handoff is not None:
-            hint = "on the phone · take back: go on here, with what was said there"
+            where = "in the cloud" if getattr(self.handoff, "cloud", False) else "on the phone"
+            hint = f"{where} · take back: go on here, with what was said there"
         elif self.busy():
             hint = "Claude is answering …"
         elif self.session.above is not None and not self.session.own():
@@ -1058,11 +1446,16 @@ class ClaudeWindow(EditableTitle, DocWindow):
             top = y0 + side + 10
             # Whose claude.ai it is on: a phone signed into another account cannot open it.
             whose = (self.account or "").split(" · ")[0] or "the account Claude Code is logged in as"
-            lines = [(font, h.url, TEXT), (small, "scan with the phone: the Claude app, or claude.ai/code -- the session goes on there", DIM),
+            where = ("in the cloud: scan it with the phone -- the Claude app, or claude.ai/code -- and go on there, the Mac free to sleep"
+                     if getattr(h, "cloud", False) else
+                     "scan with the phone: the Claude app, or claude.ai/code -- the session goes on there")
+            lines = [(font, h.url, TEXT), (small, where, DIM),
                      (small, f"on {whose}'s claude.ai: sign the phone into it, or switch Claude Code with `claude auth login`", DIM)]
         else:
             top = b.y + 20
-            lines = [(small, h.problem, (240, 120, 110))] if h.problem else [(font, "handing off: connecting to Remote Control …", DIM)]
+            waiting = ("handing off: pushing the conversation, and beginning a cloud session …" if getattr(h, "cloud", False)
+                       else "handing off: connecting to Remote Control …")
+            lines = [(small, h.problem, (240, 120, 110))] if h.problem else [(font, waiting, DIM)]
         self.handoff_lines = [text for _, text, _ in lines]  # as drawn
         for f, text, color in lines:
             img = f.render(fit(f, text, b.width - 20), True, color)

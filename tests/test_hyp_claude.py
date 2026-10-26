@@ -33,6 +33,47 @@ if sys.argv[1:3] == ["auth", "status"]:  # FAKE_ACCOUNT, as `claude auth status 
     print(os.environ.get("FAKE_ACCOUNT", json.dumps({{"loggedIn": True, "email": "me@example.com", "orgName": "Example Org",
                                                       "orgId": "org-now", "subscriptionType": "team"}})))
     sys.exit(0)
+if "--cloud" in sys.argv:  # a cloud session begun: its url said, and Claude Code left running
+    import time
+    with open(os.environ["FAKE_LOG"], "a") as f:
+        f.write(json.dumps({{"argv": sys.argv[1:], "cwd": os.getcwd(), "cloud": sys.argv[sys.argv.index("--cloud") + 1]}}) + "\n")
+    if os.environ.get("FAKE_CLOUD_FAIL"):
+        print(os.environ["FAKE_CLOUD_FAIL"], flush=True)
+        sys.exit(1)
+    print("Created cloud session: a task\nView: https://claude.ai/code/session_01FAKEcloud?from=cli&m=0\n"
+          "Resume with: claude --teleport session_01FAKEcloud", flush=True)
+    while True:
+        time.sleep(0.2)
+if "--teleport" in sys.argv:  # a cloud session brought here: its record written once something is typed, as Claude Code's is
+    import subprocess, time, uuid
+    cloud = sys.argv[sys.argv.index("--teleport") + 1]
+    with open(os.environ["FAKE_LOG"], "a") as f:
+        f.write(json.dumps({{"argv": sys.argv[1:], "cwd": os.getcwd()}}) + "\n")
+    if os.environ.get("FAKE_CLOUD_FILE"):  # what the cloud changed: on a branch of its own, checked out
+        subprocess.run(["git", "checkout", "-q", "-b", "claude/fake-cloud"], check=True)
+        with open(os.environ["FAKE_CLOUD_FILE"], "w") as f:
+            f.write("written in the cloud\n")
+        subprocess.run(["git", "add", "-A"], check=True)
+        subprocess.run(["git", "commit", "-q", "-m", "from the cloud"], check=True)
+    print("Teleporting session\nSession resumed\n\u276f ", flush=True)
+    typed = sys.stdin.readline().strip()
+    home = os.path.join(os.environ["CLAUDE_CONFIG_DIR"], "projects", "here")
+    os.makedirs(home, exist_ok=True)
+    rec = lambda kind, content: json.dumps({{"type": kind, "uuid": str(uuid.uuid4()), "timestamp": "2026-10-26T10:00:00Z",
+                                             "message": {{"role": kind, "content": content}}}}) + "\n"
+    with open(os.path.join(home, str(uuid.uuid4()) + ".jsonl"), "w") as f:
+        f.write(json.dumps({{"type": "attachment", "attachment": {{"type": "remote_session_change", "url": "https://claude.ai/code/" + cloud}}}}) + "\n")
+        f.write(rec("user", "[hyp] This conversation began in hyp ... read them first."))
+        f.write(rec("assistant", [{{"type": "text", "text": "I have the conversation."}}]))
+        for said, answer in json.loads(os.environ.get("FAKE_CLOUD", "[]")):
+            f.write(rec("user", said))
+            f.write(rec("assistant", [{{"type": "text", "text": answer}}]))
+        f.write(rec("user", typed))
+        f.write(rec("assistant", [{{"type": "text", "text": "OK"}}]))
+    print("OK", flush=True)
+    with open(os.environ["FAKE_LOG"], "a") as f:
+        f.write(json.dumps({{"typed": typed, "then": sys.stdin.readline().strip()}}) + "\n")
+    sys.exit(0)
 if "--resume" in sys.argv and "-p" not in sys.argv:  # a session handed off: interactive, /remote-control typed at its prompt
     import time
     from datetime import datetime, timezone
@@ -94,7 +135,8 @@ if os.environ.get("FAKE_RECORD"):  # each turn recorded, as Claude Code does: a 
             put({{"type": "result", "subtype": "error_during_execution", "is_error": True, "result": f"no message {{at}}"}})
             sys.exit(1)
         open(record, "w").writelines(kept)
-seen = [json.loads(ln)["message"]["content"] for ln in open(record)] if record and os.path.exists(record) else []
+seen = [json.loads(ln).get("message", {{}}).get("content") for ln in open(record)] if record and os.path.exists(record) else []
+seen = [c for c in seen if isinstance(c, str) and not c.startswith("[hyp] ")]
 seen = "|".join(c.strip() for c in seen if isinstance(c, str)) + ("|" if seen else "") + text.strip()
 model = {{"haiku": "claude-haiku-5-5", "sonnet": "claude-sonnet-5-5"}}.get(sys.argv[sys.argv.index("--model") + 1] if "--model" in sys.argv else "", "claude-opus-5-5")
 put({{"type": "system", "subtype": "init", "session_id": sid, "model": model}})
@@ -132,7 +174,8 @@ def cli(tmp_path, monkeypatch):
     monkeypatch.setenv("FAKE_LOG", str(log))
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "claude-config"))  # where the conversations handed off are recorded
     for v in ("FAKE_REPLY", "FAKE_FAIL", "FAKE_STDERR", "FAKE_TOOL", "FAKE_ACCOUNT", "FAKE_PHONE", "FAKE_FIRST_RUN",
-              "FAKE_API_BILLING", "FAKE_SILENT", "FAKE_CONSENT", "FAKE_RECORD"):
+              "FAKE_API_BILLING", "FAKE_SILENT", "FAKE_CONSENT", "FAKE_RECORD", "FAKE_CLOUD", "FAKE_CLOUD_FILE",
+              "FAKE_CLOUD_FAIL"):
         monkeypatch.delenv(v, raising=False)
     return NS(runs=lambda: [json.loads(ln) for ln in log.read_text().splitlines()] if log.exists() else [])
 
@@ -251,6 +294,7 @@ def app(saved, monkeypatch):
     a.run_async = lambda fn, then: then(fn())
     a.refreshed = 0
     a.settings["sessions on remote"] = False  # on, by default: the tests of handing off turn it on
+    a.settings["hand off to the cloud"] = False  # on, by default: Remote Control's tests are of the phone; the cloud's turn it on
 
     def refresh(progress):
         a.refreshed += 1
@@ -1816,3 +1860,137 @@ def test_turns_claude_cannot_name_keep_their_first_words_and_are_not_asked_again
     a.__snapshot_arrived__()
     assert len(asked) == 1, "not asked again till hyp starts again"
     assert a.snap.points[_turn_(a, s.md_url, 0)]["words"] == "What is alpha, at length …"
+
+
+# -- handing off to the cloud ------------------------------------------------------------------------------------------
+
+
+def _sh_(cwd, *args):
+    import subprocess
+
+    return subprocess.run(args, cwd=cwd, check=True, capture_output=True, text=True).stdout.strip()
+
+
+@pytest.fixture
+def github(tree, tmp_path):
+    """*tree* a git repository whose remote is github.com/me/notes, as its .hyp-github says: pushed, by git's url.insteadOf, to a bare one here."""
+    bare = tmp_path / "github.git"
+    _sh_(tmp_path, "git", "init", "-q", "--bare", str(bare))
+    _sh_(tree, "git", "init", "-q", "-b", "main")
+    for k, v in (("user.email", "me@example.com"), ("user.name", "Me"), (f"url.{bare}.insteadOf", "git@github.com:me/notes.git")):
+        _sh_(tree, "git", "config", k, v)
+    _sh_(tree, "git", "remote", "add", "origin", "git@github.com:me/notes.git")
+    (tree / claude.GITHUB_FILE).write_text("me/notes\n")
+    _sh_(tree, "git", "add", "-A")
+    _sh_(tree, "git", "commit", "-q", "-m", "notes")
+    _sh_(tree, "git", "push", "-q", "-u", "origin", "main")
+    return NS(bare=bare, log=lambda: _sh_(tree, "git", "--git-dir", str(bare), "log", "--format=%s", "main"))
+
+
+def test_a_cloud_handoff_pushes_the_conversation_and_begins_a_cloud_session_told_to_read_it(cli, tree, github, monkeypatch):
+    monkeypatch.setenv("FAKE_RECORD", "1")
+    s = claude.Session(str(tree))
+    s.send("What is alpha?")
+    s.save()
+    h = claude.CloudHandoff(s)
+    h.start()
+    assert _until_(lambda: h.url is not None or h.problem is not None) and h.problem is None
+    assert h.url == "https://claude.ai/code/session_01FAKEcloud" and s.cloud == "session_01FAKEcloud" and h.qr() is not None
+    assert docview.front_matter(open(s.md_url).read())[0]["cloud"] == "session_01FAKEcloud", "where it went, in its file"
+    assert github.log().splitlines()[0] == "hyp: What is alpha?, to the cloud", "the conversation pushed first"
+    told = next(r["cloud"] for r in cli.runs() if "cloud" in r)
+    assert told.startswith(claude.HYP_MARK) and f"{os.path.basename(s.md_url)} (all of its turns)" in told
+    _until_(lambda: h.pid is None)
+    assert h.pid is None, "what began it here is done: the cloud session goes on"
+
+
+def test_a_conversation_taken_back_from_the_cloud_has_its_turns_and_its_changes_and_goes_on_here(cli, tree, github, monkeypatch):
+    monkeypatch.setenv("FAKE_RECORD", "1")
+    monkeypatch.setenv("FAKE_REPLY", "seen:{seen}")
+    s = claude.Session(str(tree))
+    s.send("apple")
+    s.save()
+    h = claude.CloudHandoff(s)
+    h.start()
+    assert _until_(lambda: s.cloud is not None)
+    first = s.id
+    (tree / "mine.md").write_text("not committed\n")  # set aside while the cloud's branch is checked out, and put back
+    monkeypatch.setenv("FAKE_CLOUD", json.dumps([["banana", "From the cloud."], ["cherry", "Again."]]))
+    monkeypatch.setenv("FAKE_CLOUD_FILE", "cloud.md")
+    assert h.take_back() == 2
+    assert s.path()[-2:] == [("banana", "From the cloud."), ("cherry", "Again.")] and s.cloud is None
+    assert s.id != first and s.start == 1 and s.earlier == [(first, 0, 1)], "turn 1 held by the first conversation, the rest by this"
+    assert _sh_(tree, "git", "branch", "--show-current") == "main" and (tree / "cloud.md").exists() and (tree / "mine.md").exists()
+    assert "from the cloud" in github.log(), "the cloud's change merged, and pushed"
+    typed = next(r for r in cli.runs() if "typed" in r)
+    assert typed == {"typed": claude.HYP_MARK + claude.TAKE_BACK, "then": "/exit"}
+    assert s.held(1)[0] == first and s.held(2)[0] == s.id and s.held(3)[0] == s.id, "a branch forks whichever holds its turn"
+    s.save()
+    again = claude.Session.load(s.md_url, str(tree))
+    assert (again.start, again.earlier, again.cloud) == (1, [(first, 0, 1)], None) and len(again.path()) == 3
+    assert again.send("date") == "seen:banana|cherry|date", "it goes on here from the conversation taken back"
+
+
+@pytest.mark.parametrize("setup, said", [
+    ("no file", "write the GitHub repository"),
+    ("no repository", "is not a git repository"),
+    ("another remote", "no remote of"),
+    ("claude code inside", "is in the repository and not ignored: add .claude/"),
+])
+def test_a_cloud_handoff_says_what_is_missing(cli, tree, monkeypatch, setup, said):
+    monkeypatch.setenv("FAKE_RECORD", "1")
+    s = claude.Session(str(tree))
+    s.send("What is alpha?")
+    s.save()
+    if setup != "no file":
+        (tree / claude.GITHUB_FILE).write_text("me/notes\n")
+    if setup == "another remote":
+        _sh_(tree, "git", "init", "-q", "-b", "main")
+        _sh_(tree, "git", "remote", "add", "origin", "git@github.com:someone/else.git")
+    if setup == "claude code inside":  # hyp's own login in --dir, not ignored: a take-back would stash it
+        _sh_(tree, "git", "init", "-q", "-b", "main")
+        _sh_(tree, "git", "remote", "add", "origin", "git@github.com:me/notes.git")
+        (tree / ".claude").mkdir()
+        monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tree / ".claude"))
+    h = claude.CloudHandoff(s)
+    h.start()
+    assert _until_(lambda: h.problem is not None) and said in h.problem and s.cloud is None
+
+
+def test_docs_hands_off_to_the_cloud_by_default_and_takes_it_back_when_reopened_after_a_restart(app, saved, github, monkeypatch):
+    tree, url = saved
+    assert docs.HypDocs.KEPT["hand off to the cloud"] is True
+    app.settings.update({"hand off to the cloud": True, "sessions on remote": True})
+    app.__click_point__(_turn_(app, url, 0), 0.0)
+    window = app.center
+    app._close_(window)
+    assert isinstance(window.handoff, claude.CloudHandoff) and "in the cloud" in app.status
+    assert _until_(lambda: window.session.cloud is not None)
+
+    restarted = docs.HypDocs(engine=None, worker=Worker(), args=app.args)  # hyp started again: what it held, gone
+    restarted.run_async = lambda fn, then: then(fn())
+    restarted.engine, restarted.snap = app.engine, app.snap
+    restarted.settings.update({"sessions on remote": False, "hand off to the cloud": True})
+    monkeypatch.setenv("FAKE_CLOUD", json.dumps([["And from the phone?", "Answered in the cloud."]]))
+    restarted.__click_point__(_turn_(restarted, url, 0), 0.0)
+    back = restarted.center
+    assert back.handoff is None and back.note == "1 turn from the cloud", "taken back, as its file said where it was"
+    assert back.session.turns[-1] == ("And from the phone?", "Answered in the cloud.") and back.session.cloud is None
+    fields = docview.front_matter(open(url).read())[0]
+    assert "cloud" not in fields and "Answered in the cloud." in open(url).read()
+
+
+def test_a_message_queued_while_claude_answered_is_a_turn_of_its_own(cli):
+    events = [{"type": "user", "uuid": "h", "message": {"content": claude.HYP_MARK + "read the files"}},
+              {"type": "assistant", "uuid": "a0", "message": {"content": [{"type": "tool_use"}]}},
+              {"type": "attachment", "uuid": "q", "attachment": {"type": "queued_command", "prompt": "And cherry?"}},
+              {"type": "assistant", "uuid": "a1", "message": {"content": [{"type": "text", "text": "Read. Cherry too."}]}},
+              {"type": "user", "uuid": "u2", "message": {"content": "And date?"}},
+              {"type": "assistant", "uuid": "a2", "message": {"content": [{"type": "text", "text": "Date."}]}}]
+    home = os.path.join(os.environ["CLAUDE_CONFIG_DIR"], "projects", "here")
+    os.makedirs(home, exist_ok=True)
+    path = os.path.join(home, "queued.jsonl")
+    with open(path, "w") as f:
+        f.writelines(json.dumps(e) + "\n" for e in events)
+    assert claude.exchanges(path) == [("And cherry?", "Read. Cherry too."), ("And date?", "Date.")]
+    assert [claude.anchor("queued", k) for k in (1, 2)] == ["a1", "a2"]

@@ -395,6 +395,54 @@ reports the quota, so until one has it says it is known after a turn. The choice
 the totals are kept in the front matter (`choice`, `tokens_in`,
 `tokens_out`, `cost_usd`), so a session reopened goes on from them.
 
+**Handing a conversation to the cloud.** By default -- the setting **hand
+off to the cloud**, kept with the corpus -- **remote** hands a conversation
+to a cloud session of Claude Code's, on claude.ai: it goes on there, in the
+Claude app or at claude.ai/code, the Mac free to sleep, and comes back when
+it is opened here again (`claude.CloudHandoff`).
+
+```bash
+cd ~/THINK
+echo dkarpeyev/hyp-cloud-think > .hyp-github     # the GitHub repository its notes are pushed to
+echo .claude/ >> .gitignore                      # hyp's own Claude Code login and records: never in the repository
+git init && git remote add origin git@github.com:dkarpeyev/hyp-cloud-think.git
+git add -A && git commit -m notes && git push -u origin main
+```
+
+The directory scanned (`--dir`) must be a git repository with a remote at
+the GitHub repository its `.hyp-github` names -- `owner/name` -- with the
+Claude GitHub app installed on it, and Claude Code's own directory, where it
+is inside, ignored: the window says what is missing. The cloud can be given
+files, not a conversation, so a handoff commits the conversation's files --
+its own, and its parents' -- pushes them, and begins a cloud session on the
+repository (`claude --cloud`), told to read them as the conversation so far
+and to change none of them; its url is shown as a QR code, to scan with the
+phone, and kept in the conversation's front matter (`cloud`), so that a
+restart of hyp does not lose it. Opening it here takes it back:
+
+- what is not committed is set aside (`git stash`), and Claude Code's
+  `--teleport` brings the cloud session here, checking out the branch it
+  pushed its changes to, if it changed any;
+- a line is typed at it, so that Claude Code records the conversation here,
+  and it is ended;
+- the branch the notes were on is checked out again, the cloud's merged into
+  it and pushed -- a conflict is left for you to merge, and said -- and what
+  was set aside is put back;
+- the turns made in the cloud are added to the conversation's file, and it
+  goes on here from the conversation teleported. A message sent while Claude
+  was still answering counts as a turn of its own.
+
+hyp's own messages -- the cloud session's first, and the take-back's line --
+begin `[hyp]`, and are no turns: neither shown nor counted. The turns before
+the cloud are held by the conversation it was handed off from, and the
+file says so (`start`, `earlier`): a branch from one of them forks that
+conversation, and one from a later turn the conversation taken back. In
+the cloud, Claude has the earlier turns as it read them, not as it said
+them: it does not recall its own tool calls. Each handoff is a cloud
+session of its own; they stay on claude.ai, to archive there. With the
+setting off, **remote** hands the conversation to the phone by Remote
+Control, below.
+
 **Handing a session to a phone.** A session goes on on a phone -- the Claude
 app, or claude.ai/code -- through Claude Code's Remote Control, and comes back.
 hyp runs a turn at a time (`claude -p`), and Remote Control needs a session
@@ -422,8 +470,10 @@ hyp's own configuration directory only, and the markdown follows the copy.
   -- are added, and the session saved and embedded.
 - **Every session is on remote** but the one open here, with the setting
   **sessions on remote** (on by default): each with a turn to hand off is
-  handed off as hyp starts, one at a time, and again as its window closes; it
-  is in the phone's list of sessions as `hyp · <title>`. **Opening** one here
+  handed off as its window closes -- to the cloud, or by Remote Control -- and,
+  by Remote Control only, as hyp starts, one at a time (to the cloud, that
+  would be a cloud session each, at every start); it is in the phone's list
+  of sessions as `hyp · <title>`. **Opening** one here
   takes it back. Each on remote is a Claude Code of its own, about 250 MB. A
   session on remote goes on only while hyp runs; quit, it goes offline, and reopened later, what
   was said anywhere since it was saved -- the phone, a terminal -- comes in all

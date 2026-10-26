@@ -475,6 +475,8 @@ class HypDocs(Hyp):
     HINT = ("click: open, or go on from a turn · right-click: place · drag: move · scroll: zoom · Tab: next layer"
             " · double-click outside: reset")
     LAYERS = ("disk", "tiles", "center")
+    # The settings kept with the corpus, in its settings.json, as they are turned on and off: and what each is till then.
+    KEPT = {"web access": False, "hand off to the cloud": True}
     CLAUDE_AREA = 1 / 3  # of the window's, a Claude session's window takes, in its middle -- and a markdown being written
     TYPED = (claude.ClaudeWindow, notes.NoteWindow)  # windows typed into: text input on while one is open
 
@@ -532,9 +534,10 @@ class HypDocs(Hyp):
         # Every session not open here is on remote -- handed off as hyp starts, and as its window closes -- and one
         # opened here is taken back.
         self.settings = {**self.settings, "sessions on remote": True}
-        # Whether Claude may search the web and fetch pages, besides reading the documents: off unless turned on, and kept
-        # with the corpus, in its settings.json, as it is turned on and off.
-        self.settings["web access"] = bool(self._kept_settings_().get("web access", False))
+        # Whether Claude may search the web and fetch pages, besides reading the documents; whether a session handed off goes
+        # to the cloud -- the Mac free to sleep -- or to the phone by Remote Control, the Mac running it: kept (KEPT).
+        kept = self._kept_settings_()
+        self.settings.update({name: bool(kept.get(name, default)) for name, default in self.KEPT.items()})
         self._remoted_ = False  # the sessions put on remote as hyp started: once
         self.names = None  # a question's digest -> the words Claude named it by, as words.json keeps them: read once
         self._naming_ = False  # Claude is naming turns: one naming at a time (`_name_turns_`)
@@ -564,20 +567,24 @@ class HypDocs(Hyp):
         self.popup = TilePicker(lambda slot: self.place(i, slot), pos, on_claude=lambda: self.ask_about(i))
 
     def __setting_changed__(self, name):
-        """"web access" toggled: kept with the corpus, and so are the sessions open, from their next turn on."""
-        if name != "web access":
+        """A setting of KEPT toggled: kept with the corpus. Web access reaches the sessions open, from their next turn on."""
+        if name not in self.KEPT:
             return
-        on = self.settings["web access"]
-        for window in self.windows():
-            if isinstance(window, claude.ClaudeWindow):
-                window.session.web = on
+        on = self.settings[name]
         data = getattr(self.args, "data", None)
         if data:
             fs, path = fsspec.url_to_fs(posixpath.join(str(data), "settings.json"))
             with fs.open(path, "w") as f:
-                json.dump({**self._kept_settings_(), "web access": on}, f)
-        self.status = ("web access on: Claude may search the web and fetch pages, from the next turn" if on
-                       else "web access off: Claude reads the documents only, from the next turn")
+                json.dump({**self._kept_settings_(), name: on}, f)
+        if name == "web access":
+            for window in self.windows():
+                if isinstance(window, claude.ClaudeWindow):
+                    window.session.web = on
+            self.status = ("web access on: Claude may search the web and fetch pages, from the next turn" if on
+                           else "web access off: Claude reads the documents only, from the next turn")
+        else:
+            self.status = ("a session handed off goes to the cloud: it goes on there, the Mac free to sleep" if on
+                           else "a session handed off goes to the phone by Remote Control: the Mac runs it, and must stay awake")
 
     def __wants_text__(self):
         """Typed into: a Claude session's window, whenever one is open -- its box, or its title -- besides what the disk's are."""
@@ -769,15 +776,20 @@ class HypDocs(Hyp):
         return next((w for w in self.windows() if isinstance(w, claude.ClaudeWindow)), None)
 
     def _hand_off_(self, window):
-        """Hand *window*'s session off to a phone: Claude Code run with it, with Remote Control, its QR code in the window."""
+        """Hand *window*'s session off: to the cloud (`claude.CloudHandoff`), or, the setting off, to the phone by Remote Control
+        (`claude.Handoff`), its QR code in the window either way."""
         if not window.session.resumable:
-            window.note = "nothing to hand off yet: send a first message, then hand it to the phone"
+            window.note = "nothing to hand off yet: send a first message, then hand it off"
             return
         # Saved before it goes: the file holds everything said here, written now, not once a job gets to it.
         window.session.save()
         self._file_(window.session)  # embedded, in the background
         window.note = None
         window.session.web = self.settings.get("web access", False)
+        if self.settings.get("hand off to the cloud"):
+            window.handoff = claude.CloudHandoff(window.session)
+            window.handoff.start()  # pushed, and begun, on a thread of its own
+            return
         window.handoff = claude.Handoff(window.session)
         before = window.session.id
         window.handoff.start()
@@ -787,22 +799,34 @@ class HypDocs(Hyp):
         self.run_async(claude.account, lambda said: self._account_(window, said))
 
     def _take_back_(self, window, then=None):
-        """Bring *window*'s session back from the phone: Claude Code there ended, the turns made there added, and filed."""
+        """Bring *window*'s session back: from the cloud (`CloudHandoff.take_back`), or from the phone, Claude Code there ended;
+        the turns made there added, and filed. What stops it is said in the window, the session left where it is."""
         handoff = window.handoff
+        cloud = getattr(handoff, "cloud", False)
 
         def back():
-            handoff.stop()
-            return window.session.take_back(handoff.started)
+            try:
+                if cloud:
+                    return handoff.take_back(), None
+                handoff.stop()
+                return window.session.take_back(handoff.started), None
+            except claude.Failed as e:
+                return None, str(e)
 
-        def done(n):
+        def done(result):
+            n, problem = result
+            if problem is not None:
+                window.note = f"not taken back: {problem}"
+                return
             window.handoff = None
-            window.note = f"{n} turn{'s' * (n != 1)} from the phone" if n else None
+            window.note = f"{n} turn{'s' * (n != 1)} from the {'cloud' if cloud else 'phone'}" if n else None
             window._render_(follow=True)
-            if n:
-                self._file_(window.session)
+            self._file_(window.session)  # its turns, or that it is back: in its file
             if then is not None:
                 then()
 
+        if cloud:
+            window.note = "taking it back from the cloud …"
         self.run_async(back, done)
 
     def __snapshot_arrived__(self):
@@ -811,6 +835,8 @@ class HypDocs(Hyp):
         self._name_turns_()
         if self._remoted_ or not self.settings.get("sessions on remote") or self.snap is None:
             return
+        if self.settings.get("hand off to the cloud"):
+            return  # a cloud session each, at every start: handed off as their windows close, or by **remote**
         self._remoted_ = True
         urls = list(dict.fromkeys(p["path"] for p in self.snap.points if p.get("kind") == TURN and p.get("path")))
         root, subdir, web = self.root(self.args), self.claude_dir(self.args), self.settings.get("web access", False)
@@ -853,6 +879,8 @@ class HypDocs(Hyp):
     def _reclaim_(self, window):
         """A session reopened here: taken back from the phone, if it is there; else what was said elsewhere since it was saved, added."""
         handoff = self.handoffs.pop(window.session.id, None)
+        if handoff is None and window.session.cloud:
+            handoff = claude.CloudHandoff(window.session)  # in the cloud since hyp last ran: as its file says
         if handoff is not None:
             window.handoff = handoff
             self._take_back_(window)
@@ -997,8 +1025,9 @@ class HypDocs(Hyp):
             elif window.session.dirty():  # a turn not yet filed: one cancelled as it was closed has none
                 self._file_(window.session)
             if window.handoff is not None and window.handoff.problem is None:
-                self.handoffs[window.session.id] = window.handoff  # goes on on the phone, the window gone
-                self.status = f"on the phone: {window.session.title()} -- reopen it here to take it back"
+                self.handoffs[window.session.id] = window.handoff  # goes on there, the window gone
+                where = "in the cloud" if getattr(window.handoff, "cloud", False) else "on the phone"
+                self.status = f"{where}: {window.session.title()} -- reopen it here to take it back"
         if window is self.center:
             self.center = None
         self.tiles = {s: w for s, w in self.tiles.items() if w is not window}

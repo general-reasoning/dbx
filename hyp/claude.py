@@ -81,7 +81,19 @@ CLOUD_PROMPT = (
     "the conversation, and wait for the user's next message."
 )
 TAKE_BACK = "The conversation goes on on the Mac now. Reply only: OK."  # typed as a teleported one starts: so it is recorded here
-# What a point's cloud session is told, handed off again, of the turns made on the Mac since it last was: the files say them.
+# What a cloud session is first told: the conversation so far, every turn as it was said -- so the phone shows it whole.
+CLOUD_OPENING = (
+    "This conversation began in hyp, on a Mac, and goes on here. Here is every turn of it so far, in order, as it was "
+    "said:\n\n{turns}\n\nTake it as this conversation so far -- what Claude said, you said. Reply only: Ready. Then wait "
+    "for the user's next message."
+)
+# And handed off again, of the turns made on the Mac since: written out, as they were said.
+CATCH_UP_TURNS = (
+    "Meanwhile the conversation went on in hyp, on the Mac, after what was said here. Here are its turns since, in order, "
+    "as they were said:\n\n{turns}\n\nTake them as said here too. Reply only: Ready. Then wait for the user's next message."
+)
+CLOUD_TEXT_CHARS = 200_000  # of a conversation written out in a message: past this, the cloud is pointed to its files instead
+# Past CLOUD_TEXT_CHARS, what a cloud session is told, handed off again, of the turns made on the Mac since: in the files.
 CATCH_UP = (
     "Meanwhile the conversation went on in hyp, on the Mac, after what was said here: its turns {first} to {last} are in "
     "files of this repository, now pushed -- {files}. Read them, as said here too, change none of them, and wait for the "
@@ -674,8 +686,7 @@ class CloudHandoff:
         except Failed as e:
             self.problem = str(e)
             return
-        said = ", then ".join(f"{f} ({how})" for f, how in files)
-        self._spawn_([claude_command(), "-n", self.name, "--cloud", HYP_MARK + CLOUD_PROMPT.format(files=said)])
+        self._spawn_([claude_command(), "-n", self.name, "--cloud", self._opening_(files)])
         deadline = time.time() + self.CONNECT_S
         while self.pid is not None and time.time() < deadline:
             self._drain_(0.5)
@@ -771,13 +782,25 @@ class CloudHandoff:
         came, branch = self.sync()
         if branch is not None:
             return False
-        if not came and last > known:  # the Mac went on, the cloud not: told of the Mac's turns, in their files
-            said = ", then ".join(f"{f} ({how})" for f, how in files)
-            self._post_(HYP_MARK + CATCH_UP.format(first=known + 1, last=last, files=said))
+        if not came and last > known:  # the Mac went on, the cloud not: told of the Mac's turns, as they were said
+            turns = _written_out_(s.path()[known:last], known)
+            if len(turns) <= CLOUD_TEXT_CHARS:
+                self._post_(HYP_MARK + CATCH_UP_TURNS.format(turns=turns))
+            else:
+                said = ", then ".join(f"{f} ({how})" for f, how in files)
+                self._post_(HYP_MARK + CATCH_UP.format(first=known + 1, last=last, files=said))
         s.away, s.cloud_upto, self.url = True, len(s.path()), f"https://claude.ai/code/{s.cloud}"
         if s.resumable:
             s.save()
         return True
+
+    def _opening_(self, files):
+        """What the cloud session is first told: the conversation written out, every turn as it was said -- what the phone
+        shows of it -- or, past CLOUD_TEXT_CHARS, where its files are, to read (CLOUD_PROMPT)."""
+        turns = _written_out_(self.session.path())
+        if len(turns) <= CLOUD_TEXT_CHARS:
+            return HYP_MARK + CLOUD_OPENING.format(turns=turns)
+        return HYP_MARK + CLOUD_PROMPT.format(files=", then ".join(f"{f} ({how})" for f, how in files))
 
     def _post_(self, message):
         """Send *message* to the point's cloud session, as its next: `claude -p --cloud <id>`, which does not wait for an answer."""
@@ -992,6 +1015,12 @@ def _conversation_files_(session, top):
             how = f"its first {keep} turn{'s' * (keep != 1)}"
         out.append((os.path.relpath(s.md_url, top), how))
     return out
+
+
+def _written_out_(said, before=0):
+    """Turns *said*, `(asked, answered)` each, written out as a message shows them: numbered from *before* + 1, who said what."""
+    return "\n\n---\n\n".join(f"**You** (turn {before + n + 1}):\n\n{asked.strip()}\n\n**Claude:**\n\n{answered.strip()}"
+                                for n, (asked, answered) in enumerate(said))
 
 
 def _adopt_(session, record, came):

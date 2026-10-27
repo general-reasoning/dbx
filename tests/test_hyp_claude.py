@@ -1896,7 +1896,7 @@ def github(tree, tmp_path):
     return NS(bare=bare, log=lambda: _sh_(tree, "git", "--git-dir", str(bare), "log", "--format=%s", "main"))
 
 
-def test_a_cloud_handoff_pushes_the_conversation_and_begins_a_cloud_session_told_to_read_it(cli, tree, github, monkeypatch):
+def test_a_cloud_handoff_pushes_the_conversation_and_begins_a_cloud_session_given_it_whole(cli, tree, github, monkeypatch):
     monkeypatch.setenv("FAKE_RECORD", "1")
     s = claude.Session(str(tree))
     s.send("What is alpha?")
@@ -1908,7 +1908,9 @@ def test_a_cloud_handoff_pushes_the_conversation_and_begins_a_cloud_session_told
     assert docview.front_matter(open(s.md_url).read())[0]["cloud"] == "session_01FAKEcloud", "where it went, in its file"
     assert github.log().splitlines()[0] == "hyp: What is alpha?, to the cloud", "the conversation pushed first"
     told = next(r["cloud"] for r in cli.runs() if "cloud" in r)
-    assert told.startswith(claude.HYP_MARK) and f"{os.path.basename(s.md_url)} (all of its turns)" in told
+    assert told.startswith(claude.HYP_MARK) and "**You** (turn 1):\n\nWhat is alpha?\n\n**Claude:**\n\nHello there." in told, \
+        "every turn as it was said: what the phone shows"
+    assert "Reply only: Ready." in told
     _until_(lambda: h.pid is None)
     assert h.pid is None, "what began it here is done: the cloud session goes on"
 
@@ -2026,8 +2028,9 @@ def test_all_to_the_cloud_sends_every_branch_whole_named_from_its_first_turn_to_
     assert named == ["What is alpha? › Or gamma?", "What is alpha? › What is alpha? → And beta?"], \
         "a session a branch: its first turn's label, then its last turn's name"
     told = {r["argv"][r["argv"].index("-n") + 1]: r["cloud"] for r in cli.runs() if "cloud" in r}
-    assert f"{os.path.relpath(url, tree)} (its first 1 turn), then {os.path.relpath(b.md_url, tree)} (all of its turns)" \
-        in told["What is alpha? › Or gamma?"], "a branch: its parent's, up to where it goes on from, then its own"
+    branch = told["What is alpha? › Or gamma?"]
+    assert "(turn 1):\n\nWhat is alpha?" in branch and "(turn 2):\n\nOr gamma?" in branch and "And beta?" not in branch, \
+        "a branch: its parent's turns up to where it goes on from, then its own"
     for f in (url, b.md_url):
         fields = docview.front_matter(open(f).read())[0]
         assert fields["cloud"] == "session_01FAKEcloud" and fields["away"] is True
@@ -2104,7 +2107,7 @@ def test_handed_off_again_after_the_mac_went_on_the_cloud_session_is_told_of_its
     assert len([r for r in cli.runs() if "cloud" in r]) == before, "no cloud session begun: the old one goes on"
     (posted,) = [r for r in cli.runs() if "posted" in r]
     assert posted["to"] == "session_01FAKEcloud" and posted["posted"].startswith(claude.HYP_MARK)
-    assert "its turns 2 to 2" in posted["posted"] and os.path.basename(s.md_url) in posted["posted"], "pointed to its files"
+    assert "**You** (turn 2):\n\nbanana" in posted["posted"] and "(turn 1)" not in posted["posted"], "the Mac's turns since, as said"
 
 
 def test_turns_made_in_the_cloud_since_it_was_back_come_home_as_it_opens_and_go_on_there(remembered, cli, tree, monkeypatch):
@@ -2134,3 +2137,14 @@ def test_both_going_on_the_cloud_turns_come_as_a_branch_which_keeps_the_cloud_se
     h.begin()
     assert len([r for r in cli.runs() if "cloud" in r]) == begun + 1 and s.cloud == "session_01FAKEcloud" and s.away, \
         "the Mac's line: a cloud session of its own, begun anew"
+
+
+def test_a_conversation_too_long_to_write_out_is_given_the_cloud_by_its_files(cli, tree, github, monkeypatch):
+    monkeypatch.setenv("FAKE_RECORD", "1")
+    monkeypatch.setattr(claude, "CLOUD_TEXT_CHARS", 10)
+    s = claude.Session(str(tree))
+    s.send("What is alpha?")
+    s.save()
+    claude.CloudHandoff(s).begin()
+    told = next(r["cloud"] for r in cli.runs() if "cloud" in r)
+    assert f"{os.path.basename(s.md_url)} (all of its turns)" in told and "**You**" not in told

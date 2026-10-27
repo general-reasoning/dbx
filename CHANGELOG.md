@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- **hyp --docs: the phone shows a conversation whole; the tree, its way.** A
+  cloud session's first message is the conversation itself, every turn
+  written out as it was said, and Claude replies only "Ready." -- not a
+  summary; the Mac's turns since are given it the same way (past 200,000
+  characters, the files are pointed to instead). Each line joining two turns
+  on the disk has an arrowhead, from a turn to the one after it.
 - **hyp --docs: a turn labeled by its conversation and what it is about.**
   A turn's label is its root conversation's title, cut at a word, then
   `›` and a few words Claude names the turn by -- from what was asked and the

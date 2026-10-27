@@ -415,8 +415,12 @@ Claude GitHub app installed on it, and Claude Code's own directory, where it
 is inside, ignored: the window says what is missing. The cloud can be given
 files, not a conversation, so a handoff commits the conversation's files --
 its own, and its parents' -- pushes them, and begins a cloud session on the
-repository (`claude --cloud`), told to read them as the conversation so far
-and to change none of them; its url is shown as a QR code, to scan with the
+repository (`claude --cloud`), its first message the conversation itself:
+every turn written out as it was said, numbered, who said what -- so that
+the phone shows the conversation whole, not Claude's summary of it -- and
+Claude told to take it as said and reply only "Ready." (CLOUD_OPENING; a
+conversation past 200,000 characters is pointed to its files instead, to
+read). Its url is shown as a QR code, to scan with the
 phone, and kept in the conversation's front matter (`cloud`), so that a
 restart of hyp does not lose it. Opening it here takes it back:
 
@@ -451,9 +455,10 @@ again, what was said there since it was last here comes home first
 
 - **only the cloud went on**: its turns are the branch's, and the same
   cloud session goes on;
-- **only the Mac went on**: the cloud session is told, in one message --
-  hyp's, `[hyp] …` -- where the Mac's turns are, in the pushed files
-  (CATCH_UP), and goes on; the phone shows it as a message of yours;
+- **only the Mac went on**: the cloud session is given the Mac's turns,
+  written out as they were said, in one message -- hyp's, `[hyp] …`
+  (CATCH_UP_TURNS; past 200,000 characters, where they are in the pushed
+  files) -- and goes on; the phone shows it as a message of yours;
 - **both went on**: the conversation forked where they last met. The
   cloud's turns come home as a branch going on from there, which keeps the
   cloud session, and the window says so; the Mac's line is given a cloud
@@ -587,7 +592,9 @@ after it, in the file and in Claude Code's record alike.
 
 **Joined, turn to turn.** A faint geodesic joins each turn to the one before
 it, and a branch's first turn to the turn it goes on from (below): a
-conversation is drawn as the tree it is. Joined, turns are laid out near
+conversation is drawn as the tree it is, a small arrowhead two thirds of the
+way along each line pointing from a turn to the one after it, root to leaf
+(`Hyp.arrowhead`; none on a line drawn too short to hold one). Joined, turns are laid out near
 each other, whatever they go on to: a link adds proximity to the metric the
 layout measures by, not to the embeddings, which still say only what the
 texts say -- so a point's nearest, as the hover's arcs and the arrows have

@@ -81,6 +81,8 @@ ARROW_AWAY = (170, 60, 50)  # an arrow whose reading failed, saying why, on TIP_
 ARROW_NOTE_PX = 240  # how wide an arrow's line is wrapped
 ARROW_RETRY_S = 30  # a reading that failed is tried again after this long
 ARROW_AT = 0.6  # where along its arc an arrow's line is shown: 0 at the hovered point, 1 at its neighbor
+ARROW_HEAD_AT = 0.65  # where along a link its arrowhead is: from the point it grew from, 0, to it, 1 -- off both points
+ARROW_HEAD_PX = 6  # a link's arrowhead's length
 
 
 def make_embedder(kind, model, ollama):
@@ -1746,6 +1748,26 @@ class Hyp:
         self.settings[name] = not self.settings[name]
         self.__setting_changed__(name)
 
+    def arrowhead(self, line, M, color, at=ARROW_HEAD_AT, size=ARROW_HEAD_PX):
+        """An arrowhead on *line* -- points along a geodesic, in data coordinates -- a fraction *at* of the way along it,
+        pointing the way it runs: what grew from what. None where the line is drawn too short to hold it."""
+        xs, ys = self.to_screen(self.display(line, M))
+        pts = np.column_stack([xs, ys])
+        lengths = np.hypot(*np.diff(pts, axis=0).T)
+        total = float(lengths.sum())
+        if total < 3 * size:
+            return
+        k = min(int(np.searchsorted(np.cumsum(lengths), at * total)), len(lengths) - 1)
+        tip, back = pts[k + 1], pts[k]
+        d = tip - back
+        n = float(np.hypot(*d))
+        if n == 0:
+            return
+        u = d / n
+        v = np.array([-u[1], u[0]])
+        base = tip - u * size
+        pygame.draw.polygon(self.screen, color, [tuple(tip), tuple(base + v * size * 0.55), tuple(base - v * size * 0.55)])
+
     def polyline(self, data, M, color, width=1):
         pts = np.asarray(self.to_screen(self.display(data, M))).T
         if len(pts) > 1:
@@ -1794,7 +1816,9 @@ class Hyp:
 
             t = np.linspace(0, 1, 40)
             for i, j in self.links():
-                self.polyline(P.geodesic(data[i], data[j], t), M, LINK)
+                line = P.geodesic(data[j], data[i], t)  # from the point it grew from, to it
+                self.polyline(line, M, LINK)
+                self.arrowhead(line, M, LINK)
 
             if self.hover is not None:
                 for j in self.snap.neighbors[self.hover]:

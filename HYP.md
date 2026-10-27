@@ -438,24 +438,42 @@ the cloud are held by the conversation it was handed off from, and the
 file says so (`start`, `earlier`): a branch from one of them forks that
 conversation, and one from a later turn the conversation taken back. In
 the cloud, Claude has the earlier turns as it read them, not as it said
-them: it does not recall its own tool calls. Each handoff is a cloud
-session of its own; they stay on claude.ai, to archive there. With the
+them: it does not recall its own tool calls.
+
+**One cloud session a branch, kept.** Cloud sessions are not taken back out
+of claude.ai -- `--teleport` copies one here, and it stays there -- and no
+command archives one: so a branch keeps its cloud session, after it is
+taken back, to go on in again (`cloud`, with `away` while it is there, and
+how far each side has got: `cloud_seen`, the cloud's turns here;
+`cloud_upto`, the branch's turns the cloud has). Opened here, or handed off
+again, what was said there since it was last here comes home first
+(`CloudHandoff.sync`, a teleport):
+
+- **only the cloud went on**: its turns are the branch's, and the same
+  cloud session goes on;
+- **only the Mac went on**: the cloud session is told, in one message --
+  hyp's, `[hyp] …` -- where the Mac's turns are, in the pushed files
+  (CATCH_UP), and goes on; the phone shows it as a message of yours;
+- **both went on**: the conversation forked where they last met. The
+  cloud's turns come home as a branch going on from there, which keeps the
+  cloud session, and the window says so; the Mac's line is given a cloud
+  session of its own.
+
+A handoff is named as the branch is: its first turn's label, then `→` and
+its last turn's name (`QM: MEAS › Wigner's friend → GRW collapse`), so that
+the phone's list says which branch of which conversation each is. With the
 setting off, **remote** hands the conversation to the phone by Remote
 Control, below.
 
-**all to the cloud**, in the top bar, hands off every turn on the disk at
-once, a cloud session each, so that any turn can be gone on from on the
-phone: a branch's last turn, the branch itself, its cloud session kept in
-its file as **remote** keeps it; any other, a new branch going on after it,
-which has no file till something is said in it -- its cloud session kept in
-the corpus's `clouds.json`, the cloud told to read the conversation up to
-that turn. The conversations' files are pushed once, first, and the
-sessions begun one at a time, as an engine job (its card, its bar, Esc to
-stop it); turns in the cloud already, or open here, are left as they are. A
-turn's tooltip says when it, or a branch after it, is in the cloud. Opened
-here -- a click on it -- it is taken back, and a new branch with turns made
-in the cloud is saved then, as a branch of the conversation it went on
-from.
+**all to the cloud**, in the top bar, hands off every branch on the disk
+at once -- every conversation's file, whole, a cloud session each, told to
+read it and its parents up to where it goes on from -- so that any branch
+can be gone on with on the phone; one with a cloud session of its own goes
+on in it. The files are pushed once, first, and the sessions begun or gone
+on in one at a time, as an engine job (its card, its bar, Esc to stop it);
+branches in the cloud already, or open here, are left as they are. Every
+turn's tooltip says when its branch is in the cloud. On the Mac, a branch is
+still shown turn by turn, every turn a point.
 
 **Handing a session to a phone.** A session goes on on a phone -- the Claude
 app, or claude.ai/code -- through Claude Code's Remote Control, and comes back.
@@ -548,16 +566,24 @@ before each piece, and the pieces' unit vectors averaged (`ChunkedEmbedder`,
 `hyp/docs.py`). No markdown's front matter is embedded, a session's or any
 other's.
 
-A turn is labeled by a few words naming its question -- a conversation's
-first turn by its title, `Claude · <title>` -- and its tooltip says its
-conversation and which turn of it it is, and how the question begins. The
-words are Claude's: the turns not named yet, as the points come in, are
+A turn is labeled `<title> › <name>`: its conversation's title -- the
+root conversation's, for a branch's turns too -- cut to 22 characters at a
+word, then a few words naming what the turn is about, up to 48 characters in
+all; its tooltip says its conversation and which turn of it it is, and how
+the question begins. The names are Claude's, of what was asked and the
+start of what was answered, both: a question alone often says little of
+what the turn came to. The turns not named yet, as the points come in, are
 asked of it in the background, 40 at a time (`claude -p`, no tools), and
-kept in the corpus's `words.json`, so a question is named once; till then a
-turn is labeled by its question's first words. A turn Claude could not name
--- not logged in, say -- is not asked again till hyp starts again, and the
-status line says why. A branch's last turn is dated by its file's last
-write; the others are not dated.
+kept in the corpus's `words.json`, by question and answer, so a turn is
+named once; till then a turn is named by its question's first words. A turn
+Claude could not name -- not logged in, say -- is not asked again till hyp
+starts again, and the status line says why. A branch's last turn is dated by
+its file's last write; the others are not dated. A handoff -- to the cloud,
+or by Remote Control -- is named as its turn is labeled, its conversation's
+last for a conversation (`claude -n`): so the phone's list says what each
+session is. A turn cut short -- `[Request interrupted by user]`, as Claude
+Code records it -- is no turn of its own, but its turn's, which goes on
+after it, in the file and in Claude Code's record alike.
 
 **Joined, turn to turn.** A faint geodesic joins each turn to the one before
 it, and a branch's first turn to the turn it goes on from (below): a

@@ -61,6 +61,8 @@ SYSTEM_WEB = "You may also search the web and fetch web pages, to answer from th
 SYSTEM_NO_WEB = "You cannot reach the web."
 # hyp's own messages to Claude begin so -- a cloud handoff's opening, a take-back's -- and are no turns of the conversation.
 HYP_MARK = "[hyp] "
+# What Claude Code records as the user's when a turn is cut short: no turn of its own, but its turn's, which goes on after it.
+INTERRUPTED = "[Request interrupted"
 MAX_BRANCH_DEPTH = 256  # branches of branches, read up to a conversation's first: past this, a parent named is taken to be lost
 # Where Claude Code keeps its login and conversations, unless CLAUDE_CONFIG_DIR says elsewhere.
 DEFAULT_CONFIG = os.path.expanduser("~/.claude")
@@ -79,6 +81,12 @@ CLOUD_PROMPT = (
     "the conversation, and wait for the user's next message."
 )
 TAKE_BACK = "The conversation goes on on the Mac now. Reply only: OK."  # typed as a teleported one starts: so it is recorded here
+# What a point's cloud session is told, handed off again, of the turns made on the Mac since it last was: the files say them.
+CATCH_UP = (
+    "Meanwhile the conversation went on in hyp, on the Mac, after what was said here: its turns {first} to {last} are in "
+    "files of this repository, now pushed -- {files}. Read them, as said here too, change none of them, and wait for the "
+    "user's next message."
+)
 # What a pseudo-terminal's Claude Code is not told: that it runs inside another, whose transcripts it would then not save.
 CHILD_MARKERS = ("CLAUDECODE", "CLAUDE_CODE_CHILD_SESSION", "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_SESSION_ID", "CLAUDE_PID")
 # Remote Control's own consent, asked as /remote-control first connects -- spaces gone: accepted, as what was asked for.
@@ -144,7 +152,10 @@ class Session:
         # [(id, start, upto)], those before -- each turns start+1..upto -- where it was taken back from the cloud, which
         # went on from what it read of them, not from a conversation that holds them.
         self.start, self.earlier = 0, []
-        self.cloud = None  # the claude.ai cloud session it is handed off to, while it is: `session_…` (`CloudHandoff`)
+        # Its cloud session, `session_…`, kept after it is taken back, so that it goes on there again (`CloudHandoff`): *away*
+        # while it is there; *cloud_seen*, how many of the cloud's turns are here; *cloud_upto*, how many of its own turns
+        # the cloud has -- the turns it was given, the last time they met.
+        self.cloud, self.away, self.cloud_seen, self.cloud_upto = None, False, 0, 0
         stamp = self.started.replace("-", "").replace(":", "").replace("T", "-")
         # By its start and its id: two sessions begun in one second are two files, not one written over.
         name = f"{PREFIX}{stamp}-{self.id[:8]}.md"
@@ -167,6 +178,8 @@ class Session:
         session.start = int(fields.get("start") or 0)
         session.earlier = [tuple(e) for e in fields.get("earlier") or () if isinstance(e, list) and len(e) == 3]
         session.cloud = fields.get("cloud") or None
+        session.away = bool(fields.get("away", session.cloud is not None))  # before kept: only while away
+        session.cloud_seen, session.cloud_upto = int(fields.get("cloud_seen") or 0), int(fields.get("cloud_upto") or 0)
         parent = parent_url(md_url, fields)
         if parent is not None:
             session.fork = int(fields.get("fork") or 0)
@@ -319,7 +332,7 @@ class Session:
         if self.start or self.earlier:  # taken back from the cloud: which conversations hold which turns
             fields.update(start=self.start, earlier=[list(e) for e in self.earlier])
         if self.cloud:
-            fields["cloud"] = self.cloud
+            fields.update(cloud=self.cloud, away=self.away, cloud_seen=self.cloud_seen, cloud_upto=self.cloud_upto)
         if self.model:
             fields["model"] = self.model
         if self.choice:
@@ -469,13 +482,13 @@ class Handoff:
     QUIET_S = 1.0  # and how long the screen must have said nothing new: the resumed conversation laid out first
     CONNECT_S = 30  # how long Remote Control has to say its url, before the handoff is given up
 
-    def __init__(self, session):
+    def __init__(self, session, name=None):
         self.session = session
         self.url = None  # the session's on claude.ai, once Claude Code has said it
         self.problem = None  # why it is not handed off, where it is not
         self.started = None  # when it was, as time.time(): what was said since is the phone's
         self.pid = self.fd = None
-        self.name = f"hyp · {session.title()}"  # the session's, on claude.ai and the phone
+        self.name = name or f"hyp · {session.title()}"  # the session's, on claude.ai and the phone: as its point is labeled
         self._screen_ = ""
         self._typed_ = False  # /remote-control typed in, at its prompt
         self._said_ = 0.0  # when the screen last showed something new
@@ -624,8 +637,9 @@ class CloudHandoff:
     TELEPORT_S = 240  # how long a take-back has, all told
     QUIET_S = 2.0  # how long the screen must have said nothing new, before something is typed at it
 
-    def __init__(self, session):
+    def __init__(self, session, name=None):
         self.session = session
+        self.name = name or session.title()  # the cloud session's, on claude.ai and the phone: as the turn's point is labeled
         self.url = f"https://claude.ai/code/{session.cloud}" if session.cloud else None
         self.problem = None  # why it is not handed off, where it is not
         self.started = time.time() if session.cloud else None
@@ -655,17 +669,20 @@ class CloudHandoff:
             files = _conversation_files_(s, top)
             if push:
                 push_files(s.root, [f for f, _ in files], f"hyp: {s.title()}, to the cloud")
+            if s.cloud is not None and self._resume_(files):
+                return
         except Failed as e:
             self.problem = str(e)
             return
         said = ", then ".join(f"{f} ({how})" for f, how in files)
-        self._spawn_([claude_command(), "--cloud", HYP_MARK + CLOUD_PROMPT.format(files=said)])
+        self._spawn_([claude_command(), "-n", self.name, "--cloud", HYP_MARK + CLOUD_PROMPT.format(files=said)])
         deadline = time.time() + self.CONNECT_S
         while self.pid is not None and time.time() < deadline:
             self._drain_(0.5)
             if (m := CLOUD_SESSION.search(self._screen_)) is not None:
                 self.stop()  # the cloud session goes on: what began it here is done
                 s.cloud, self.url = m[1], m[0]
+                s.away, s.cloud_seen, s.cloud_upto = True, 0, len(s.path())
                 if s.resumable:
                     s.save()  # where it went, in its file: a restart of hyp takes it back from there
                 return
@@ -674,7 +691,7 @@ class CloudHandoff:
         self.problem = f"Claude Code did not begin a cloud session{': ' + tail if tail else ''}"
 
     def alive(self):
-        return self.session.cloud is not None
+        return self.session.away
 
     def stop(self, timeout=5):
         """End the Claude Code running here for it, if one is: the cloud session goes on."""
@@ -709,24 +726,87 @@ class CloudHandoff:
         return [list(row) for row in segno.make(self.url, error="m").matrix_iter(border=2)]
 
     def take_back(self):
-        """Bring the conversation back from the cloud: how many turns were made there, now added to the session's.
+        """Bring the conversation back from the cloud: `(how many turns came, branch)`, as `sync`."""
+        return self.sync()
 
-        Claude Code's `--teleport` loads the cloud conversation here and checks
-        out the branch the cloud pushed its changes to, if any: so first what
-        is not committed is set aside (`git stash`), and after, the branch
-        the notes were on is checked out again, the cloud's merged into it and
-        pushed, and what was set aside put back. TAKE_BACK is typed at it, so
-        that Claude Code records the conversation here; the turns made there
-        are read from that record, and the session goes on in it -- the turns
-        before, held by the conversation it went on from (`Session.earlier`).
-        Raises `Failed`, saying why, where it cannot be brought back.
+    def sync(self):
+        """Bring home what was said in the point's cloud session since it was last here: `(how many turns, branch)`.
+
+        The cloud session is kept, to go on in again. If the Mac said nothing
+        meanwhile, the turns made there are the session's own, and *branch* is
+        None. If both did, the conversation forked where the cloud last met the
+        Mac: the cloud's turns come as a branch going on from there -- saved,
+        the cloud session its own now, as it was -- and the session goes on
+        here without one. Raises `Failed`, saying why, where it cannot be
+        brought back.
+        """
+        s = self.session
+        record, turns = self._fetch_()
+        came = turns[s.cloud_seen :]
+        if came and s.resumable and len(s.path()) > s.cloud_upto:
+            branch = s.branch(s.cloud_upto)
+            _adopt_(branch, record, came)
+            branch.cloud, branch.away, branch.cloud_seen = s.cloud, s.away, len(turns)
+            branch.cloud_upto = len(branch.path())
+            branch.save()
+            s.cloud, s.away, s.cloud_seen, s.cloud_upto = None, False, 0, 0
+            return len(came), branch
+        if came:
+            _adopt_(s, record, came)
+        s.away, s.cloud_seen, s.cloud_upto = False, len(turns), len(s.path())
+        return len(came), None
+
+    # 4. Helpers ----------------------------------------------------------------
+
+    def _resume_(self, files):
+        """Go on in the point's own cloud session, rather than begin one: whether it could, its files pushed already.
+
+        What was said there since it was here comes home first (`sync`). Then,
+        if the Mac went on meanwhile, the cloud is told of its turns in a
+        message (CATCH_UP); if both did, the cloud session is the branch's
+        that its turns came as, and a new one is to be begun for this.
+        """
+        s = self.session
+        known, last = s.cloud_upto, len(s.path())  # the Mac's turns the cloud has, and those it has
+        came, branch = self.sync()
+        if branch is not None:
+            return False
+        if not came and last > known:  # the Mac went on, the cloud not: told of the Mac's turns, in their files
+            said = ", then ".join(f"{f} ({how})" for f, how in files)
+            self._post_(HYP_MARK + CATCH_UP.format(first=known + 1, last=last, files=said))
+        s.away, s.cloud_upto, self.url = True, len(s.path()), f"https://claude.ai/code/{s.cloud}"
+        if s.resumable:
+            s.save()
+        return True
+
+    def _post_(self, message):
+        """Send *message* to the point's cloud session, as its next: `claude -p --cloud <id>`, which does not wait for an answer."""
+        env = {k: v for k, v in os.environ.items() if k not in CHILD_MARKERS}
+        try:
+            done = subprocess.run([claude_command(), "-p", "--cloud", self.session.cloud, "--output-format", "json", message],
+                                  cwd=self.session._cwd_(), env=env, stdin=subprocess.DEVNULL, capture_output=True, text=True,
+                                  timeout=120)
+        except (OSError, subprocess.TimeoutExpired) as e:
+            raise Failed(f"could not tell the cloud session what was said on the Mac: {e}") from None
+        said = _event_(done.stdout.strip().splitlines()[-1]) if done.stdout.strip() else None
+        if done.returncode or not (said or {}).get("ok"):
+            raise Failed(f"the cloud session was not told what was said on the Mac: {(done.stderr or done.stdout).strip()[-200:]}")
+
+    def _fetch_(self):
+        """Teleport the point's cloud session here: `(record, turns)` -- Claude Code's record of it here, and every turn made there.
+
+        Claude Code's `--teleport` checks out the branch the cloud pushed its
+        changes to, if any: so first what is not committed is set aside (`git
+        stash`), and after, the branch the notes were on is checked out again,
+        the cloud's merged into it and pushed, and what was set aside put back.
+        TAKE_BACK is typed at it, so that Claude Code records it here.
         """
         s = self.session
         top, remote, branch = repository(s.root)
         began = time.time()
         stashed = bool(_git_(top, "status", "--porcelain"))
         if stashed:
-            _git_(top, "stash", "push", "--include-untracked", "-m", f"hyp: taking back {s.title()}")
+            _git_(top, "stash", "push", "--include-untracked", "-m", f"hyp: from the cloud, {s.title()}")
         merged = None
         try:
             self._teleport_()
@@ -748,24 +828,7 @@ class CloudHandoff:
         if merged:
             _git_(top, "push", remote, branch)
         record = _teleported_(s.cloud, began)
-        came = exchanges(record) if record is not None else []
-        if came:
-            before = len(s.path())
-            if s.resumable:
-                s.earlier.append((s.id, s.start, before))
-            else:  # a new branch, made in the cloud: the turns before its own held by the conversation it was to fork
-                holder, start = s.source.holder(before) if s.source is not None else (None, 0)
-                s.earlier = [e for e in s.source.earlier if e[2] <= start] if s.source is not None else []
-                if holder is not None:
-                    s.earlier.append((holder, start, before))
-                s.source = None
-            s.id, s.start, s.resumable = posixpath.splitext(os.path.basename(record))[0], before, True
-            s.turns += came
-            s.model = _model_(record) or s.model
-        s.cloud = None
-        return len(came)
-
-    # 4. Helpers ----------------------------------------------------------------
+        return record, exchanges(record) if record is not None else []
 
     def _teleport_(self):
         """Run `claude --teleport` on the session's cloud session, type TAKE_BACK once it is loaded, then /exit; raises `Failed` where it does not load."""
@@ -929,6 +992,26 @@ def _conversation_files_(session, top):
             how = f"its first {keep} turn{'s' * (keep != 1)}"
         out.append((os.path.relpath(s.md_url, top), how))
     return out
+
+
+def _adopt_(session, record, came):
+    """*session* goes on with the turns *came*, made in the cloud: in Claude Code's record of it here, at *record*, from now on.
+
+    The turns before them are held by the conversation it was in -- or, a
+    new branch, the one it was to fork (`Session.earlier`).
+    """
+    s, before = session, len(session.path())
+    if s.resumable:
+        s.earlier.append((s.id, s.start, before))
+    else:  # a new branch, made in the cloud: the turns before its own held by the conversation it was to fork
+        holder, start = s.source.holder(before) if s.source is not None else (None, 0)
+        s.earlier = [e for e in s.source.earlier if e[2] <= start] if s.source is not None else []
+        if holder is not None:
+            s.earlier.append((holder, start, before))
+        s.source = None
+    s.id, s.start, s.resumable = posixpath.splitext(os.path.basename(record))[0], before, True
+    s.turns += came
+    s.model = _model_(record) or s.model
 
 
 def _teleported_(cloud, since):
@@ -1169,9 +1252,9 @@ def _relative_(url, start):
 
 
 def _prompt_(event):
-    """Whether Claude Code's record *event*, a user's, is a prompt typed: not a tool's result, a command's output, a reminder, a summary, or hyp's own."""
+    """Whether Claude Code's record *event*, a user's, is a prompt typed: not a tool's result, a command's output, a reminder, a summary, a turn cut short, or hyp's own."""
     text = _text_(event.get("message", {}).get("content"))
-    return bool(text.strip()) and not text.lstrip().startswith(("<", HYP_MARK)) and not event.get("isCompactSummary")
+    return bool(text.strip()) and not text.lstrip().startswith(("<", HYP_MARK, INTERRUPTED)) and not event.get("isCompactSummary")
 
 
 def _hyps_(event):
@@ -1533,16 +1616,18 @@ def turns(body):
     What precedes the first `## You` -- the `# Claude · <title>` heading -- is
     no turn's, and a reply in more than one `## Claude` part is one answer. A
     `## You` inside fenced code is the code's: the window's markdown does not
-    make a heading of it either, and counts its turns as this does.
+    make a heading of it either, and counts its turns as this does. A turn
+    cut short -- `[Request interrupted by user]`, as Claude Code records it
+    -- is no turn: what comes after it is its turn's, as `exchanges` reads it.
     """
     out, part, lines, fence = [], None, [], None
 
     def close():
         text = "\n".join(lines).strip()
-        if part == "You":
+        if part == "You" and not (text.startswith(INTERRUPTED) and out):
             out.append([text, ""])
-        elif part == "Claude" and out:
-            out[-1][1] = f"{out[-1][1]}\n\n{text}".strip()
+        elif out:  # Claude's, or a turn cut short, whose turn goes on: one answer
+            out[-1][1] = f"{out[-1][1]}\n\n{'' if part == 'You' else text}".strip()
 
     for line in body.splitlines():
         mark = line.strip()[:3]

@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- **hyp --docs: a turn labeled by its conversation and what it is about.**
+  A turn's label is its root conversation's title, cut at a word, then
+  `›` and a few words Claude names the turn by -- from what was asked and the
+  start of what was answered, not the question alone -- kept in words.json by
+  both. Labels on the disk run to 48 characters (`Hyp.LABEL_CHARS`). A
+  handoff, to the cloud or by Remote Control, is named as its turn is labeled
+  (`claude -n`), so the phone's list says what each session is, not "Hyp
+  session handoff". A turn cut short -- `[Request interrupted by user]` -- is
+  no turn of its own.
 - **hyp --docs: a conversation handed off to the cloud, by default.** The
   directory's `.hyp-github` names the GitHub repository its notes are pushed
   to. A handoff commits and pushes the conversation's files and begins a
@@ -18,10 +27,13 @@ All notable changes to this project will be documented in this file.
   `earlier`), so a branch forks the right one. hyp's own messages begin
   `[hyp]` and are no turns; a message queued while Claude answered is one.
   The setting **hand off to the cloud** off, handoffs go by Remote Control,
-  as before. **all to the cloud** hands off every turn on the disk, a cloud
-  session each: a branch's last turn, the branch; any other, a new branch
-  after it, kept in the corpus's `clouds.json` and saved once taken back
-  with turns made there.
+  as before. **all to the cloud** hands off every branch on the disk, whole,
+  a cloud session each, named by its first turn's label and its last turn's
+  name. A branch keeps its cloud session after it is taken back, and goes on
+  in it: opened or handed off again, what was said there comes home first
+  (`CloudHandoff.sync`); the Mac's turns since are told the cloud in a
+  message; and where both went on, the cloud's turns come as a branch of
+  their own, which keeps the cloud session.
 - **hyp --docs: a conversation, turn by turn, a tree.** Every turn of a
   Claude conversation is a point of its own, keyed `<file>#<n>`, embedded by
   what was asked and answered in it alone, labeled by a few words Claude

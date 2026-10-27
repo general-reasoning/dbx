@@ -1157,6 +1157,7 @@ class Hyp:
     """
 
     title = "hyp"
+    LABEL_CHARS = LABEL_CHARS  # of a point's label, as drawn: a specialization whose labels say more may draw more
 
     # What the box a right click on empty disk opens says beneath it: what Enter does, `__submit_text__`.
     BOX_HINT = "Enter: embed   Shift+Enter: newline   Esc: cancel"
@@ -1659,7 +1660,7 @@ class Hyp:
         """Point *i*'s label: *text* -- a line each, cut short -- and below it, dimmer, *sub*, its `sublabel`."""
         key = (i, text, sub)
         if key not in self.labels:
-            lines = [self.small.render(t if len(t) <= LABEL_CHARS else t[: LABEL_CHARS - 1] + "…", True, LABEL)
+            lines = [self.small.render(t if len(t) <= self.LABEL_CHARS else t[: self.LABEL_CHARS - 1] + "…", True, LABEL)
                      for t in text.split("\n")]
             for line in sub.split("\n") if sub else ():
                 line = line if len(line) <= SUBLABEL_CHARS else line[: SUBLABEL_CHARS - 1] + "…"

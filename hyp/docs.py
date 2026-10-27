@@ -36,7 +36,7 @@ import re
 import time
 import traceback
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 
 import fsspec
@@ -57,17 +57,19 @@ SESSION_CHARS = 256_000  # of a Claude session's transcript, kept and embedded: 
 CHUNK_CHARS = 4_000  # a longer text is embedded a piece this long at a time (`ChunkedEmbedder`)
 PDF_TEXT_BYTES = 64 << 20  # a larger pdf is embedded by its name alone
 TURN = "claude-turn"  # a point's kind: a turn of a Claude conversation, a point of its own
-QUESTION_CHARS = 600  # of a turn's question, given Claude to name it by
-WORDS_CHARS = 40  # of the words Claude names a question by: longer, they are cut short
-FIRST_WORDS = 5  # of a question, standing in for the words Claude has not named it by
-WORDS_BATCH = 40  # questions Claude is asked to name at once: every conversation's, at a first start, may be hundreds
+QUESTION_CHARS = 500  # of a turn's question, given Claude to name the turn by
+ANSWER_CHARS = 700  # of its answer, likewise: what the turn is about is as much what was answered as what was asked
+WORDS_CHARS = 40  # of the words Claude names a turn by: longer, they are cut short
+FIRST_WORDS = 5  # of a question, standing in for the words Claude has not named its turn by
+WORDS_BATCH = 40  # turns Claude is asked to name at once: every conversation's, at a first start, may be hundreds
 ASKED_CHARS = 160  # of a turn's question, in its point's tooltip
-# What Claude is asked, to name the questions of a session's turns: every one not named before, at once.
-WORDS = """Each numbered message below was sent by a user to Claude, in one conversation. Name what each asks or says in two to five words: a heading, as a table of contents would have it, not a sentence.
+PREFIX_CHARS = 22  # of a conversation's title, before each of its turns' names in their labels: a longer one cut at a word
+# What Claude is asked, to name turns: every one not named before, WORDS_BATCH at a time.
+WORDS = """Each numbered item below is one turn of a conversation between a user and Claude: what the user said, then the start of what Claude answered. Name what each turn is about in two to six words -- its subject, as a table of contents would have it: not a sentence, not "Question about ...", and not the conversation's subject, which all its turns share.
 
-Reply with exactly {n} lines, the k-th naming the k-th message: no numbers, no quotes, nothing else.
+Reply with exactly {n} lines, the k-th naming the k-th turn: no numbers, no quotes, nothing else.
 
-{questions}"""
+{turns}"""
 
 # Where a right click can put a document: (x, y, width, height), as fractions of the window.
 SLOTS = {
@@ -305,8 +307,7 @@ def documents(root, progress=print, n_workers=16, cache=None, storage_options=No
 
     with ThreadPoolExecutor(max_workers=n_workers) as ex:
         found = [doc for docs in ex.map(one, infos) for doc in docs]
-    _link_branches_(found)
-    return found
+    return _relate_turns_(found)
 
 
 def _turn_docs_(url, fields, body, names):
@@ -314,47 +315,56 @@ def _turn_docs_(url, fields, body, names):
 
     Each is keyed `<url>#<n>`, its own turns counted from 0; embedded by what
     was asked and answered in it, alone -- the transcript's markup and the
-    title are every turn's, and would pull them all together; labeled by the
-    words Claude named its question by, or its first words till then, and a
-    conversation's first turn by its title. A turn's "link" is the turn
-    before it; a branch's first turn's, the turn it goes on from, found once
-    every file is read (`_link_branches_`).
+    title are every turn's, and would pull them all together; named by the
+    words Claude named the turn by, or its question's first words till then.
+    A turn's "link" is the turn before it; a branch's first turn's, the turn
+    it goes on from; and its label its conversation's title, then its name:
+    both found once every file is read (`_relate_turns_`).
     """
     said, title = claude.turns(body), fields.get("title") or posixpath.basename(url)
     above = claude.parent_url(url, fields)
     out = []
     for n, (asked, answered) in enumerate(said):
-        words = names.get(question_digest(asked))
+        digest = turn_digest(asked, answered)
+        words = names.get(digest)
         extra = {"path": url, "kind": TURN, "turn": n, "session": fields.get("session"), "title": title,
-                 "words": words or _first_words_(asked), "named": words is not None, "asked": asked[: 2 * ASKED_CHARS]}
+                 "words": words or _first_words_(asked), "named": words is not None, "digest": digest,
+                 "asked": asked[:QUESTION_CHARS], "answered": answered[:ANSWER_CHARS]}
         if n:
             extra["link"] = f"{url}#{n - 1}"
         elif above is not None:
             extra.update(above=above, fork=int(fields.get("fork") or 0))
         if n == len(said) - 1:
             extra["updated"] = fields.get("updated")  # its branch's last turn: dated by its last write
-            if fields.get("cloud"):
-                extra["cloud"] = fields["cloud"]  # the branch in the cloud, as its file says
-        label = f"Claude · {title}" if n == 0 and above is None else extra["words"]
+        if fields.get("cloud"):  # its branch's cloud session, as its file says: away there, or kept to go on in
+            extra.update(cloud=fields["cloud"], away=bool(fields.get("away", True)))
         out.append(Doc(key=f"{url}#{n}", text=f"## You\n\n{asked}\n\n## Claude\n\n{answered}"[:TEXT_CHARS],
-                       embed=f"{asked}\n\n{answered}"[:SESSION_CHARS], summary=label, extra=extra))
+                       embed=f"{asked}\n\n{answered}"[:SESSION_CHARS], summary=extra["words"], extra=extra))
     return out
 
 
-def _link_branches_(docs):
-    """Each branch's first turn linked to the turn it goes on from: its parent's turn `fork`, counted in the parent's whole path.
+def _relate_turns_(docs):
+    """*docs*, every turn related to the rest: linked, and labeled by its conversation's title and its own name.
 
-    A parent's own turns follow the `fork` turns it keeps of its own
-    parent's, so the turn is its own turn `fork - its fork - 1`. A parent not
-    found, or without that turn, leaves the branch unlinked.
+    A branch's first turn is linked to the turn it goes on from: its
+    parent's turn `fork`, counted in the parent's whole path -- a parent's
+    own turns follow the `fork` it keeps of its own parent's, so the turn is
+    the parent's own turn `fork - its fork - 1`. A parent not found, or
+    without that turn, leaves the branch unlinked. A turn's label is its
+    conversation's root title -- its first branch's, whichever branch it is
+    of -- cut to PREFIX_CHARS at a word, then ` › ` and its name: so the
+    phone's list of cloud sessions, named as the points are, says what each is.
     """
-    turns, forks = {}, {}
+    turns, forks, aboves, titles = {}, {}, {}, {}
     for doc in docs:
         if doc.extra.get("kind") == TURN:
             url = doc.extra["path"]
             turns[url] = turns.get(url, 0) + 1
+            titles[url] = doc.extra.get("title") or ""
             if doc.extra["turn"] == 0:
                 forks[url] = doc.extra.get("fork", 0) if doc.extra.get("above") else 0
+                if doc.extra.get("above"):
+                    aboves[url] = doc.extra["above"]
     for doc in docs:
         above = doc.extra.get("above")
         if above and above in turns:
@@ -362,10 +372,26 @@ def _link_branches_(docs):
             if 0 <= n < turns[above]:
                 doc.extra["link"] = f"{above}#{n}"
 
+    def root(url):
+        seen = set()
+        while url in aboves and aboves[url] in titles and url not in seen:
+            seen.add(url)
+            url = aboves[url]
+        return titles.get(url, "")
 
-def question_digest(question):
-    """A question's key in words.json: the words Claude named it by are kept by it."""
-    return hashlib.sha1(question.encode()).hexdigest()[:20]
+    out = []
+    for doc in docs:
+        if doc.extra.get("kind") != TURN:
+            out.append(doc)
+            continue
+        doc.extra["root"] = root(doc.extra["path"])
+        out.append(replace(doc, summary=f"{_short_title_(doc.extra['root'])} › {doc.extra['words']}"))
+    return out
+
+
+def turn_digest(asked, answered):
+    """A turn's key in words.json: the words Claude named it by are kept by it -- by what was asked and answered, both."""
+    return hashlib.sha1(f"{asked}\0{answered}".encode()).hexdigest()[:20]
 
 
 def read_names(data):
@@ -452,6 +478,15 @@ def _named_lines_(reply, n):
     return [ln if len(ln) <= WORDS_CHARS else ln[: WORDS_CHARS - 1] + "…" for ln in lines]
 
 
+def _short_title_(title, n=PREFIX_CHARS):
+    """A conversation's *title*, before its turns' names: as it is, or cut to *n* characters at a word, an ellipsis after."""
+    title = " ".join(str(title).split())
+    if len(title) <= n:
+        return title
+    cut = title[: n + 1].rsplit(" ", 1)[0] if " " in title[: n + 1] else title[:n]
+    return cut[:n].rstrip(" :·-,;") + "…"
+
+
 def _first_words_(text):
     """*text*'s first FIRST_WORDS words, what a question is named by where Claude has not named it."""
     words = text.split()
@@ -477,6 +512,7 @@ class HypDocs(Hyp):
     HINT = ("click: open, or go on from a turn · right-click: place · drag: move · scroll: zoom · Tab: next layer"
             " · double-click outside: reset")
     LAYERS = ("disk", "tiles", "center")
+    LABEL_CHARS = 48  # a turn's label: its conversation's title, then its name
     # The settings kept with the corpus, in its settings.json, as they are turned on and off: and what each is till then.
     KEPT = {"web access": False, "hand off to the cloud": True}
     CLAUDE_AREA = 1 / 3  # of the window's, a Claude session's window takes, in its middle -- and a markdown being written
@@ -544,7 +580,6 @@ class HypDocs(Hyp):
         self._remoted_ = False  # the sessions put on remote as hyp started: once
         self.names = None  # a question's digest -> the words Claude named it by, as words.json keeps them: read once
         self._naming_ = False  # Claude is naming turns: one naming at a time (`_name_turns_`)
-        self.clouds = None  # a turn's key -> the cloud session a new branch after it went to, as clouds.json keeps them: read once
         self._unnamed_ = set()  # questions Claude could not name: not asked again till hyp starts again
 
     def __click_point__(self, i, now):
@@ -562,10 +597,7 @@ class HypDocs(Hyp):
 
         def at_turn():
             session = claude.Session.load(point["path"], self.root(args), self.claude_dir(args))
-            target = session.branch(len(session.upstream()) + n + 1)
-            if target is not session:
-                target.cloud = self._clouds_().get(point["key"])  # a new branch after it, in the cloud: taken back as it opens
-            return target
+            return session.branch(len(session.upstream()) + n + 1)
 
         self.run_async(at_turn, self.open_claude)
 
@@ -628,8 +660,9 @@ class HypDocs(Hyp):
         asked = " ".join(point.get("asked", "").split())
         asked = asked if len(asked) <= ASKED_CHARS else asked[: ASKED_CHARS - 1] + "…"
         which = f"Claude · {point.get('title')} · its turn {point.get('turn', 0) + 1}" + (" -- a branch" if point.get("above") else "")
-        cloud = ("in the cloud: open it here to take it back" if point.get("cloud") else
-                 "a branch after it in the cloud: open it here to take it back" if point.get("key") in self._clouds_() else None)
+        cloud = ("its branch is in the cloud: open its last turn here to take it back" if point.get("away") else
+                 "its branch has a cloud session: opened, what was said there comes here; handed off, it goes on there"
+                 if point.get("cloud") else None)
         return "\n".join(t for t in (self.snap.summaries[i], which, cloud, self.sublabel(i, full=True), asked) if t)
 
     def __animating__(self):
@@ -732,47 +765,45 @@ class HypDocs(Hyp):
         self.run_async(lambda: load(url, kind), show)
 
     def all_to_cloud(self):
-        """Every turn on the disk handed off to the cloud, a cloud session each, so that any of them can be gone on from there.
+        """Every branch on the disk handed off to the cloud, a cloud session each, so that any of them can be gone on with there.
 
-        A branch's last turn: the branch, its cloud session kept in its file,
-        as **remote** keeps it. Any other: a new branch going on after it --
-        which has no file till something is said in it, so its cloud session
-        is kept in the corpus's clouds.json. Opened here, either is taken
-        back. The conversations' files are pushed once, first; the sessions
-        are begun one at a time, as an engine job -- its bar in the middle of
-        the window, Esc to stop it. Turns in the cloud already, or open here,
-        are left as they are; what stops one is said, and the rest go on.
+        A branch -- a conversation's file -- goes whole: its cloud session told
+        to read it, and its parents up to where it goes on from, and named by
+        its first turn's label and its last turn's name (`_branch_name_`), so
+        that the phone's list says which it is. One with a cloud session of its
+        own already goes on in it (`claude.CloudHandoff.begin`). Its files are
+        pushed once, first; the sessions are begun one at a time, as an engine
+        job -- its bar in the middle of the window, Esc to stop it. Branches in
+        the cloud already, or open here, are left as they are; what stops one
+        is said, and the rest go on.
         """
         if not self.settings.get("hand off to the cloud"):
-            self.status = "turn on hand off to the cloud, in settings, to send turns there"
+            self.status = "turn on hand off to the cloud, in settings, to send branches there"
             return
-        clouds, open_here = self._clouds_(), {w.session.md_url for w in self.windows() if isinstance(w, claude.ClaudeWindow)}
-        todo = [p for p in (self.snap.points if self.snap is not None else ()) if p.get("kind") == TURN
-                and not p.get("cloud") and p.get("key") not in clouds and p.get("path") not in open_here]
+        open_here = {w.session.md_url for w in self.windows() if isinstance(w, claude.ClaudeWindow)}
+        todo = list(dict.fromkeys(p["path"] for p in (self.snap.points if self.snap is not None else ())
+                                  if p.get("kind") == TURN and not p.get("away") and p.get("path") not in open_here))
         if not todo:
-            self.status = "every turn is in the cloud already"
+            self.status = "every branch is in the cloud already"
             return
         args, put = self.args, self.worker.events.put
         root, subdir = self.root(args), self.claude_dir(args)
+        names = {url: self._branch_name_(url) for url in todo}  # each cloud session's, on the phone
 
         def job(progress):
-            progress(f"to the cloud: pushing {len({p['path'] for p in todo})} conversations")
+            progress(f"to the cloud: pushing {len(todo)} branch{'es' * (len(todo) != 1)}")
             top = claude.repository(root)[0]
-            claude.push_files(root, sorted({os.path.relpath(p["path"], top) for p in todo}), "hyp: every conversation, to the cloud")
+            claude.push_files(root, sorted(os.path.relpath(url, top) for url in todo), "hyp: every branch, to the cloud")
             sent, problems = 0, []
-            for n, point in enumerate(todo):
-                progress(f"to the cloud: {point.get('title')}, turn {point['turn'] + 1}", n, len(todo))
-                session = claude.Session.load(point["path"], root, subdir)
-                target = session.branch(len(session.upstream()) + point["turn"] + 1)
-                handoff = claude.CloudHandoff(target)
+            for n, url in enumerate(todo):
+                progress(f"to the cloud: {names[url]}", n, len(todo))
+                handoff = claude.CloudHandoff(claude.Session.load(url, root, subdir), names[url])
                 handoff.begin(push=False)
                 if handoff.problem is not None:
                     problems.append(handoff.problem)
-                    continue
-                sent += 1
-                if target is not session:
-                    self._keep_cloud_(point["key"], target.cloud)
-            progress(f"{sent} turn{'s' * (sent != 1)} sent to the cloud" + (f"; not {len(problems)}: {problems[0]}" if problems else ""),
+                else:
+                    sent += 1
+            progress(f"{sent} branch{'es' * (sent != 1)} sent to the cloud" + (f"; not {len(problems)}: {problems[0]}" if problems else ""),
                      len(todo), len(todo))
             if self.engine is not None:
                 self.engine.refresh(progress)  # the branches gone, as their files now say
@@ -845,10 +876,10 @@ class HypDocs(Hyp):
         window.note = None
         window.session.web = self.settings.get("web access", False)
         if self.settings.get("hand off to the cloud"):
-            window.handoff = claude.CloudHandoff(window.session)
+            window.handoff = claude.CloudHandoff(window.session, self._branch_name_(window.session.md_url))
             window.handoff.start()  # pushed, and begun, on a thread of its own
             return
-        window.handoff = claude.Handoff(window.session)
+        window.handoff = claude.Handoff(window.session, self._branch_name_(window.session.md_url))
         before = window.session.id
         window.handoff.start()
         if window.session.id != before:
@@ -861,26 +892,26 @@ class HypDocs(Hyp):
         the turns made there added, and filed. What stops it is said in the window, the session left where it is."""
         handoff = window.handoff
         cloud = getattr(handoff, "cloud", False)
-        went = window.session.cloud  # the cloud session, by its id: forgotten once it is back
 
         def back():
             try:
                 if cloud:
-                    return handoff.take_back(), None
+                    return (*handoff.take_back(), None)
                 handoff.stop()
-                return window.session.take_back(handoff.started), None
+                return window.session.take_back(handoff.started), None, None
             except claude.Failed as e:
-                return None, str(e)
+                return None, None, str(e)
 
         def done(result):
-            n, problem = result
+            n, branch, problem = result
             if problem is not None:
                 window.note = f"not taken back: {problem}"
                 return
             window.handoff = None
-            if cloud:
-                self._forget_cloud_(went)
             window.note = f"{n} turn{'s' * (n != 1)} from the {'cloud' if cloud else 'phone'}" if n else None
+            if branch is not None:  # both went on: the cloud's turns, a branch of their own
+                window.note = (f"{n} turn{'s' * (n != 1)} from the cloud, which went on from turn {branch.fork} as this did: "
+                               f"they are a branch of their own, {branch.title()}")
             window._render_(follow=True)
             if window.session.resumable:
                 self._file_(window.session)  # its turns, or that it is back: in its file -- a new branch's, made there
@@ -888,7 +919,7 @@ class HypDocs(Hyp):
                 then()
 
         if cloud:
-            window.note = "taking it back from the cloud …"
+            window.note = "taking it back from the cloud …" if window.session.away else "what was said in its cloud session, coming …"
         self.run_async(back, done)
 
     def __snapshot_arrived__(self):
@@ -901,6 +932,7 @@ class HypDocs(Hyp):
             return  # a cloud session each, at every start: handed off as their windows close, or by **remote**
         self._remoted_ = True
         urls = list(dict.fromkeys(p["path"] for p in self.snap.points if p.get("kind") == TURN and p.get("path")))
+        labels = {url: self._branch_name_(url) for url in urls}  # each session's name on the phone
         root, subdir, web = self.root(self.args), self.claude_dir(self.args), self.settings.get("web access", False)
 
         def open_here(session):
@@ -920,7 +952,7 @@ class HypDocs(Hyp):
                     continue  # no record of it to resume: it stays here
                 before = session.id
                 session.web = web
-                handoff = claude.Handoff(session)
+                handoff = claude.Handoff(session, labels.get(url))
                 handoff.start()
                 if session.id != before:
                     session.save()  # a fresh copy of it gone: its id in the markdown, for when it is taken back
@@ -942,7 +974,7 @@ class HypDocs(Hyp):
         """A session reopened here: taken back from the phone, if it is there; else what was said elsewhere since it was saved, added."""
         handoff = self.handoffs.pop(window.session.id, None)
         if handoff is None and window.session.cloud:
-            handoff = claude.CloudHandoff(window.session)  # in the cloud since hyp last ran: as its file says
+            handoff = claude.CloudHandoff(window.session, self._branch_name_(window.session.md_url))  # since hyp last ran: as its file says
         if handoff is not None:
             window.handoff = handoff
             self._take_back_(window)
@@ -1000,8 +1032,8 @@ class HypDocs(Hyp):
         """
         if self._naming_ or self.snap is None:
             return
-        todo = list(dict.fromkeys(p["asked"] for p in self.snap.points
-                                  if p.get("kind") == TURN and not p.get("named") and p.get("asked") not in self._unnamed_))
+        todo = list({p["digest"]: (p["digest"], p.get("asked", ""), p.get("answered", "")) for p in self.snap.points
+                     if p.get("kind") == TURN and not p.get("named") and p.get("digest") and p["digest"] not in self._unnamed_}.values())
         if not todo:
             return
         self._naming_ = True
@@ -1012,7 +1044,7 @@ class HypDocs(Hyp):
             try:
                 self._words_(todo, ask=True)
             except claude.Failed as e:
-                self._unnamed_.update(todo)
+                self._unnamed_.update(d for d, _, _ in todo)
                 return f"turns named by their first words: Claude could not name them: {e}"
             if engine is not None:
                 engine.refresh(status)  # relabeled: nothing moves, but the disk is shown anew
@@ -1025,30 +1057,30 @@ class HypDocs(Hyp):
 
         self.run_async(job, done)
 
-    def _words_(self, questions, ask):
-        """The few words naming each of *questions*, and how many are not Claude's.
+    def _words_(self, turns, ask):
+        """The few words naming each of *turns* -- `(digest, asked, answered)`, as `turn_digest` keys them -- and how many are not Claude's.
 
-        Claude's are kept, by each question's digest, in the corpus's
-        words.json. With *ask*, those it has not named are asked of it,
-        WORDS_BATCH at a time, and kept as each batch is named; a question it
-        has not named is named by its first words. Raises `claude.Failed`
-        where Claude cannot say.
+        Claude's are kept, by each turn's digest, in the corpus's words.json.
+        With *ask*, those it has not named are asked of it, WORDS_BATCH at a
+        time -- each by its question and the start of its answer -- and kept
+        as each batch is named; a turn it has not named is named by its
+        question's first words. Raises `claude.Failed` where Claude cannot say.
         """
         names = self._names_()
-        digests = [question_digest(q) for q in questions]
-        todo = list(dict.fromkeys(n for n, d in enumerate(digests) if d not in names))
+        todo = list(dict.fromkeys(n for n, (d, _, _) in enumerate(turns) if d not in names))
         if todo and ask:
             for b in range(0, len(todo), WORDS_BATCH):
                 batch = todo[b : b + WORDS_BATCH]
-                listed = "\n".join(f"{m + 1}. {' '.join(questions[n].split())[:QUESTION_CHARS]}" for m, n in enumerate(batch))
-                reply = claude.ask(WORDS.format(n=len(batch), questions=listed))
+                listed = "\n".join(f"{m + 1}. User: {' '.join(turns[n][1].split())[:QUESTION_CHARS]} || "
+                                   f"Claude: {' '.join(turns[n][2].split())[:ANSWER_CHARS]}" for m, n in enumerate(batch))
+                reply = claude.ask(WORDS.format(n=len(batch), turns=listed))
                 said = _named_lines_(reply, len(batch))
                 if said is None:
                     raise claude.Failed(f"its answer was not {len(batch)} lines: {reply[:200]}")
-                names.update({digests[n]: w for n, w in zip(batch, said)})
+                names.update({turns[n][0]: w for n, w in zip(batch, said)})
                 self._keep_names_()
             todo = []
-        return [names.get(d) or _first_words_(q) for d, q in zip(digests, questions)], len(todo)
+        return [names.get(d) or _first_words_(q) for d, q, _ in turns], len(todo)
 
     def _names_(self):
         """`names`, read from the corpus's words.json the first time: {} without one."""
@@ -1063,40 +1095,21 @@ class HypDocs(Hyp):
             with fs.open(path, "w") as f:
                 json.dump(self.names, f)
 
-    def _clouds_(self):
-        """`clouds`, read from the corpus's clouds.json the first time: {} without one."""
-        if self.clouds is None:
-            self.clouds = {}
-            data = getattr(self.args, "data", None)
-            if data:
-                fs, path = fsspec.url_to_fs(posixpath.join(str(data), "clouds.json"))
-                try:
-                    kept = json.loads(fs.cat_file(path))
-                    self.clouds = kept if isinstance(kept, dict) else {}
-                except (FileNotFoundError, ValueError):
-                    pass
-        return self.clouds
+    def _branch_name_(self, url):
+        """The name a handoff of the branch saved at *url* goes by: its first turn's label, then `→` and its last turn's name.
 
-    def _keep_cloud_(self, key, cloud):
-        """Keep that a new branch after turn *key* went to cloud session *cloud*, in clouds.json."""
-        self._clouds_()[key] = cloud
-        self._write_clouds_()
-
-    def _forget_cloud_(self, cloud):
-        """Cloud session *cloud* is back: no turn's any more."""
-        clouds = self._clouds_()
-        gone = [k for k, c in clouds.items() if c == cloud]
-        for k in gone:
-            del clouds[k]
-        if gone:
-            self._write_clouds_()
-
-    def _write_clouds_(self):
-        data = getattr(self.args, "data", None)
-        if data:
-            fs, path = fsspec.url_to_fs(posixpath.join(str(data), "clouds.json"))
-            with fs.open(path, "w") as f:
-                json.dump(self.clouds, f)
+        So the phone's list says which branch of which conversation each is:
+        `QM: MEAS › Wigner's friend → GRW collapse`. A branch of one turn is
+        named by its label; one not on the disk, None.
+        """
+        if self.snap is None:
+            return None
+        turns = sorted((p.get("turn", 0), self.snap.summaries[i], p.get("words", "")) for i, p in enumerate(self.snap.points)
+                       if p.get("kind") == TURN and p.get("path") == url)
+        if not turns:
+            return None
+        first, last = turns[0], turns[-1]
+        return first[1] if len(turns) == 1 else f"{first[1]} → {last[2]}"
 
     def _kept_settings_(self):
         """The settings kept with the corpus, in its settings.json: {} without one."""

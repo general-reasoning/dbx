@@ -33,6 +33,12 @@ if sys.argv[1:3] == ["auth", "status"]:  # FAKE_ACCOUNT, as `claude auth status 
     print(os.environ.get("FAKE_ACCOUNT", json.dumps({{"loggedIn": True, "email": "me@example.com", "orgName": "Example Org",
                                                       "orgId": "org-now", "subscriptionType": "team"}})))
     sys.exit(0)
+if "--cloud" in sys.argv and "-p" in sys.argv:  # a message sent to a cloud session: logged, as the cloud has it
+    cloud = sys.argv[sys.argv.index("--cloud") + 1]
+    with open(os.environ["FAKE_LOG"], "a") as f:
+        f.write(json.dumps({{"argv": sys.argv[1:], "posted": sys.argv[-1], "to": cloud}}) + "\n")
+    print(json.dumps({{"ok": True, "session_id": cloud, "url": "https://claude.ai/code/" + cloud}}))
+    sys.exit(0)
 if "--cloud" in sys.argv:  # a cloud session begun: its url said, and Claude Code left running
     import time
     with open(os.environ["FAKE_LOG"], "a") as f:
@@ -276,13 +282,14 @@ def saved(cli, tree, monkeypatch):
     return tree, s.save()
 
 
-def test_a_saved_conversation_is_a_point_a_turn_its_first_labeled_by_its_title(saved):
+def test_a_saved_conversation_is_a_point_a_turn_labeled_by_its_title_and_its_name(saved):
     tree, url = saved
     found = {d.key: d for d in docs.documents(str(tree), progress=lambda *a: None)}
     assert set(found) == {str(tree / "a.md"), f"{url}#0"}
     d = found[f"{url}#0"]
     assert d.extra["kind"] == docs.TURN and d.extra["path"] == url and d.extra["turn"] == 0
-    assert d.summary == "Claude · What is alpha?" and "An answer." in d.embed and "link" not in d.extra
+    assert d.summary == "What is alpha? › What is alpha?", "its conversation's title, then its name: its first words, till Claude names it"
+    assert "An answer." in d.embed and "link" not in d.extra
 
 
 @pytest.fixture
@@ -593,7 +600,7 @@ def test_a_sessions_title_is_edited_in_its_window_and_relabels_its_point(app, sa
     assert fields["title"] == "Alpha, explained" and body.lstrip().startswith("# Claude · Alpha, explained")
     found = {d.key: d for d in docs.documents(str(tree), progress=lambda *a: None)}
     first = found[f"{url}#0"]
-    assert first.summary == "Claude · Alpha, explained" and first.extra["updated"] == fields["updated"]
+    assert first.summary == "Alpha, explained › What is alpha?" and first.extra["updated"] == fields["updated"]
 
 
 def test_escape_puts_the_title_back_and_keeps_the_window_open(app):
@@ -1787,7 +1794,7 @@ def test_every_turn_is_a_point_joined_to_the_one_before_and_a_click_goes_on_from
     url = three.md_url
     first, second, last = (_turn_(a, url, n) for n in range(3))
     assert sorted(a.links()) == sorted([(second, first), (last, second)]), "each turn joined to the one before"
-    assert a.snap.summaries[first] == "Claude · apple" and a.snap.summaries[second] == "banana", "named by its words, or its first"
+    assert a.snap.summaries[first] == "apple › apple" and a.snap.summaries[second] == "apple › banana", "its title, then its name"
     assert a.__point_datetime__(last) and a.__point_datetime__(second) is None, "dated: its branch's last turn"
 
     a.__click_point__(second, 0.0)
@@ -1807,6 +1814,7 @@ def test_every_turn_is_a_point_joined_to_the_one_before_and_a_click_goes_on_from
     a.snap = _snap_of_(tree)
     new = _turn_(a, branch, 0)
     assert a.snap.points[new]["link"] == f"{url}#1" and a.__point_link__(new) == _turn_(a, url, 1), "joined to the turn it goes on from"
+    assert a.snap.summaries[new] == "apple › date", "a branch's turns under the conversation's root title, not the branch's"
     assert a.snap.texts[new].endswith("Noted.") and "banana" not in a.snap.texts[new], "the turn's own words only"
 
 
@@ -1833,7 +1841,8 @@ def test_turns_not_yet_named_are_named_by_claude_in_the_background_and_relabeled
     a = turns.app
     _settle_(a)
     labels = sorted(a.snap.summaries[k] for k, p in enumerate(a.snap.points) if p.get("kind") == docs.TURN)
-    assert labels == ["Claude · What is alpha?", "Topic 1.2", "Topic 1.3"], "named at once, as the points came in; the first by its title"
+    assert labels == [f"What is alpha? › Topic 1.{n}" for n in (1, 2, 3)], "named at once, as the points came in, under its title"
+    assert "User: What is alpha? || Claude: About alpha?" in turns.asked[0], "each turn by what was asked and answered"
     assert len(turns.asked) == 1 and sorted(json.loads((turns.data / "words.json").read_text()).values()) == [
         "Topic 1.1", "Topic 1.2", "Topic 1.3"]
     a.__snapshot_arrived__()
@@ -1917,8 +1926,9 @@ def test_a_conversation_taken_back_from_the_cloud_has_its_turns_and_its_changes_
     (tree / "mine.md").write_text("not committed\n")  # set aside while the cloud's branch is checked out, and put back
     monkeypatch.setenv("FAKE_CLOUD", json.dumps([["banana", "From the cloud."], ["cherry", "Again."]]))
     monkeypatch.setenv("FAKE_CLOUD_FILE", "cloud.md")
-    assert h.take_back() == 2
-    assert s.path()[-2:] == [("banana", "From the cloud."), ("cherry", "Again.")] and s.cloud is None
+    assert h.take_back() == (2, None)
+    assert s.path()[-2:] == [("banana", "From the cloud."), ("cherry", "Again.")]
+    assert (s.cloud, s.away, s.cloud_seen, s.cloud_upto) == ("session_01FAKEcloud", False, 2, 3), "kept, to go on in again"
     assert s.id != first and s.start == 1 and s.earlier == [(first, 0, 1)], "turn 1 held by the first conversation, the rest by this"
     assert _sh_(tree, "git", "branch", "--show-current") == "main" and (tree / "cloud.md").exists() and (tree / "mine.md").exists()
     assert "from the cloud" in github.log(), "the cloud's change merged, and pushed"
@@ -1927,7 +1937,8 @@ def test_a_conversation_taken_back_from_the_cloud_has_its_turns_and_its_changes_
     assert s.held(1)[0] == first and s.held(2)[0] == s.id and s.held(3)[0] == s.id, "a branch forks whichever holds its turn"
     s.save()
     again = claude.Session.load(s.md_url, str(tree))
-    assert (again.start, again.earlier, again.cloud) == (1, [(first, 0, 1)], None) and len(again.path()) == 3
+    assert (again.start, again.earlier, again.cloud, again.away) == (1, [(first, 0, 1)], "session_01FAKEcloud", False)
+    assert len(again.path()) == 3
     assert again.send("date") == "seen:banana|cherry|date", "it goes on here from the conversation taken back"
 
 
@@ -1975,9 +1986,11 @@ def test_docs_hands_off_to_the_cloud_by_default_and_takes_it_back_when_reopened_
     restarted.__click_point__(_turn_(restarted, url, 0), 0.0)
     back = restarted.center
     assert back.handoff is None and back.note == "1 turn from the cloud", "taken back, as its file said where it was"
-    assert back.session.turns[-1] == ("And from the phone?", "Answered in the cloud.") and back.session.cloud is None
+    assert back.session.turns[-1] == ("And from the phone?", "Answered in the cloud.")
+    assert back.session.cloud == "session_01FAKEcloud" and not back.session.away, "back, its cloud session kept"
     fields = docview.front_matter(open(url).read())[0]
-    assert "cloud" not in fields and "Answered in the cloud." in open(url).read()
+    assert (fields["cloud"], fields["away"], fields["cloud_seen"]) == ("session_01FAKEcloud", False, 1)
+    assert "Answered in the cloud." in open(url).read()
 
 
 def test_a_message_queued_while_claude_answered_is_a_turn_of_its_own(cli):
@@ -1996,38 +2009,128 @@ def test_a_message_queued_while_claude_answered_is_a_turn_of_its_own(cli):
     assert [claude.anchor("queued", k) for k in (1, 2)] == ["a1", "a2"]
 
 
-def test_all_to_the_cloud_sends_every_turn_a_session_each_and_a_click_takes_a_new_branch_back(app, saved, github, cli, tmp_path, monkeypatch):
+def test_all_to_the_cloud_sends_every_branch_whole_named_from_its_first_turn_to_its_last(app, saved, github, cli, tmp_path, monkeypatch):
     tree, url = saved
+    monkeypatch.setenv("FAKE_RECORD", "1")
     s = claude.Session.load(url, str(tree), "sessions")
     s.send("And beta?")
     s.save()
-    data = tmp_path / "data"
-    data.mkdir()
-    app.args.data = str(data)
+    b = s.branch(1)  # a branch after the first turn
+    b.send("Or gamma?")
+    b.save()
     app.settings["hand off to the cloud"] = True
     app.snap = _snap_of_(tree)
     app.all_to_cloud()
     _settle_(app)
-    told = [r["cloud"] for r in cli.runs() if "cloud" in r]
-    name = os.path.relpath(url, tree)
-    assert sorted(t.split(": ", 1)[1].split(". Read")[0] for t in told) == sorted([
-        f"{name} (its first 1 turn)", f"{name} (all of its turns)"]), "a session each: up to its turn"
-    assert docview.front_matter(open(url).read())[0]["cloud"] == "session_01FAKEcloud", "the last turn: the branch itself"
-    assert json.loads((data / "clouds.json").read_text()) == {f"{url}#0": "session_01FAKEcloud"}, "the first: a new branch after it"
-    assert "hyp: every conversation, to the cloud" in github.log(), "the conversations pushed once, first"
+    named = sorted(r["argv"][r["argv"].index("-n") + 1] for r in cli.runs() if "cloud" in r)
+    assert named == ["What is alpha? › Or gamma?", "What is alpha? › What is alpha? → And beta?"], \
+        "a session a branch: its first turn's label, then its last turn's name"
+    told = {r["argv"][r["argv"].index("-n") + 1]: r["cloud"] for r in cli.runs() if "cloud" in r}
+    assert f"{os.path.relpath(url, tree)} (its first 1 turn), then {os.path.relpath(b.md_url, tree)} (all of its turns)" \
+        in told["What is alpha? › Or gamma?"], "a branch: its parent's, up to where it goes on from, then its own"
+    for f in (url, b.md_url):
+        fields = docview.front_matter(open(f).read())[0]
+        assert fields["cloud"] == "session_01FAKEcloud" and fields["away"] is True
     app.snap = _snap_of_(tree)
-    assert "a branch after it in the cloud" in app.__point_tooltip__(_turn_(app, url, 0))
-    assert "in the cloud: open it here" in app.__point_tooltip__(_turn_(app, url, 1))
+    assert "its branch is in the cloud" in app.__point_tooltip__(_turn_(app, url, 0)), "every turn of it says so"
     app.all_to_cloud()
-    assert app.status == "every turn is in the cloud already"
+    assert app.status == "every branch is in the cloud already"
 
-    monkeypatch.setenv("FAKE_CLOUD", json.dumps([["What of gamma?", "Gamma, from the phone."]]))
-    app.__click_point__(_turn_(app, url, 0), 0.0)
+    monkeypatch.setenv("FAKE_CLOUD", json.dumps([["What of delta?", "Delta, from the phone."]]))
+    app.__click_point__(_turn_(app, url, 1), 0.0)
     window = app._claude_window_()
-    assert window.note == "1 turn from the cloud" and window.session.resumable and window.session.fork == 1
-    branch = window.session.md_url
-    fields = docview.front_matter(open(branch).read())[0]
-    assert fields["parent"] == os.path.relpath(url, os.path.dirname(branch)) and fields["fork"] == 1 and "cloud" not in fields
-    assert window.session.path() == [("What is alpha?", "An answer."), ("What of gamma?", "Gamma, from the phone.")]
-    assert window.session.earlier == [(s.id, 0, 1)], "its first turn held by the conversation it went on from"
-    assert json.loads((data / "clouds.json").read_text()) == {}, "back: no turn's any more"
+    assert window.note == "1 turn from the cloud" and window.session.path()[-1] == ("What of delta?", "Delta, from the phone.")
+    assert window.session.cloud == "session_01FAKEcloud" and not window.session.away, "back, its cloud session kept"
+    app._close_(window)
+    app.snap = _snap_of_(tree)
+    begun = len([r for r in cli.runs() if "cloud" in r])
+    app.all_to_cloud()
+    _settle_(app)
+    assert len([r for r in cli.runs() if "cloud" in r]) == begun, "sent again: it goes on in its cloud session"
+    assert docview.front_matter(open(url).read())[0]["away"] is True
+
+
+def test_a_turn_cut_short_is_no_turn_of_its_own_in_the_file_or_claude_codes_record(cli):
+    body = "\n".join(["# Claude · t", "", "## You", "", "one?", "", "## Claude", "", "partly", "",
+                      "## You", "", "[Request interrupted by user]", "", "## Claude", "", "the rest", "",
+                      "## You", "", "two?", "", "## Claude", "", "second", ""])
+    assert claude.turns(body) == [("one?", "partly\n\nthe rest"), ("two?", "second")]
+    events = [{"type": "user", "uuid": "u1", "message": {"content": "one?"}},
+              {"type": "assistant", "uuid": "a1", "message": {"content": [{"type": "text", "text": "partly"}]}},
+              {"type": "user", "uuid": "x", "message": {"content": [{"type": "text", "text": "[Request interrupted by user]"}]}},
+              {"type": "assistant", "uuid": "a1b", "message": {"content": [{"type": "text", "text": "the rest"}]}},
+              {"type": "user", "uuid": "u2", "message": {"content": "two?"}},
+              {"type": "assistant", "uuid": "a2", "message": {"content": [{"type": "text", "text": "second"}]}}]
+    home = os.path.join(os.environ["CLAUDE_CONFIG_DIR"], "projects", "here")
+    os.makedirs(home, exist_ok=True)
+    path = os.path.join(home, "cut.jsonl")
+    with open(path, "w") as f:
+        f.writelines(json.dumps(e) + "\n" for e in events)
+    assert claude.exchanges(path) == [("one?", "partly\n\nthe rest"), ("two?", "second")]
+    assert [claude.anchor("cut", k) for k in (1, 2)] == ["a1b", "a2"], "counted as the file counts them"
+
+
+@pytest.mark.parametrize("title, short", [
+    ("QM: MEAS", "QM: MEAS"),
+    ("QM: MEAS: QBism: arXiv:1311.5253", "QM: MEAS: QBism…"),
+    ("Supercalifragilisticexpialidocious, again", "Supercalifragilisticex…"),
+])
+def test_a_long_conversation_title_is_cut_at_a_word_before_its_turns_names(title, short):
+    assert docs._short_title_(title) == short
+
+
+@pytest.fixture
+def remembered(cli, tree, github, monkeypatch):
+    """A conversation of one turn handed off to the cloud and taken back, nothing said there: its cloud session kept."""
+    monkeypatch.setenv("FAKE_RECORD", "1")
+    monkeypatch.setenv("FAKE_REPLY", "seen:{seen}")
+    s = claude.Session(str(tree))
+    s.send("apple")
+    s.save()
+    h = claude.CloudHandoff(s)
+    h.begin()
+    assert h.take_back() == (0, None) and s.cloud == "session_01FAKEcloud" and (s.cloud_seen, s.cloud_upto) == (0, 1)
+    return s
+
+
+def test_handed_off_again_after_the_mac_went_on_the_cloud_session_is_told_of_its_turns_not_begun_anew(remembered, cli, tree):
+    s = remembered
+    s.send("banana")
+    s.save()
+    before = len([r for r in cli.runs() if "cloud" in r])
+    h = claude.CloudHandoff(s)
+    h.begin()
+    assert h.problem is None and s.cloud == "session_01FAKEcloud" and s.away and s.cloud_upto == 2
+    assert len([r for r in cli.runs() if "cloud" in r]) == before, "no cloud session begun: the old one goes on"
+    (posted,) = [r for r in cli.runs() if "posted" in r]
+    assert posted["to"] == "session_01FAKEcloud" and posted["posted"].startswith(claude.HYP_MARK)
+    assert "its turns 2 to 2" in posted["posted"] and os.path.basename(s.md_url) in posted["posted"], "pointed to its files"
+
+
+def test_turns_made_in_the_cloud_since_it_was_back_come_home_as_it_opens_and_go_on_there(remembered, cli, tree, monkeypatch):
+    s = remembered
+    monkeypatch.setenv("FAKE_CLOUD", json.dumps([["cherry", "From the phone, later."]]))
+    assert claude.CloudHandoff(s).sync() == (1, None), "the phone went on, the Mac not: its turn, this one's"
+    assert s.path()[-1] == ("cherry", "From the phone, later.") and (s.cloud_seen, s.cloud_upto) == (1, 2)
+    h = claude.CloudHandoff(s)
+    h.begin()
+    assert not [r for r in cli.runs() if "posted" in r], "the cloud has every turn: nothing to tell it"
+    assert s.away and s.cloud == "session_01FAKEcloud"
+
+
+def test_both_going_on_the_cloud_turns_come_as_a_branch_which_keeps_the_cloud_session(remembered, cli, tree, monkeypatch):
+    s = remembered
+    s.send("banana")  # the Mac went on...
+    s.save()
+    monkeypatch.setenv("FAKE_CLOUD", json.dumps([["cherry", "From the phone, meanwhile."]]))  # ...and the phone did too
+    n, branch = claude.CloudHandoff(s).sync()
+    assert n == 1 and branch is not None and branch.above.md_url == s.md_url and branch.fork == 1
+    assert branch.path() == [("apple", "seen:apple"), ("cherry", "From the phone, meanwhile.")], "going on from where they parted"
+    assert branch.cloud == "session_01FAKEcloud" and s.cloud is None, "the cloud session the branch's now"
+    assert docview.front_matter(open(branch.md_url).read())[0]["cloud"] == "session_01FAKEcloud", "and in its file"
+    assert s.path() == [("apple", "seen:apple"), ("banana", "seen:apple|banana")], "the Mac's line as it was"
+    begun = len([r for r in cli.runs() if "cloud" in r])
+    h = claude.CloudHandoff(s)
+    h.begin()
+    assert len([r for r in cli.runs() if "cloud" in r]) == begun + 1 and s.cloud == "session_01FAKEcloud" and s.away, \
+        "the Mac's line: a cloud session of its own, begun anew"

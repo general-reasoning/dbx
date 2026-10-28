@@ -2148,3 +2148,26 @@ def test_a_conversation_too_long_to_write_out_is_given_the_cloud_by_its_files(cl
     claude.CloudHandoff(s).begin()
     told = next(r["cloud"] for r in cli.runs() if "cloud" in r)
     assert f"{os.path.basename(s.md_url)} (all of its turns)" in told and "**You**" not in told
+
+
+def test_two_take_backs_at_once_teleport_once(remembered, cli, monkeypatch):
+    import threading
+
+    s = remembered
+    s.away = True
+    monkeypatch.setenv("FAKE_CLOUD", json.dumps([["cherry", "From the phone."]]))
+    teleports = lambda: len([r for r in cli.runs() if r.get("argv", [""])[0] == "--teleport"])  # noqa: E731
+    before, h, got = teleports(), claude.CloudHandoff(s), []
+    threads = [threading.Thread(target=lambda: got.append(h.take_back())) for _ in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(60)
+    assert sorted(got) == [(0, None), (1, None)], "the second waits for the first, and finds it back"
+    assert teleports() == before + 1
+    assert s.path()[-1] == ("cherry", "From the phone.") and not s.away
+
+
+def test_why_a_teleport_failed_is_what_claude_code_said_not_its_status_bar():
+    screen = "Teleporting session\nError: session not found\n────────\n❯ \n◐ medium · /effort\n5-hour limit: 12% used · usage\n"
+    assert claude._said_(screen) == "Teleporting session · Error: session not found"

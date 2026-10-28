@@ -659,6 +659,9 @@ class CloudHandoff:
         self._screen_ = ""
         self._said_ = 0.0  # when its screen last said something new
         self._trusted_ = False  # Claude Code's question, whether to trust --dir, answered
+        # One teleport at a time: two at once -- a take-back while one is under way -- would share its terminal, and the
+        # second ended the first's. A second waits for the first, and finds the session back.
+        self._lock_ = threading.Lock()
 
     # 2. Declared API -----------------------------------------------------------
 
@@ -697,7 +700,7 @@ class CloudHandoff:
                 if s.resumable:
                     s.save()  # where it went, in its file: a restart of hyp takes it back from there
                 return
-        tail = " ".join(self._screen_.split())[-200:]
+        tail = _said_(self._screen_)
         self.stop()
         self.problem = f"Claude Code did not begin a cloud session{': ' + tail if tail else ''}"
 
@@ -752,7 +755,13 @@ class CloudHandoff:
         brought back.
         """
         s = self.session
-        record, turns = self._fetch_()
+        if not self._lock_.acquire(blocking=False):
+            with self._lock_:  # brought back meanwhile, by the one under way
+                return 0, None
+        try:
+            record, turns = self._fetch_()
+        finally:
+            self._lock_.release()
         came = turns[s.cloud_seen :]
         if came and s.resumable and len(s.path()) > s.cloud_upto:
             branch = s.branch(s.cloud_upto)
@@ -868,10 +877,10 @@ class CloudHandoff:
                 elif typed is not None and not exited and len(squashed) > typed + 40 and quiet:
                     self._type_("/exit")
                     exited = True
-                if os.waitpid(self.pid, os.WNOHANG) != (0, 0):
+                if self.pid is not None and os.waitpid(self.pid, os.WNOHANG) != (0, 0):
                     self.pid = None
             if typed is None:
-                tail = " ".join(self._screen_.split())[-200:]
+                tail = _said_(self._screen_)
                 raise Failed(f"Claude Code could not bring the cloud session back{': ' + tail if tail else ''}")
         finally:
             self.stop()
@@ -1015,6 +1024,15 @@ def _conversation_files_(session, top):
             how = f"its first {keep} turn{'s' * (keep != 1)}"
         out.append((os.path.relpath(s.md_url, top), how))
     return out
+
+
+def _said_(screen, chars=160):
+    """What Claude Code's *screen* last said, to say why something failed: its last lines of words, its status bar and
+    prompt -- usage, effort, rules -- left out, which would read as the reason."""
+    lines = [" ".join(line.split()) for line in screen.splitlines()]
+    words = [line for line in lines if re.search(r"[A-Za-z]{3}", line) and not re.match(r"^[─━╭╰│❯>⏵◐◑◒◓·\s]", line)
+             and not re.search(r"/effort|shift\+tab|% (left|used)|usage|tokens", line, re.I)]
+    return " · ".join(words)[-chars:]
 
 
 def _written_out_(said, before=0):
@@ -1567,7 +1585,8 @@ class ClaudeWindow(EditableTitle, DocWindow):
         hot = self.chip.collidepoint(pygame.mouse.get_pos()) and not self.busy()
         pygame.draw.rect(surf, (52, 60, 76) if hot else (40, 46, 58), self.chip, border_radius=4)
         surf.blit(chip, chip.get_rect(center=self.chip.center))
-        note = small.render(self.note or hint, True, (240, 120, 110) if self.note else DIM)
+        room = self.chip.x - (self.input.x + pad) - 12  # beside the model's chip: a long note cut short, not drawn under it
+        note = small.render(fit(small, self.note or hint, room), True, (240, 120, 110) if self.note else DIM)
         surf.blit(note, (self.input.x + pad, bottom))
         pygame.key.set_text_input_rect(self.input)
 

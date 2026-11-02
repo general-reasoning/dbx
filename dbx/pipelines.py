@@ -107,6 +107,17 @@ class Pipeline(Datablock):
         """The entrypoint's anchorkeypath."""
         return self.entrypoint.anchorkeypath
 
+    @property
+    def operational(self) -> dict:
+        """This pipeline's operational keyword arguments: its own, outside its identity.
+
+        What `__create__` hands on to the blocks that run with them -- `n_workers`, `n_gpus`,
+        ... -- as `Block(spec=..., **self.operational)`: a keyword a block does not declare stays
+        out of its hash too. The datalake is not among them: every block resolves its own.
+        """
+        explicit = set(self.__explicit_params__())
+        return {k: getattr(self, k) for k in self.parameters if k not in explicit and k != 'log'}
+
 
 class PipelineFromEntrypointFn(Pipeline):
     """A Pipeline whose tree -- its entrypoint the root -- an entrypoint function arranges; see `pipeline`."""
@@ -126,8 +137,7 @@ class PipelineFromEntrypointFn(Pipeline):
     @property
     def operational(self) -> dict:
         """The function's operational keyword arguments: this block's own, outside its identity, and its datalake."""
-        explicit = set(self.__explicit_params__())
-        ops = {k: getattr(self, k) for k in self.parameters if k not in explicit and k != 'log'}
+        ops = super().operational
         if 'datalake' in inspect.signature(type(self).FUNCTION).parameters:
             ops['datalake'] = getattr(self, '_datalake_', None)
         return ops

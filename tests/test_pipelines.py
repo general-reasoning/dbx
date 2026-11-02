@@ -92,6 +92,24 @@ def test_create_runs_once_per_instance(lake, monkeypatch):
     assert len(PipeJournal.read(PipeJournal.ANCHOR, datalake=lake)) == 1
 
 
+class Handing(Pipeline):
+    @dataclass
+    class VAR(Pipeline.VAR):
+        n: int = 1
+
+    def __create__(self):
+        return Leaf(spec={'n': self.var.n}, **self.operational)
+
+
+def test_operational_is_what_create_hands_on_and_no_identity(lake):
+    p = Handing(spec={'n': 2}, n_workers=4, devices=['cuda:0'])
+    assert p.operational == {'n_workers': 4, 'devices': ['cuda:0']}
+    assert Handing(spec={'n': 2}).operational == {}
+    assert p.hash == Handing(spec={'n': 2}).hash, "operational arguments are no identity"
+    leaf = p.entry
+    assert leaf.n_workers == 4 and leaf.hash == Handing(spec={'n': 2}).entry.hash
+
+
 def test_a_pipeline_journals_only_when_its_journal_is_on(lake):
     assert Pipeline.JOURNAL is False
     Quiet().create()

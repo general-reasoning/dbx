@@ -5,7 +5,7 @@ import pytest
 
 import dbx
 from dbx.datablocks import DATAFILE, Datablock
-from dbx.pipelines import PipelineFromEntrypointFn, pipeline
+from dbx.pipelines import PipelineFromEntrypointFn, entrypoint_tag, pipeline
 
 
 class Leaf(Datablock):
@@ -75,9 +75,10 @@ def test_a_block_held_hashes_as_its_quote(lake):
     assert held.hash == quoted.hash
 
 
-def test_the_tag_is_the_functions_qualified_name_unless_given(lake):
-    assert leaf('a').tag == f"{__name__}.leaf"
-    assert root('a').tag == 'rooted'
+def test_the_tag_is_the_functions_qualified_name_unless_given_and_the_presets(lake):
+    assert leaf('a').tag == f"{__name__}.leaf:a" == entrypoint_tag(leaf.function, 'a')
+    assert root('a').tag == 'rooted:a'
+    assert leaf('b').tag != leaf('a').tag, "the pipelines of one function are told apart by their presets"
     leaf('b').entry
     assert len(dbx.pipejournal(datalake=lake, tag='leaf')) == 1, "a tag filter matches by containment"
     root('a').entry     # creates a leaf pipeline too, within its tree
@@ -118,7 +119,7 @@ def test_a_nested_pipeline_is_created_and_journaled_once(lake):
     root('a', var_m=4).entry     # another root, the same leaf
     assert len(dbx.pipejournal(datalake=lake, tag='rooted')) == 2
     (row,) = [r for _, r in dbx.PipeJournal.read(dbx.PipeJournal.ANCHOR, datalake=lake).iterrows()
-              if r['tag'].endswith('.leaf')]
+              if r['tag'].endswith('.leaf:a')]
     assert row['event'] == 'create'
 
 

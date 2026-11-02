@@ -173,8 +173,8 @@ def entrypoint_tag(fn, name: str) -> str:
     the same one. A label to filter journals by -- since dbx keys blocks by 'version_shorthash', not a
     location, so tagging a block that is already built does not move it.
 
-    `pipeline` tags the PIPELINE, which is a different thing: the pipeline does not construct the
-    tree, the entrypoint does, so the root's tag is the entrypoint's to set::
+    `pipeline` gives the PIPELINE this same tag when its first argument is *name*; the pipeline does
+    not construct the tree, the entrypoint does, so the root's tag is still the entrypoint's to set::
 
         @pipeline(journal=True)
         def my_clip(name, *, datalake=None):
@@ -212,13 +212,16 @@ def pipeline(fn=None, *, tag: str | None = None, journal: bool = False):
 
     `@pipeline` or `@pipeline(tag=...)`: each pipeline is tagged *tag*, by default the function's
     fully qualified name, `module.qualname` -- several projects may write to one journal -- to filter
-    the `PipeJournal` by; a tag filter matches by containment, so the function's own name finds it too.
+    the `PipeJournal` by. When the function's first argument is a `name` (a preset's), the call's
+    tag is `<tag>:<name>`, as `entrypoint_tag` makes it -- so the pipelines of one function are told
+    apart by their presets, and a pipeline and its root carry one tag. A tag filter matches by
+    containment, so the function's own name, or the preset's, finds it too.
     `@pipeline(journal=True)` sets the pipeline's `Pipeline.JOURNAL`: only then is its creation
     journaled. Leave it off for the minor pipelines -- collators, factories -- others nest.
 
     This tag is the PIPELINE's. The root block the function returns is tagged by the function, with
-    `entrypoint_tag` -- so an entrypoint takes no ``tag`` parameter of its own, which would reach
-    the pipeline class twice.
+    `entrypoint_tag` -- the same string -- so an entrypoint takes no ``tag`` parameter of its own,
+    which would reach the pipeline class twice.
 
     A call is cached by ALL its arguments, as `functools.cache` would cache it, for the life of the
     process: the same arguments return the same pipeline, so a pipeline that several others nest is
@@ -289,7 +292,8 @@ def pipeline(fn=None, *, tag: str | None = None, journal: bool = False):
             else:
                 ops[k] = v
         datalake = ops.pop('datalake', datalake)
-        return cls(spec=spec, datalake=datalake, tag=tag, **ops)
+        name = spec.get('name') if leading and leading[0] == 'name' else None
+        return cls(spec=spec, datalake=datalake, tag=f"{tag}:{name}" if isinstance(name, str) else tag, **ops)
 
     entry.Pipeline = cls
     entry.function = fn

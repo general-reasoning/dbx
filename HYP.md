@@ -116,42 +116,18 @@ to -- and each row is a point:
 The menus are read in the background once the points are up. Each launch adds
 new pipelines and re-embeds the ones whose spec changed.
 
-An `ssh://` datalake is read through fsspec's sshfs, on asyncssh, which applies
-`~/.ssh/config`: `ssh://host/path` names the host as `ssh host` does, user and
-all.
-
 ### Pointing hyp at a remote datalake
 
-Put the host and the path into `DBX_DATALAKE` as one `ssh://` URL, and leave
-`DBX_STORAGE_OPTIONS` unset:
+hyp reads the datalake `DBX_DATALAKE` and `DBX_STORAGE_OPTIONS` name, as dbx
+does. How to set them for a datalake on another host over ssh, or on an
+Anyscale workspace, and what to do when the connection fails, is in
+[CLUSTERS.md](CLUSTERS.md):
 
 ```bash
-export DBX_DATALAKE=ssh://wheelbarrow/home/t-9dkarp/datalake
+export DBX_DATALAKE=ssh://wheelbarrow/home/t-9dkarp/datalake    # a Host in ~/.ssh/config
 unset DBX_STORAGE_OPTIONS
 hyp --journal
 ```
-
-`wheelbarrow` is a `Host` entry in `~/.ssh/config`. Its `HostName`, `User`,
-`IdentityFile` and `ProxyJump` apply as they do to `ssh wheelbarrow`, so if
-`ssh wheelbarrow` logs in, hyp can read the datalake. The path is the
-datalake's directory on that host, the one holding `.journal`.
-
-The URL is for reaching the datalake from another machine. On the datalake's
-own host, set `DBX_DATALAKE` to the plain path:
-`export DBX_DATALAKE=/home/t-9dkarp/datalake`. With the `ssh://` URL there,
-hyp logs into its own host over ssh, and fails with `PermissionDenied` unless
-that host accepts a key from itself.
-
-`DBX_DATALAKE` wins over `DBX_ROOT` and `DBX_URL`, its names from before the
-rename, deprecated and still read. So a plain local path left
-in `DBX_ROOT` (`/home/...`) does not matter while `DBX_DATALAKE` is set. If
-`DBX_DATALAKE` is unset, hyp falls back to that path and reads it as a local
-directory, on this machine.
-
-`DBX_STORAGE_OPTIONS` (`key=val;key=val`) is passed to fsspec with every
-datalake path. An ssh datalake needs none of it, because the URL and
-`~/.ssh/config` say everything. If it holds a `protocol`, that protocol
-overrides the path's.
 
 When the corpus cannot be opened, hyp says which one, and where its path came
 from, and stops:
@@ -161,15 +137,9 @@ hyp: cannot open the corpus /home/t-9dkarp/datalake/.hyp (from DBX_ROOT, depreca
      OSError: [Errno 45] Operation not supported: '/home/t-9dkarp'
 ```
 
-Here a path meant for the datalake's host is being read on this machine:
-set `DBX_DATALAKE` to its `ssh://` URL. If `ssh wheelbarrow` works but hyp
-fails with `OSError: [Errno 65] No route to host`, the failing connection
-is the one to the `ProxyJump` host. macOS may be refusing Python access to
-local-network addresses: allow the terminal app under System Settings →
-Privacy & Security → Local Network, then restart it.
-
-To see what a shell will use: `echo "$DBX_DATALAKE | $DBX_ROOT | $DBX_URL |
-$DBX_STORAGE_OPTIONS"`.
+Here a path meant for the datalake's host is being read on this machine: set
+`DBX_DATALAKE` to its `ssh://` URL. The other failures are listed in
+[CLUSTERS.md](CLUSTERS.md#a-datalake-on-another-host-over-ssh).
 
 ### How a pipeline is embedded
 

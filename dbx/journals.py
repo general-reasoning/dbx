@@ -790,11 +790,12 @@ class ExecJournalEntry(pd.Series):
         session index is read -- the datalake its exec journal was read from,
         unless given.
         """
+        lake = one_datalake(datalake, url, 'buildjournal') or self.datalake
         return _written_buildjournal_(
-            ExecJournalEntry._written_refs_(self, one_datalake(datalake, url, 'buildjournal') or self.datalake,
-                                            self.storage_options),
+            ExecJournalEntry._written_refs_(self, lake, self.storage_options),
             anchor, loc, iloc, storage_options=self.storage_options if storage_options is None else storage_options,
-            log=log, n_workers=n_workers, index=index, unnormalized=unnormalized, filters=filter_kwargs)
+            log=log, n_workers=n_workers, index=index, unnormalized=unnormalized, filters=filter_kwargs,
+            read_from=lake)
 
     def anchors(self) -> list:
         """Every anchor this command wrote a build journal entry for, sorted."""
@@ -1035,10 +1036,12 @@ class ExecJournalFrame(pd.DataFrame):
                     log=None, n_workers: int | None = None, index: 'str | None' = ...,
                     unnormalized: bool = False, url=None, **filter_kwargs):
         """What `dataentries` reads, as one `BuildJournalFrame`. Takes what `ExecJournalEntry.buildjournal` takes."""
+        lake = one_datalake(datalake, url, 'buildjournal') or self.datalake
         return _written_buildjournal_(
-            self._written_refs_(one_datalake(datalake, url, 'buildjournal') or self.datalake),
+            self._written_refs_(lake),
             anchor, loc, iloc, storage_options=self.storage_options if storage_options is None else storage_options,
-            log=log, n_workers=n_workers, index=index, unnormalized=unnormalized, filters=filter_kwargs)
+            log=log, n_workers=n_workers, index=index, unnormalized=unnormalized, filters=filter_kwargs,
+            read_from=lake)
 
     def anchors(self) -> list:
         """Every anchor the commands here wrote a build journal entry for, sorted."""
@@ -1145,8 +1148,10 @@ def _derived_frame_(cls, defaults, args, kwargs):
 
 
 def _written_buildjournal_(refs, anchor, loc, iloc, *, storage_options, log, n_workers, index,
-                          unnormalized, filters):
+                          unnormalized, filters, read_from=None):
     """The build journal entries *refs* name (`BuildJournal.read_refs`), narrowed and indexed as `buildjournal` would be.
+
+    *read_from* is the datalake *refs* were read from, as `read_refs` takes it.
 
     *anchor* is matched exactly, as `buildjournal` reads exactly one
     anchor's journal -- not as a filter pattern, where `'a.B'` would also
@@ -1158,7 +1163,8 @@ def _written_buildjournal_(refs, anchor, loc, iloc, *, storage_options, log, n_w
         name = _anchor_of_(anchor)
         filters = {'anchor': lambda a: a == name, **filters}
     frame = BuildJournal.read_refs(refs, storage_options=storage_options or None, log=log,
-                                  n_workers=n_workers, index=index, unnormalized=unnormalized, **filters)
+                                  n_workers=n_workers, index=index, unnormalized=unnormalized,
+                                  read_from=read_from, **filters)
     if loc is not None:
         return frame.get(loc, dropna=True)
     if iloc is not None:
@@ -1510,6 +1516,28 @@ def _on_fs_of_(path, url):
         return path
     m = re.match(r'^((?:ssh|sftp)://[^/]+)/', str(url or ''))
     return m[1] + path if m else path
+
+
+def _datalakes_seen_(recorded, read_from):
+    """Where a datalake its writer recorded as *recorded* is, to a reader of *read_from*: the likeliest first.
+
+    An ssh datalake is local to its host and remote to everyone else, and is
+    recorded as its writer saw it. Written on the host -- a bare path -- and
+    read over ssh, it is on *read_from*'s host (`_on_fs_of_`). Written over
+    ssh and read anywhere but over ssh -- on the host itself, likeliest --
+    it is its bare path, and failing that, the ssh url it was. Anything else
+    -- a bare path read locally, a `gs://` or `abfss://` url -- is where it
+    says.
+    """
+    if not isinstance(recorded, str) or not recorded:
+        return [recorded]
+    on = _on_fs_of_(recorded, read_from)
+    if on != recorded:
+        return [on]
+    m = re.match(r'^(?:ssh|sftp)://[^/]+(/.*)$', recorded)
+    if m and not re.match(r'^(?:ssh|sftp)://', str(read_from or '')):
+        return [m[1], recorded]
+    return [recorded]
 
 
 # An entry's columns recorded in it as dicts -- the yaml their side files held -- and as text.
@@ -3172,7 +3200,8 @@ class BuildJournal:
 
     @classmethod
     def read_refs(cls, refs, *, storage_options=None, log=None, n_workers=None, index: str | None = None,
-                  unnormalized: bool = False, **filter_kwargs) -> 'BuildJournalFrame':
+                  unnormalized: bool = False, read_from: str | None = None,
+                  **filter_kwargs) -> 'BuildJournalFrame':
         """The entries *refs* name, in the order given, as one `BuildJournalFrame`: as `read_frame` reads files.
 
         A reference is `entry_ref`'s: one entry. One with a `session`
@@ -3182,6 +3211,14 @@ class BuildJournal:
         reference recording its `journal` -- a pipeline's, `PipeJournal.ANCHOR`
         -- is looked for there; one from before references recorded it, under
         its anchor and then under `PipeJournal.ANCHOR`.
+
+        A reference records its `datalake` as its writer saw it, and
+        *read_from* -- the datalake the references were read from -- says how
+        the reader sees it (`_datalakes_seen_`): a datalake on an ssh host,
+        written on the host as a bare path, is read over ssh from elsewhere,
+        and one written over ssh is read as a bare path on the host itself. A
+        datalake with a protocol of its own -- `gs://`, `abfss://` -- is the
+        same to every reader.
 
         A path -- what a session recorded before references -- is read as
         `read_frame` reads one; `ExecJournalEntry` turns one whose file is gone
@@ -3203,16 +3240,21 @@ class BuildJournal:
             places = ([os.path.join(ref['journal'], ref['anchor'])] if ref.get('journal')
                       else [ref['anchor'], os.path.join(PipeJournal.ANCHOR, ref['anchor'])])
             found = None
-            for anchor in places:
-                found = cls._read_block_(ref, anchor, storage_options=storage_options, log=log, n_workers=n_workers)
+            for lake in _datalakes_seen_(ref.get('datalake'), read_from):
+                for anchor in places:
+                    found = cls._read_block_({**ref, 'datalake': lake}, anchor, storage_options=storage_options,
+                                             log=log, n_workers=n_workers)
+                    if found is not None:
+                        break
                 if found is not None:
                     break
             entries[key] = found
         dfs = []
         for ref in parsed:
             if isinstance(ref, str):
-                fs, _ = fsspec.url_to_fs(ref, **storage_options)
-                (d,) = cls._read_files_(fs, [ref], n_workers=1, log=log)
+                path = _on_fs_of_(ref, read_from)
+                fs, _ = fsspec.url_to_fs(path, **storage_options)
+                (d,) = cls._read_files_(fs, [path], n_workers=1, log=log)
             else:
                 rows = entries[tuple(str(ref.get(k)) for k in keys)]
                 if rows is None or rows.empty:

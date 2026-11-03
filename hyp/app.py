@@ -1333,18 +1333,23 @@ class Hyp:
         viewer.over = self.viewers[-1] if self.viewers else None
         self.viewers.append(viewer)
 
-    def run_async(self, fn, then):
+    def run_async(self, fn, then, failed=None):
         """Call *fn* on a thread of its own, then *then* with its result on the UI's.
 
         For reads a viewer waits on -- they must not queue behind the engine's
         jobs -- and for errors to reach the status line rather than the void.
+        With *failed*, the error's line is also handed to it, on the UI's
+        thread: for a window that would otherwise show "reading …" forever.
         """
 
         def run():
             try:
                 result = fn()
             except Exception as e:  # shown in the status line
-                self.worker.events.put(("error", _failed_(e)))
+                line = _failed_(e)
+                self.worker.events.put(("error", line))
+                if failed is not None:
+                    self.worker.events.put(("call", lambda: failed(line)))
             else:
                 self.worker.events.put(("call", lambda: then(result)))
             finally:

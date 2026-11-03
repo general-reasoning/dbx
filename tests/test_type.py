@@ -81,13 +81,12 @@ class TestSignatureMethod:
 
 class TestSignatureInJournal:
 
-    def test_build_writes_type_txt(self, built):
+    def test_build_records_the_type(self, built):
         entry = built.buildjournal(iloc=-1)
-        # The COLUMN is a path to the type file; Block.typestr() resolves it to
-        # the type TEXT, as Datablock.typestr() does.
+        # The COLUMN is the type TEXT, since 2026-11-03 -- before, the path of
+        # a type .txt -- and read() answers with it either way.
         assert entry.get('type') is not None, "journal has no type column"
-        assert '-type-' in entry.get('type')
-        assert entry.get('type').endswith('.txt')
+        assert entry.get('type') == built.typestr()
         assert entry.read('type') == built.typestr()
 
     def test_build_writes_signature_txt(self, built):

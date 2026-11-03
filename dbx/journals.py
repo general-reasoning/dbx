@@ -46,6 +46,7 @@ import fsspec
 import numpy as np
 import pandas as pd
 import tqdm
+import yaml
 
 from . import databits
 from .databits import (
@@ -1505,6 +1506,65 @@ def _on_fs_of_(path, url):
     return m[1] + path if m else path
 
 
+# An entry's columns recorded in it as dicts -- the yaml their side files held -- and as text.
+RECORDED_DICTS = ('spec', 'kwargs', 'env')
+RECORDED_TEXTS = ('quote', 'cite', 'repr', 'signature', 'type')
+
+
+def side_file(value):
+    """The path of the side file the journal column *value* names, or None where *value* is what was recorded.
+
+    Entries written before 2026-11-03 recorded spec, kwargs, quote, cite,
+    repr, signature and type in side files, and the column held a path;
+    those written since hold the thing itself -- text, or a dict's yaml. A
+    long note still goes to a side file. A path is one line, with a `/` in
+    it, and a file name with a side file's extension and nothing in it a
+    rendering has -- no space, quote, `=`, `:` or bracket: a type ends in
+    its topics' files, `topic:output=output.txt`, and is no path. It is
+    absolute, or a url, as no rendering is -- a type starts with `(`, a
+    quote with `$` -- or, relative, its file is named as `BuildJournal.path`
+    names one: for its column, `{fqcn}-{column}-{hash}-{dt}.txt`.
+    """
+    if not isinstance(value, str) or '\n' in value or '/' not in value:
+        return None
+    name = value.rsplit('/', 1)[1]
+    if not _SIDE_FILE_EXT_.search(name) or re.search(r'[\s\'"=:(){}\[\],]', name):
+        return None
+    if value.startswith('/') or re.match(r'[a-z][a-z0-9+.-]*://', value) or _SIDE_FILE_NAME_.search(name):
+        return value
+    return None
+
+
+_SIDE_FILE_EXT_ = re.compile(r'\.(?:txt|yaml|yml|json|log)\Z')
+# A side file's name, as `BuildJournal.path` names one: its column's, among the others.
+_SIDE_FILE_NAME_ = re.compile(r'(?:\A|[-._])(?:spec|dfn|kwargs|quote|cite|repr|signature|subsignature|norm|type|hashstr'
+                              r'|note|message)(?:-.*)?\.(?:txt|yaml|yml|json|log)\Z')
+
+
+# A variable whose name or value says it holds a secret: recorded withheld.
+_SECRET_NAME_ = re.compile(r'KEY|SECRET|TOKEN|PASSW|CREDENTIAL|AUTH|COOKIE|PRIVATE|STORAGE_OPTIONS', re.IGNORECASE)
+_SECRET_VALUE_ = re.compile(r'://[^/\s:@]+:[^/\s@]+@')  # a url with a password in it
+WITHHELD = '<withheld>'
+
+
+def recorded_env(environ=None):
+    """The environment a build entry records, `env`: every variable of *environ* -- this process's -- by name.
+
+    A journal is read by whoever can read the datalake, so a variable whose
+    name or value says it holds a secret -- a key, a token, a password, a
+    url with one in it, dbx's storage options -- is recorded as there, but
+    its value WITHHELD.
+    """
+    environ = os.environ if environ is None else environ
+    return {k: (WITHHELD if _SECRET_NAME_.search(k) or _SECRET_VALUE_.search(v) else v)
+            for k, v in sorted(environ.items())}
+
+
+def _yaml_text_(data):
+    """*data* as the yaml its side file would have held: what an entry records in a dict's column."""
+    return yaml.dump(data)
+
+
 def _anchor_of_(cls_or_anchor) -> str:
     """The anchor a Datablock class, an anchor string, or a block names."""
     if isinstance(cls_or_anchor, str):
@@ -2327,8 +2387,16 @@ class BuildJournalEntry(pd.Series):
             # methods now, and getattr would hand back a bound method whose
             # str() is its repr rather than the path the column holds.
             val = self.column(self, target_attr)
-            if val is not None and not (isinstance(val, float) and pd.isna(val)):
-                # Where the entry was read from: a host's own path, read over ssh.
+            if (val is not None and not (isinstance(val, float) and pd.isna(val))
+                    and target_attr in RECORDED_DICTS + RECORDED_TEXTS and side_file(val) is None):
+                # Recorded in the entry itself: a dict as its yaml, which is parsed as its side file was.
+                if not raw and target_attr in RECORDED_DICTS and isinstance(val, str):
+                    result = yaml.load(val, Loader=yaml.BaseLoader if safe else yaml.UnsafeLoader)
+                else:
+                    result = str(val)
+            elif val is not None and not (isinstance(val, float) and pd.isna(val)):
+                # An entry from before: the column names a side file. Where the entry
+                # was read from: a host's own path, read over ssh.
                 path = _on_fs_of_(str(val), self.get('entry_path'))
                 _, _ext = os.path.splitext(path)
                 ext = _ext[1:] if _ext else ''
@@ -2736,14 +2804,15 @@ class BuildJournal:
     A session is operational, like `tree`: nothing about it reaches a
     block's identity.
 
-    A COMMAND session -- the one a `dbx.exec` runs under, see
-    `command_session` -- also indexes what is written under it, in
-    storage: one marker per entry, under
-    `{datalake}/.journal/sessions/{session}/`, where the exec journal is. It
-    is written by whichever process writes the entry, so it holds what a
-    worker wrote even when that worker never returned -- killed, or started by
-    something other than a dbx executor -- and `session_entries` reads
-    it back.
+    Every session also indexes what is written under it, in storage: one
+    marker per entry, under `{datalake}/.journal/sessions/{session}/`. A
+    COMMAND session's -- the one a `dbx.exec` runs under, see
+    `command_session` -- is under the datalake its exec journal is in; any
+    other's -- a process's default, outside `dbx.exec` -- under the datalake
+    of the block whose entry it is. It is written by whichever process
+    writes the entry, so it holds what a worker wrote even when that worker
+    never returned -- killed, or started by something other than a dbx
+    executor -- and `session_entries` reads it back.
     """
 
     # 1. Protocol and hooks ------------------------------------------------
@@ -3180,12 +3249,18 @@ class BuildJournal:
         it is and not where it is filed -- for `read_refs` to find again.
         *journal_prefix* only prefixes the file's name.
 
+        The block's spec, kwargs, quote, cite, repr, signature and type are
+        recorded IN the entry -- the dicts as their yaml -- and so is the
+        environment it was built in, `env`, as a dict, with the values of
+        its secrets withheld: see `recorded_env`. Entries written before
+        recorded the block's in side files, and the column the path; `read`
+        reads either. Only a *note* not `inline_note` is still a side file.
+
         *redirection* -- an `entry_code` or a journal filter, normally passed
         by `UNSAFE_redirect` rather than directly -- is recorded IN the
-        entry, in the `redirection` column, not written out to a file the way
-        *note* and `quote`/`subsignature`/`spec` are. A redirection is what
-        `read` falls back to when the data it wanted is gone, so it must
-        not itself depend on a second file still being there.
+        entry, in the `redirection` column. A redirection is what `read`
+        falls back to when the data it wanted is gone, so it must not itself
+        depend on a second file still being there.
 
         *columns* are recorded in the entry beside its own -- read back, they
         sit ahead of `event` -- for what a journal of another kind adds to
@@ -3211,24 +3286,8 @@ class BuildJournal:
         code_seed = f"{block.hash}:{block.tree}:{dt}:{event}:{entry_id}"
         code = hashlib.sha256(code_seed.encode('utf-8')).hexdigest()[:32]
 
-        cls._write_dict_(block, 'spec', block.spec)
-        cls._write_dict_(block, 'kwargs', block.kwargs)
-        cls._write_text_(block, 'quote', block.quote())
-        cls._write_text_(block, 'cite', block.cite())
-        cls._write_text_(block, 'repr', block.repr())
-        cls._write_text_(block, 'signature', block.signaturestr())
-        cls._write_text_(block, 'type', block.typestr())
         if note is not None and not inline_note:
             cls._write_text_(block, 'note', note)
-
-        spec_path = cls.path(block, 'spec', 'yaml')
-        kwargs_path = cls.path(block, 'kwargs', 'yaml')
-        quote_path = cls.path(block, 'quote', 'txt')
-        cite_path = cls.path(block, 'cite', 'txt')
-        signature_path = cls.path(block, 'signature', 'txt')
-        repr_path = cls.path(block, 'repr', 'txt')
-        type_path = cls.path(block, 'type', 'txt')
-        if note is not None and not inline_note:
             note_path = cls.path(block, 'note', 'txt')
             note_val = note_path
         else:
@@ -3275,13 +3334,14 @@ class BuildJournal:
                                          'log': capture.path if capture is not None else None,
                                          'event': event,
                                          'redirection': redirection_value,
-                                         'spec': spec_path,
-                                         'kwargs': kwargs_path,
-                                         'quote': quote_path,
-                                         'cite': cite_path,
-                                         'signature': signature_path,
-                                         'type': type_path,
-                                         'repr': repr_path,
+                                         'spec': _yaml_text_(block.spec),
+                                         'kwargs': _yaml_text_(block.kwargs),
+                                         'quote': block.quote(),
+                                         'cite': block.cite(),
+                                         'signature': block.signaturestr(),
+                                         'type': block.typestr(),
+                                         'repr': block.repr(),
+                                         'env': _yaml_text_(recorded_env()),
                                          'note': note_val,
                                          'gitrepo': databits.DBX_GIT_REPO,
                                          'wrkrepo': databits.DBX_USE_WORK_REPO,
@@ -3657,26 +3717,6 @@ class BuildJournal:
         return block.fs, block.storage_options, block.anchorkeypath
 
     @classmethod
-    def _write_dict_(cls, block, name, data, *, add_credentials: bool = False):
-        fs, storage_options, _ = cls._lake_(block)
-        if add_credentials:
-            data = copy.deepcopy(data)
-            data['hash'] = block.hash
-            data['datetime'] = block.dt
-        #
-        ypath = cls.path(block, name, 'yaml')
-        write_yaml(data, ypath, storage_options=storage_options)
-        assert fs.exists(ypath), f"path {ypath} does not exist after writing"
-        block.log.detailed(f"WROTE: {name.upper()}: yaml: {ypath}")
-        #
-        pqpath = cls.path(block, name, 'parquet')
-        df = pd.DataFrame.from_records([{k: repr(v) for k, v in data.items()}])
-        with fs.open(pqpath, 'wb') as f:
-            df.to_parquet(f)
-        assert fs.exists(pqpath), f"pqpath {pqpath} does not exist after writing"
-        block.log.detailed(f"WROTE: {name.upper()}: parquet: {pqpath}")
-
-    @classmethod
     def _write_text_(cls, block, name, text):
         fs, storage_options, _ = cls._lake_(block)
         path = cls.path(block, name, 'txt')
@@ -3693,17 +3733,24 @@ class BuildJournal:
             return True
 
     def _index_(self, block, ref, entry_id, dt):
-        """Drop this session's marker for the entry *ref*, written at *dt*: nothing, for a session that keeps no index.
+        """Drop this session's marker for the entry *ref*, written at *dt*.
 
-        One file per entry, named by its *entry_id*, so concurrent writers
-        never share one. A failure is a warning: the build it records has
-        already succeeded.
+        Under the datalake a command session is pinned to, where its exec
+        journal is; under *block*'s own, for a session no command opened --
+        a process's default, outside `dbx.exec`, or a `with BuildJournal()`
+        -- so that its blocks too are found by session. One file per entry,
+        named by its *entry_id*, so concurrent writers never share one. A
+        failure is a warning: the build it records has already succeeded.
         """
-        if self._datalake is None:
+        if self._datalake is not None:
+            datalake, storage_options = self._datalake, default_storage_options()
+        else:
+            datalake, storage_options = getattr(block, 'datalake', None), getattr(block, 'storage_options', None) or {}
+        if not datalake:
             return
-        marker = os.path.join(self._index_dirpath_(self._datalake, self._session), f"{entry_id}.txt")
+        marker = os.path.join(self._index_dirpath_(datalake, self._session), f"{entry_id}.txt")
         try:
-            fs, _ = fsspec.url_to_fs(self._datalake, **default_storage_options())
+            fs, _ = fsspec.url_to_fs(datalake, **storage_options)
             fs.makedirs(os.path.dirname(marker), exist_ok=True)
             with fs.open(marker, 'w') as f:
                 f.write(f"{dt}\n{ref}")
@@ -4007,7 +4054,7 @@ class PipeJournal(BuildJournal):
                 with fs.open(file, 'rb') as f:
                     df = pd.read_parquet(f, use_threads=False)
                 row = df.iloc[0]
-                sides = {norm(row[c]) for c in cls._SIDE_COLUMNS_ if c in df.columns and isinstance(row[c], str)}
+                sides = {norm(p) for c in cls._SIDE_COLUMNS_ if c in df.columns and (p := side_file(row[c]))}
                 return file, row.get('datetime', ''), row.get('entrypath'), sides
             newest = {}
             with ThreadPoolExecutor(max_workers=8) as ex:
@@ -4450,8 +4497,9 @@ class JournaledResult:
 
 
 # The session an entry goes under when no `with` is open: one per process,
-# and the bottom of every stack. Keeps no index -- it is no command's -- unless
-# this process was started while a command ran, and so is part of it.
+# and the bottom of every stack. No command's -- it indexes its entries under
+# each block's datalake -- unless this process was started while a command
+# ran, and so is part of it.
 DEFAULT_BUILDJOURNAL = BuildJournal()
 if os.environ.get(JOURNAL_SESSION_ENV):
     # A process started while a command ran: its default is the command's.

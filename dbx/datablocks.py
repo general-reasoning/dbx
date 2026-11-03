@@ -1287,7 +1287,7 @@ class Datablock:
         'version', 'dbx_version', 'revision',
         'datalake', 'anchor', 'keyby', 'key', 'anchorkeypath', 'tag',
         'topics', 'paths', 'slices', 'note',
-        'spec', 'kwargs', 'quote', 'cite', 'repr', 'signature', 'type',
+        'spec', 'kwargs', 'quote', 'cite', 'repr', 'signature', 'type', 'env',
         'gitrepo', 'entry_path', 'event',
     ]
 

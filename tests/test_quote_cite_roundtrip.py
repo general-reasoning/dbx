@@ -331,10 +331,11 @@ class TestCiteInJournal:
         b.build()
         return b
 
-    def test_build_writes_cite_txt(self, built):
+    def test_build_records_the_cite(self, built):
+        """In the entry itself, since 2026-11-03: before, the column held the path of a cite .txt."""
         entry = built.buildjournal(iloc=-1)
         assert entry.get('cite') is not None, "journal has no cite column"
-        assert '-cite-' in entry['cite'] and entry['cite'].endswith('.txt')
+        assert entry['cite'] == built.cite()
         assert entry.read('cite') == built.cite()
         assert entry.pretty.cite() == built.cite()
         assert entry.pretty.quote(pretty=False) == built.quote()

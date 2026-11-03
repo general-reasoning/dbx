@@ -128,6 +128,8 @@ dbx = "dbx:exec"
 "dbx.slurm.eval" = "dbx:slurm_eval"
 "dbx.slurm.print" = "dbx:slurm_pprint"
 "dbx.slurm.pprint" = "dbx:slurm_pprint"
+"dbx.kubedash" = "dbx.kube:kubedash_main"
+"dbx.kubejobs" = "dbx.kube:jobs_main"
 "dbx.hyp" = "hyp.app:main"
 hyp = "hyp.app:main"
 

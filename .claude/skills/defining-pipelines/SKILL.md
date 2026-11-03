@@ -299,5 +299,20 @@ name. It sets the qualified tag on the pipeline by hand
 (`tag=f"{__name__}.sc_representation:{name}"`), and `__create__` passes
 `self.tag` to its blocks. Use one form or the other within a project, not both.
 
+## Running a pipeline on a cluster
+
+Don't write job scripts or YAML for a pipeline. A pipeline submits itself:
+`p.submit('<target>').build_tree()` runs `dbx.eval(<p.quote()>).entry.build_tree()`
+there and journals the submission on the entrypoint (`CLUSTERS.md`). That puts
+two requirements on the definition:
+
+- **The quote must rebuild the pipeline there.** Keep everything that decides
+  the tree in its VAR and its operational kwargs, and read paths through the
+  project's env module (above), not from the submitting shell's state.
+  `submit(..., dry_run='cluster')` checks exactly this: same hash there as here.
+- **The project registers its targets, not the pipeline.** Clusters are
+  registered in a module of their own, named as a `dbx.targets` entry point in
+  the project's packaging. A pipeline module never registers or names a cluster.
+
 *This skill is meant to grow: record new conventions here as the pipelines
 that use it settle them.*

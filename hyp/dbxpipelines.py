@@ -674,6 +674,47 @@ def session_execs(lake, url, n_workers=16):
     return out
 
 
+def pipeline_sessions(row, journal, n_workers=16):
+    """Every session that touched the pipeline *row* is an entry of: newest first.
+
+    Those of its own entries in *journal* -- the pipeline journal, every
+    entry -- each a command that created it, and those of every entry of each
+    entry block it was created to, read as `entrypoint_text` reads one: the
+    commands that built them, and any that read them since.
+    """
+
+    dbx = _dbx_()
+    key, lake, url = str(row.get("anchorkeypath", "")), str(row.get("datalake", "")), row.get("entry_path", "")
+    mine = pd.DataFrame(journal) if journal is not None else pd.DataFrame()
+    if len(mine) and "anchorkeypath" in mine.columns:
+        mine = mine[mine["anchorkeypath"].astype(str) == key]
+    found = [(str(r.get("datetime", "")), str(r["session"])) for _, r in mine.iterrows() if not _is_blank_(r.get("session"))]
+    if not _is_blank_(row.get("session")):
+        found.append((str(row.get("datetime", "")), str(row["session"])))
+    entrypaths = {str(p) for p in (mine["entrypath"] if "entrypath" in mine.columns else []) if not _is_blank_(p)}
+
+    def block_sessions(entrypath):
+        if not lake or not entrypath.startswith(lake):
+            return []
+        try:
+            df = pd.DataFrame(dbx.BuildJournal.read(entrypath[len(lake) :].strip("/"), datalake=rebase(lake, url),
+                                                    n_workers=n_workers, index=None))
+        except FileNotFoundError:
+            return []
+        if "anchorkeypath" in df.columns:
+            df = df[df["anchorkeypath"].astype(str) == entrypath]
+        return [(str(r.get("datetime", "")), str(r["session"])) for _, r in df.iterrows() if not _is_blank_(r.get("session"))]
+
+    if entrypaths:
+        with ThreadPoolExecutor(max_workers=min(8, len(entrypaths))) as ex:
+            for sessions in ex.map(block_sessions, sorted(entrypaths)):
+                found += sessions
+    newest = {}
+    for dt, session in sorted(found, reverse=True):
+        newest.setdefault(session, dt)
+    return list(newest)
+
+
 def exec_label(command):
     """A `dbx.exec` command as a menu item: when, whether it succeeded, and the command."""
     ok = command.get("success")
@@ -1159,6 +1200,7 @@ class HypDbxJournal(Hyp):
         self.constructed = None  # {anchorkeypath: [entrypath]}; None until read
         self.sessions = {}  # {session: [(anchorkeypath, last event)]}; None while read
         self.execs = {}  # {datalake: {session: [dbx.exec command]}}; None while read
+        self.touched = {}  # {pipeline anchorkeypath: [session that touched it]}; None while read
         self.slice_info = {}  # {(entry_path, id): {slice: (rows, {column: kind})}}; None while read
         self._read_journals_()
         self.run_async(lambda: _dbx_().anchors(datalake()), lambda a: setattr(self, "anchors", a))
@@ -1168,6 +1210,7 @@ class HypDbxJournal(Hyp):
         self.journal = self.constructed = None
         self.sessions = {}
         self.execs = {}
+        self.touched = {}
         self.slice_info = {}
         self._read_journals_()
         self.run_async(lambda: _dbx_().anchors(datalake()), lambda a: setattr(self, "anchors", a))
@@ -1217,7 +1260,7 @@ class HypDbxJournal(Hyp):
         self._titled_()
         self.viewers, self.popup, self.snap, self.tween = [], None, None, None
         self.journal = self.constructed = None
-        self.sessions, self.execs, self.slice_info = {}, {}, {}
+        self.sessions, self.execs, self.touched, self.slice_info = {}, {}, {}, {}
         self._read_journals_()
         data, source = corpus_dir(anchor), journal_source(anchor, self.filters, self.n_workers)
         options = _dbx_().default_storage_options()
@@ -1306,7 +1349,7 @@ class HypDbxJournal(Hyp):
             visible=lambda: bool(viewer.row) and not _is_blank_(viewer.row.get("session")),
             **self._copies_anchorkey_(viewer.row),
         )
-        viewer.menus = [times, roots, session, self._exec_menu_(viewer), self._output_button_(viewer), *self._rerun_buttons_(viewer)]
+        viewer.menus = [times, roots, session, self._pipeline_exec_menu_(viewer), self._output_button_(viewer), *self._rerun_buttons_(viewer)]
         self.viewers = [viewer]
 
     # Helpers -----------------------------------------------------------------
@@ -1453,10 +1496,43 @@ class HypDbxJournal(Hyp):
             visible=lambda: bool(window.row) and not _is_blank_(window.row.get("session")),
         )
 
+    def _pipeline_exec_menu_(self, viewer):
+        """A pipeline window's `exec` menu: every `dbx.exec` command that touched the pipeline -- created it, or built or read its entry blocks -- newest first."""
+        return Dropdown(
+            "exec",
+            lambda: self._pipeline_execs_(viewer),
+            self._open_exec_,
+            empty="no dbx.exec command touched the pipeline",
+            visible=lambda: bool(viewer.row),
+        )
+
     def _session_execs_(self, window):
         """The `dbx.exec` commands run under the session of the entry *window* shows, as dropdown items; None while the exec journal is read, the first time asked."""
         shown = window.row
-        lake, url = str(shown.get("datalake", "")), shown.get("entry_path", "")
+        lake = str(shown.get("datalake", ""))
+        return self._exec_items_(lake, self._execs_(lake, shown.get("entry_path", "")), [str(shown.get("session"))])
+
+    def _pipeline_execs_(self, viewer):
+        """The `dbx.exec` commands of every session that touched the pipeline *viewer* shows, as dropdown items; None while any of it is read."""
+        row = viewer.row
+        lake, key = str(row.get("datalake", "")), str(row.get("anchorkeypath", ""))
+        execs = self._execs_(lake, row.get("entry_path", ""))
+        if key not in self.touched:
+            self.touched[key] = None
+
+            def read():
+                try:
+                    return pipeline_sessions(row, self.journal, self.n_workers)
+                except Exception:
+                    self.touched[key] = []  # not read: shown as none, the error in the status line
+                    raise
+
+            self.run_async(read, lambda sessions: self.touched.__setitem__(key, sessions))
+        sessions = self.touched[key]
+        return None if sessions is None else self._exec_items_(lake, execs, sessions)
+
+    def _execs_(self, lake, url):
+        """The exec journal of *lake*, `{session: [command]}`, read through *url* the first time asked; None while read."""
         if lake not in self.execs:
             self.execs[lake] = None
 
@@ -1468,9 +1544,17 @@ class HypDbxJournal(Hyp):
                     raise
 
             self.run_async(read, lambda execs: self.execs.__setitem__(lake, execs))
-        execs, session = self.execs[lake], str(shown.get("session"))
+        return self.execs[lake]
+
+    @staticmethod
+    def _exec_items_(lake, execs, sessions):
+        """The commands of *sessions* in *execs*, newest first, as dropdown items; None while *execs* is read."""
+        if execs is None:
+            return None
         # Each named by where it is kept, not itself: a command's columns may be arrays, which `==` answers elementwise.
-        return None if execs is None else [(exec_label(c), (lake, session, i)) for i, c in enumerate(execs.get(session, []))]
+        found = [(str(c.get("datetime", "")), (lake, session, i)) for session in dict.fromkeys(sessions)
+                 for i, c in enumerate(execs.get(session, []))]
+        return [(exec_label(execs[s][i]), (lake, s, i)) for _, (lake, s, i) in sorted(found, reverse=True)]
 
     def _open_exec_(self, where):
         """Open the `dbx.exec` command *where* -- `(datalake, session, index)` -- names, as the exec journal recorded it, over the window it was asked from."""

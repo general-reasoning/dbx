@@ -1163,3 +1163,23 @@ def test_an_anchors_journal_is_listed_then_read_against_the_total(anchor_journal
     listing, reading = "dbx.BuildJournal.list('pkg.Model')", "dbx.BuildJournal.read_frame(3 journal files of pkg.Model)"
     assert told[:5] == [(listing, None, None), (listing, 1, None), (listing, 3, None), (reading, 0, 3), (reading, 1, 3)]
     assert told[-1][1:] == (2, 2), "and then the side files, counted"
+
+
+def test_a_pipelines_exec_menu_lists_every_command_that_touched_it(tmp_path, monkeypatch):
+    """Not only the command that wrote the entry shown: the one that built its entry block, too; and no other."""
+    import dbx
+    from test_pipelines import Flat
+
+    monkeypatch.setenv("DBX_DATALAKE", str(tmp_path))
+    monkeypatch.setenv("DBX_DIRTY_REPO_OK", "1")
+    dbx.exec("Flat(spec={'n': 5}).create()", Flat=Flat)
+    root = Flat(spec={"n": 5}).create()  # outside dbx.exec: no command of its own
+    dbx.exec("root.var.leaf.build(); root.build()", root=root)
+    dbx.exec("1 + 1")
+
+    journal = dbxpipelines.journal_entries()
+    row = {k: v for k, v in journal.iloc[0].items()}
+    lake = str(tmp_path)
+    execs = dbxpipelines.session_execs(lake, lake)
+    items = dbxpipelines.HypDbxJournal._exec_items_(lake, execs, dbxpipelines.pipeline_sessions(row, journal))
+    assert [execs[s][i]["exec"] for _, (_, s, i) in items] == ["root.var.leaf.build(); root.build()", "Flat(spec={'n': 5}).create()"]

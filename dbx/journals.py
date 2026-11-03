@@ -3154,17 +3154,21 @@ class BuildJournal:
         return [frame.get(i, dropna=True) for i in range(len(frame))]
 
     @staticmethod
-    def entry_ref(block, entry_id) -> str:
+    def entry_ref(block, entry_id, journal=None) -> str:
         """The entry *entry_id* of *block*, as what it is and not where it is filed: a JSON string.
 
         Its block -- `anchor`, `hash` -- and its `id`, with what finding a
         block's entries by hash takes (`version`, `tag`, `keyby`,
         `datalake`): `read_refs` finds it again in its own file or, compacted
-        since, in its anchor's compacted journal.
+        since, in its anchor's compacted journal. *journal* is the directory
+        under the datalake a journal of another kind keeps its anchors in --
+        `PipeJournal.ANCHOR` -- and is left out for a block's own.
         """
-        return json.dumps({'anchor': block.anchor, 'hash': block.hash, 'id': entry_id, 'version': block.version,
-                           'tag': block.tag, 'keyby': block.keyby, 'datalake': block.datalake},
-                          sort_keys=True, default=str)
+        ref = {'anchor': block.anchor, 'hash': block.hash, 'id': entry_id, 'version': block.version,
+               'tag': block.tag, 'keyby': block.keyby, 'datalake': block.datalake}
+        if journal is not None:
+            ref['journal'] = journal
+        return json.dumps(ref, sort_keys=True, default=str)
 
     @classmethod
     def read_refs(cls, refs, *, storage_options=None, log=None, n_workers=None, index: str | None = None,
@@ -3174,7 +3178,10 @@ class BuildJournal:
         A reference is `entry_ref`'s: one entry. One with a `session`
         and no `id` is every entry of its block written under that session.
         Each block's entries are read once, by hash (`read_hash`), or from its
-        anchor's whole journal when it is filed nowhere `read_hash` looks.
+        anchor's whole journal when it is filed nowhere `read_hash` looks. A
+        reference recording its `journal` -- a pipeline's, `PipeJournal.ANCHOR`
+        -- is looked for there; one from before references recorded it, under
+        its anchor and then under `PipeJournal.ANCHOR`.
 
         A path -- what a session recorded before references -- is read as
         `read_frame` reads one; `ExecJournalEntry` turns one whose file is gone
@@ -3185,23 +3192,22 @@ class BuildJournal:
         if storage_options is None:
             storage_options = default_storage_options()
         parsed = [json.loads(str(r)) if str(r).lstrip().startswith('{') else str(r) for r in refs]
-        keys = ('datalake', 'anchor', 'hash', 'tag', 'version', 'keyby')
+        keys = ('datalake', 'journal', 'anchor', 'hash', 'tag', 'version', 'keyby')
         blocks = {}
         for ref in parsed:
             if isinstance(ref, dict):
                 blocks.setdefault(tuple(str(ref.get(k)) for k in keys), ref)
         entries = {}
         for key, ref in blocks.items():
-            found = cls.read_hash(ref['anchor'], ref['hash'], tag=ref.get('tag'), version=ref.get('version'),
-                                  keyby=ref.get('keyby') or 'tag_version_shorthash', datalake=ref.get('datalake'),
-                                  storage_options=storage_options, log=log, n_workers=n_workers)
-            if found is None:
-                try:
-                    found = cls.read(ref['anchor'], datalake=ref.get('datalake'), storage_options=storage_options,
-                                     log=log, n_workers=n_workers, hash=ref['hash'])
-                except FileNotFoundError:
-                    found = None
-            entries[key] = pd.DataFrame(found).reset_index(drop=True) if found is not None else None
+            # Where its journal keeps the anchor: said, or -- a reference from before it was -- a block's, then a pipeline's.
+            places = ([os.path.join(ref['journal'], ref['anchor'])] if ref.get('journal')
+                      else [ref['anchor'], os.path.join(PipeJournal.ANCHOR, ref['anchor'])])
+            found = None
+            for anchor in places:
+                found = cls._read_block_(ref, anchor, storage_options=storage_options, log=log, n_workers=n_workers)
+                if found is not None:
+                    break
+            entries[key] = found
         dfs = []
         for ref in parsed:
             if isinstance(ref, str):
@@ -3366,7 +3372,7 @@ class BuildJournal:
         fs, _, _ = cls._lake_(block)
         with fs.open(journal_path, 'wb') as f:
             df.to_parquet(f)
-        ref = cls.entry_ref(block, entry_id)
+        ref = cls.entry_ref(block, entry_id, journal=getattr(cls, 'ANCHOR', None))
         if dj._record_(ref):
             dj._index_(block, ref, entry_id, dt)
         
@@ -3460,6 +3466,21 @@ class BuildJournal:
         return self._session
 
     # 4. Helpers -----------------------------------------------------------
+
+    @classmethod
+    def _read_block_(cls, ref, anchor, *, storage_options, log, n_workers):
+        """The entries of the block *ref* names under *anchor* -- by hash, else from the anchor's whole journal -- as a DataFrame; None for none."""
+        found = cls.read_hash(anchor, ref['hash'], tag=ref.get('tag'), version=ref.get('version'),
+                              keyby=ref.get('keyby') or 'tag_version_shorthash', datalake=ref.get('datalake'),
+                              storage_options=storage_options, log=log, n_workers=n_workers)
+        if found is None:
+            try:
+                found = cls.read(anchor, datalake=ref.get('datalake'), storage_options=storage_options,
+                                 log=log, n_workers=n_workers, hash=ref['hash'])
+            except FileNotFoundError:
+                found = None
+        found = pd.DataFrame(found).reset_index(drop=True) if found is not None else None
+        return found if found is not None and not found.empty else None
 
     # Relative to an anchor's directory: an entry file -- under
     # `**/.journal/{fqcn}/journal/`, or the legacy `.dbx/{fqcn}/journal/`

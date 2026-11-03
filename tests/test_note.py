@@ -121,6 +121,17 @@ class TestNoteMessageNotInline:
         with open(row['note']) as f:
             assert f.read().strip() == "payload text"
 
+    def test_two_notes_from_one_instance_keep_their_own_files(self, tmp_path):
+        b = _make(tmp_path)
+        b.note("first", event="flag")
+        b.note("second", event="flag")
+        j = b.buildjournal()
+        texts = set()
+        for path in j[j['event'] == 'flag']['note']:
+            with open(path) as f:
+                texts.add(f.read().strip())
+        assert texts == {"first", "second"}
+
 
 class TestNoteMessageInline:
     """inline=True: message is the literal message string in the journal."""

@@ -841,7 +841,9 @@ class ExecJournalEntry(pd.Series):
             raise ValueError("Specify at most one of 'idx' and 'basename', not both.")
         storage_options = (storage_options if storage_options is not None
                            else self.storage_options or default_storage_options())
-        listed = ExecJournalEntry._output_captures_(self)
+        # Each where the row was read from: the path recorded is the writer's, which, read from
+        # elsewhere -- by URL, from another cluster -- names another file, or none.
+        listed = [ExecJournalEntry._read_here_(self, p) for p in ExecJournalEntry._output_captures_(self)]
         if basename is None:
             idx = 0 if idx is None else idx
             if not listed:
@@ -877,6 +879,14 @@ class ExecJournalEntry(pd.Series):
         if listed is None or (isinstance(listed, float) and pd.isna(listed)):
             return []
         return [str(p) for p in listed]
+
+    @staticmethod
+    def _read_here_(row, path: str) -> str:
+        """*path*, a capture of *row*'s session, in the datalake *row* was read from: its session's `output/`, by name."""
+        session, datalake = row.get('session'), row.datalake or default_datalake() or './dbx'
+        if not isinstance(session, str) or not session:
+            return path
+        return os.path.join(OutputCapture.dirpath(datalake, session), os.path.basename(path))
 
     @staticmethod
     def _session_captures_(row, storage_options) -> list:
@@ -1242,7 +1252,7 @@ def read_exec_journal(
                 return pd.read_parquet(f, use_threads=False)
 
         dfs = []
-        with ThreadPoolExecutor(max_workers=min(n_workers, max(1, len(files)))) as ex:
+        with ThreadPoolExecutor(max_workers=_threads_(fs, min(n_workers, max(1, len(files))))) as ex:
             futures = [ex.submit(read_file, file) for file in files]
             for future in as_completed(futures):
                 try:
@@ -1366,6 +1376,16 @@ def execjournal(loc=None, *, iloc=None, datalake=None, storage_options=None, log
     """
     return read_exec_journal(datalake=datalake or url, loc=loc, iloc=iloc, storage_options=storage_options,
                              log=log, n_workers=n_workers, index=index, **filter_kwargs)
+
+
+def _threads_(fs, n: int) -> int:
+    """*n* threads, or 1 on a filesystem whose one connection threads cannot share.
+
+    fsspec's sftp filesystem is one paramiko SFTP client, one connection: requests from several
+    threads at once deadlock it, each waiting on a reply another took. Read serially there.
+    """
+    protocols = fs.protocol if isinstance(fs.protocol, (tuple, list)) else (fs.protocol,)
+    return 1 if {'sftp', 'ssh'} & set(protocols) else n
 
 
 class CallableStr(str):
@@ -2881,7 +2901,7 @@ class BuildJournal:
                 dt, _, entry = f.read().partition('\n')
             return dt, entry.strip()
 
-        with ThreadPoolExecutor(max_workers=min(8, len(markers))) as ex:
+        with ThreadPoolExecutor(max_workers=_threads_(fs, min(8, len(markers)))) as ex:
             rows = list(ex.map(read_marker, markers))
         return [entry for _, entry in sorted(rows) if entry]
 
@@ -3218,8 +3238,10 @@ class BuildJournal:
         cls._write_text_(block, 'repr', block.repr())
         cls._write_text_(block, 'signature', block.signaturestr())
         cls._write_text_(block, 'type', block.typestr())
+        # A note is the entry's own, not the instance's: named by the entry's id too, so a second note
+        # from the same instance -- same `block.dt` -- is a file of its own, not the first one overwritten.
         if note is not None and not inline_note:
-            cls._write_text_(block, 'note', note)
+            cls._write_text_(block, 'note', note, filename_prefix=f"{entry_id}-")
 
         spec_path = cls.path(block, 'spec', 'yaml')
         kwargs_path = cls.path(block, 'kwargs', 'yaml')
@@ -3229,7 +3251,7 @@ class BuildJournal:
         repr_path = cls.path(block, 'repr', 'txt')
         type_path = cls.path(block, 'type', 'txt')
         if note is not None and not inline_note:
-            note_path = cls.path(block, 'note', 'txt')
+            note_path = cls.path(block, 'note', 'txt', filename_prefix=f"{entry_id}-")
             note_val = note_path
         else:
             note_val = note
@@ -3621,7 +3643,7 @@ class BuildJournal:
                 return []
 
         files, level = [], [root]
-        with ThreadPoolExecutor(max_workers=max(1, n_workers)) as ex:
+        with ThreadPoolExecutor(max_workers=_threads_(fs, max(1, n_workers))) as ex:
             while level:
                 futures = [ex.submit(listing, d) for d in level]
                 level = []
@@ -3677,9 +3699,9 @@ class BuildJournal:
         block.log.detailed(f"WROTE: {name.upper()}: parquet: {pqpath}")
 
     @classmethod
-    def _write_text_(cls, block, name, text):
+    def _write_text_(cls, block, name, text, *, filename_prefix: str = ''):
         fs, storage_options, _ = cls._lake_(block)
-        path = cls.path(block, name, 'txt')
+        path = cls.path(block, name, 'txt', filename_prefix=filename_prefix)
         write_str(text, path, storage_options=storage_options)
         assert fs.exists(path), f"scopepath {path} does not exist after writing"
         block.log.detailed(f"WROTE: {name.upper()}: txt: {path}")
@@ -3749,7 +3771,7 @@ class BuildJournal:
         quiet = (report is not None or not progress) if progress is not None \
             else not (hasattr(log, 'ist') and log.ist('verbose'))
         results = [None] * len(files)
-        with ThreadPoolExecutor(max_workers=max(1, min(n_workers, len(files)))) as ex:
+        with ThreadPoolExecutor(max_workers=_threads_(fs, max(1, min(n_workers, len(files))))) as ex:
             futures = {ex.submit(read_entry_file, file): i for i, file in enumerate(files)}
             try:
                 for done, future in enumerate(tqdm.tqdm(as_completed(futures), desc=desc, total=len(files),
@@ -4010,7 +4032,7 @@ class PipeJournal(BuildJournal):
                 sides = {norm(row[c]) for c in cls._SIDE_COLUMNS_ if c in df.columns and isinstance(row[c], str)}
                 return file, row.get('datetime', ''), row.get('entrypath'), sides
             newest = {}
-            with ThreadPoolExecutor(max_workers=8) as ex:
+            with ThreadPoolExecutor(max_workers=_threads_(fs, 8)) as ex:
                 for file, dt, entrypath, sides in ex.map(read, files):
                     if entrypath not in newest or dt > newest[entrypath][0]:
                         newest[entrypath] = (dt, file, sides)

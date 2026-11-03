@@ -72,6 +72,12 @@ lightning = [
     # dependency.
     "tensorboard>=2.12",
 ]
+anyscale = [
+    # dbx.anyscale only: a running Anyscale workspace as an ssh:// datalake,
+    # reached over sshfs -- in [hyp] -- through Anyscale's WebSocket tunnel.
+    "anyscale>=0.26",
+    "sshfs>=2024.0",
+]
 azure = [
     # The fsspec driver for abfs:// and abfss:// urls. Nothing imports it --
     # fsspec resolves it from the url -- so its absence surfaces only when a
@@ -109,7 +115,7 @@ dev = [
     "twine",
 ]
 all = [
-    "datablocks[ray,torch,streaming,lightning,azure,hyp,dev]",
+    "datablocks[ray,torch,streaming,lightning,anyscale,azure,hyp,dev]",
 ]
 
 [project.urls]
@@ -125,9 +131,13 @@ dbx = "dbx:exec"
 "dbx.pprint" = "dbx:pprint"
 "dbx.valid" = "dbx:valid"
 "dbx.slurm.exec" = "dbx:slurm_exec"
+# TODO: fix dbx.slurm.eval -- there is no dbx.slurm_eval, so the command fails
+# on import. Define it, as dbx.eval is to dbx.exec, or drop this entry point.
 "dbx.slurm.eval" = "dbx:slurm_eval"
 "dbx.slurm.print" = "dbx:slurm_pprint"
 "dbx.slurm.pprint" = "dbx:slurm_pprint"
+"dbx.anyscale_storage_options" = "dbx.anyscale:storage_options_main"
+"dbx.anyscale_datalake" = "dbx.anyscale:datalake_main"
 "dbx.hyp" = "hyp.app:main"
 hyp = "hyp.app:main"
 

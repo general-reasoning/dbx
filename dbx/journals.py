@@ -521,7 +521,10 @@ def write_exec_journal(s: str, datalake: str | None = None, storage_options: dic
     """
     dbx_url = datalake or url or default_datalake() or './dbx'
     exec_dir = os.path.join(dbx_url, '.journal', 'exec')
-    fs, _ = fsspec.url_to_fs(exec_dir, **(storage_options or {}))
+    # DBX_STORAGE_OPTIONS by default, as the build journal's: an ssh datalake may be reachable only through them.
+    if storage_options is None:
+        storage_options = default_storage_options()
+    fs, _ = fsspec.url_to_fs(exec_dir, **storage_options)
     try:
         fs.makedirs(exec_dir, exist_ok=True)
     except Exception:
@@ -1226,7 +1229,10 @@ def read_exec_journal(
 
     dbx_url = datalake or url or default_datalake() or './dbx'
     exec_dir = os.path.join(dbx_url, '.journal', 'exec')
-    fs, _ = fsspec.url_to_fs(exec_dir, **(storage_options or {}))
+    # DBX_STORAGE_OPTIONS by default, as the build journal's: an ssh datalake may be reachable only through them.
+    if storage_options is None:
+        storage_options = default_storage_options()
+    fs, _ = fsspec.url_to_fs(exec_dir, **storage_options)
     try:
         if not fs.exists(exec_dir):
             files = []

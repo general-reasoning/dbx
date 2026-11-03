@@ -1705,7 +1705,8 @@ class HypDbxJournal(Hyp):
         """Right click on a block: the blocks journaled under its session, at the mouse; picking one opens its window."""
 
         if _is_blank_(row.get("session")):
-            self.status = "no session: the block was built outside dbx.exec"
+            # Every entry has recorded its session since then, with dbx.exec or without: the process's own.
+            self.status = "no session: the entry was written before dbx recorded sessions, on 2026-09-29"
             return
         held = SimpleNamespace(row=row)
 

@@ -228,3 +228,27 @@ def test_a_directory_topic_ships_its_contents_to_a_remote_target(block, tmp_path
 
     got = sorted(p.lstrip('/') for p in memory.find('/repo/configs'))
     assert got == ['repo/configs/data/bc.yaml'], got
+
+
+def test_ship_tag_lands_each_topic_under_root_and_tag_as_in_the_blocks_own_dir(tmp_path):
+    block = Cfg(url=str(tmp_path / 'store'), tag='proj.pipes.f:NAME').build()
+    root = tmp_path / 'shared'
+    shipped = block.UNSAFE_ship_tag(str(root), OVERRIDE=True, show_progress=False)
+    base = root / 'proj.pipes.f:NAME'
+    assert shipped == {'configs': f"{base}/configs", 'facts': f"{base}/facts/facts.json"}
+    assert (base / 'configs' / 'data' / 'bc.yaml').is_file()
+    assert json.loads((base / 'facts' / 'facts.json').read_text()) == {'windows': 321337}
+    assert not (base / 'scratch').exists()
+
+
+def test_ship_tag_ships_only_the_topics_named_and_to_a_url(tmp_path):
+    import fsspec
+    block = Cfg(url=str(tmp_path / 'store'), tag='t').build()
+    assert block.ship_tag_targets('memory:///lake/', ['facts']) == {'facts': 'memory:///lake/t/facts/facts.json'}
+    block.UNSAFE_ship_tag('memory:///lake', ['facts'], OVERRIDE=True, overwrite=True, show_progress=False)
+    assert fsspec.filesystem('memory').exists('/lake/t/facts/facts.json')
+
+
+def test_ship_tag_refuses_a_block_without_a_tag(block, tmp_path):
+    with pytest.raises(ValueError, match='no tag'):
+        block.UNSAFE_ship_tag(str(tmp_path / 'shared'), OVERRIDE=True)

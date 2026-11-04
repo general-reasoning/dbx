@@ -4286,6 +4286,41 @@ class Datablock:
             raise e
         return shipped
 
+    def ship_tag_targets(self, root, topics=None) -> dict:
+        """``{topic: target}`` that :meth:`UNSAFE_ship_tag` ships to: each topic under ``{root}/{tag}``.
+
+        A topic lands where it sits under this block's own :meth:`dirpath` -- a
+        directory topic at ``{root}/{tag}/{topic}``, a file topic's file inside it
+        (``{root}/{tag}/facts/facts.json``) -- so the shipped tree reads like the
+        block's own. *topics* defaults to every topic with a location.
+        """
+        if not self.tag:
+            raise ValueError(f"{self.__class__.__name__} has no tag to ship under: give it tag=..., "
+                             f"or ship with UNSAFE_ship({{topic: target}})")
+        base = f"{str(root).rstrip('/')}/{self.tag}"
+        targets = {}
+        for topic in (self.topics() if topics is None else topics):
+            t = self._normtopic_((topic,))
+            if self._is_syntopic_(*t):
+                continue
+            is_dir = self._is_dir_topic_(*t) or self.is_topicgroup(*t) or self._topicfiles_ is None
+            src = self.dirpath(*t) if is_dir else self.path(*t)
+            targets[topic] = f"{base}/{os.path.relpath(src, self.dirpath())}"
+        return targets
+
+    def UNSAFE_ship_tag(self, root, topics=None, /, *, relocate: dict | None = None,
+                        OVERRIDE: bool = False, overwrite: bool = False,
+                        validate: bool = True, show_progress: bool = True):
+        """:meth:`UNSAFE_ship` every topic -- or the *topics* named -- to ``{root}/{tag}``.
+
+        Sugar for ``UNSAFE_ship(self.ship_tag_targets(root, topics))``: a tagged block
+        lands under its tag, its topics laid out as in its own directory. *root* may be
+        local or an fsspec URL. A block without a tag is refused: it has no name to
+        land under.
+        """
+        return self.UNSAFE_ship(self.ship_tag_targets(root, topics), relocate=relocate, OVERRIDE=OVERRIDE,
+                                overwrite=overwrite, validate=validate, show_progress=show_progress)
+
     def UNSAFE_ship_redirect(self, targets=None, /, *, relocate: dict | None = None,
                              OVERRIDE: bool = False, overwrite: bool = False,
                              validate: bool = True, show_progress: bool = True):

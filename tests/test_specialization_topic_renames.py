@@ -1,8 +1,8 @@
 """A topic renamed since a block was built is read under its new name from where the old one recorded it.
 
-``redirect_topics`` as a mapping, ``{current_name: historical_name}``, is to a
-topic what ``redirect_vars`` is to a VAR field: the narrower block's identity
-names the topic as it was (``topics=``), and its build recorded the path under
+`redirect_topics` as a mapping, `{current_name: historical_name}`, is to a
+topic what `redirect_vars` is to a VAR field: the narrower block's identity
+names the topic as it was (`topics=`), and its build recorded the path under
 that name; this block reads it under the name it has now.
 """
 import pytest
@@ -32,7 +32,7 @@ class Before(Datablock):
 
 
 class After(Datablock):
-    """The same class, its topic renamed -- the same file, now ``tablets``."""
+    """The same class, its topic renamed -- the same file, now `tablets`."""
     VERSION = 2
     TOPICS = {'tablets': DATAFILE('tabs.json')}
 

@@ -1,6 +1,6 @@
-"""``reuse_workers=True``: an executor's workers, started by its first call, run every later call's callables too.
+"""`reuse_workers=True`: an executor's workers, started by its first call, run every later call's callables too.
 
-Nothing else about ``exec_callables`` changes -- results in input order, the
+Nothing else about `exec_callables` changes -- results in input order, the
 progress bar, the journal carried, a failure raised -- and without it nothing
 changes at all: each call starts and stops workers of its own, as it always has.
 """
@@ -64,7 +64,7 @@ def test_a_failure_raises_stops_the_workers_and_the_next_call_starts_anew():
 
 def test_the_journal_is_carried_to_reused_workers(tmp_path, monkeypatch):
     from test_buildjournal import _built_under_the_scope, block
-    monkeypatch.setenv('DBX_ROOT', str(tmp_path))
+    monkeypatch.setenv('DBX_DATALAKE', str(tmp_path))
     ex = callable_executor('multiprocessing', n_workers=2, reuse_workers=True, tag='journaled')
     try:
         with BuildJournal() as dj:

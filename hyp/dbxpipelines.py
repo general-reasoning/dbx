@@ -399,7 +399,7 @@ def _dbx_():
 
 
 def datalake():
-    """dbx's datalake -- `DBX_DATALAKE`, then `DBX_ROOT`, `DBX_URL` -- where hyp reads the pipelines and keeps its corpus."""
+    """dbx's datalake -- `DBX_DATALAKE` -- where hyp reads the pipelines and keeps its corpus."""
     lake = _dbx_().default_datalake()
     if not lake:
         raise SystemExit("hyp --journal: no datalake; set DBX_DATALAKE")
@@ -1163,10 +1163,9 @@ class HypDbxJournal(Hyp):
 
     @classmethod
     def __data_origin__(cls, args):
-        """The variable the datalake came from; deprecated, if it is not DBX_DATALAKE; and local, if nothing gives it a protocol."""
+        """Where the datalake came from, DBX_DATALAKE; and local, if nothing gives it a protocol."""
 
-        var = _dbx_().default_datalake_var()
-        said = [var] if var == "DBX_DATALAKE" else [f"{var}, deprecated: set DBX_DATALAKE instead"]
+        said = ["DBX_DATALAKE"]
         if split_protocol(datalake())[0] is None and "protocol" not in cls.__storage_options__(args):
             said.append("read as a local path")
         return "from " + "; ".join(said)

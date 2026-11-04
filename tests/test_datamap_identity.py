@@ -3,7 +3,7 @@
 See DATAPARTITION.md, "TODO: three choices, untangled -- datamaps, and tables
 mapped along them", Identities. The hashes below were taken from the code
 before the refactor (dbx 0e6ca42). A part enters the identity of a block built
-on it as its rendered spec only -- ``{'fold': k, 'partition': {...}}`` -- so the
+on it as its rendered spec only -- `{'fold': k, 'partition': {...}}` -- so the
 part's and the partition's classes may change, and their VARs, versions and
 topics may not.
 """
@@ -127,7 +127,7 @@ def test_a_core_partition_keeps_its_identity_and_reaches_its_old_path(tmp_path):
     """A core partition's hash -- its spec, version and TOPICS, a topic's description included -- is pinned.
 
     Every CPTAC core's clustering was built under it; on 2026-10-16 a reworded description of its
-    ``layout`` topic moved it, unseen. Its class was `DatatableCorePartition` until 2026-10-17, and its
+    `layout` topic moved it, unseen. Its class was `DatatableCorePartition` until 2026-10-17, and its
     specialization reaches what was built at that class's path. The hash is the code's at dbx 7fd8eea.
     """
     import sys
@@ -194,7 +194,7 @@ def test_a_mapped_tablet_filed_under_its_tag_is_reached_where_it_was_filed(tmp_p
 
 
 def _tagged_as_then_(tablet, tag_of):
-    """A pullback's `__tablet__`, tagging tablet *i* ``tag_of(i)`` as it did until 2026-10-17."""
+    """A pullback's `__tablet__`, tagging tablet *i* `tag_of(i)` as it did until 2026-10-17."""
     def __tablet__(self, idx, **kw):
         return tablet(self, idx, **kw).set(tag=tag_of(idx))
     return __tablet__

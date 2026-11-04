@@ -6,9 +6,9 @@ by the author.  Which columns two slices hold in common is a fact about how
 they were WRITTEN: the caller is the wrong party to know it, and every caller of
 one table needs the same answer.
 
-So a `Datatablet` or `Datatable` declares ``shared_slice_columns``, and a
+So a `Datatablet` or `Datatable` declares `shared_slice_columns`, and a
 block reading an upstream block's slices alongside its own -- a `Featuretablet`
-over its `Datatablet` -- declares ``shared_upstream_column`` for the column
+over its `Datatablet` -- declares `shared_upstream_column` for the column
 that answers the question spanning the two: is feature row *i* the features OF
 sample row *i*?
 
@@ -16,7 +16,7 @@ Both are kwargs and not VAR: they change no bytes, only what is checked on a
 read.  And neither defaults to the intersection of the declared columns, because
 `_check_shared_` runs inside `_merge_` and so is paid on every row of every epoch:
 dbx cannot know whether that intersection is two scalars or a
-``(datapoints_per_row, ...)`` ndarray, and imposing an unbounded per-row cost
+`(datapoints_per_row, ...)` ndarray, and imposing an unbounded per-row cost
 the author never chose is worse than not checking.  Whoever declared the slices
 knows which key is cheap.
 """

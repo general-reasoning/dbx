@@ -328,7 +328,7 @@ if __name__ == '__main__':
 # ═══════════════════════════════════════════════════════════════════════
 
 class TestTreeSkipDeclarations:
-    """``TREE_SKIP_BUILDING`` and ``TREE_SKIP_VALIDATION`` -- one idea, two walks.
+    """`TREE_SKIP_BUILDING` and `TREE_SKIP_VALIDATION` -- one idea, two walks.
 
     Both are tuples, on the base and in every subclass. Only membership is
     ever asked of them, so a set would work; declaring them alike is what
@@ -353,7 +353,7 @@ class TestTreeSkipDeclarations:
             BUILD_TREE_EXEMPTIONS = ('child',)
 
         root, _, _ = _make_tree_with_exemptions(url)
-        retired = Retired(url=url, spec=dict(root.spec))
+        retired = Retired(datalake=url, spec=dict(root.spec))
         with pytest.raises(AttributeError, match='TREE_SKIP_BUILDING'):
             retired.build_tree(exclude_self=True)
 
@@ -369,6 +369,6 @@ class TestTreeSkipDeclarations:
             TREE_SKIP_BUILDING = 'child'
 
         root, _, _ = _make_tree_with_exemptions(url)
-        stringy = Stringy(url=url, spec=dict(root.spec))
+        stringy = Stringy(datalake=url, spec=dict(root.spec))
         with pytest.raises(TypeError, match='trailing comma'):
             stringy.build_tree(exclude_self=True)

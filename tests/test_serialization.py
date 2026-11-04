@@ -123,7 +123,7 @@ class SimpleStack(Datastack):
         return math.ceil(self.var.total_items / self.var.block_size)
 
     def __block__(self, idx):
-        return StackBlock(datalake=self.url, spec=dict(idx=idx))
+        return StackBlock(datalake=self.datalake, spec=dict(idx=idx))
 
     def blocks(self):
         return [self.__block__(i) for i in range(self.n_blocks)]
@@ -139,7 +139,7 @@ class SimpleStack(Datastack):
 def _assert_identity_preserved(original, restored):
     """Assert that identity-defining attributes survived the roundtrip."""
     assert restored.hash == original.hash, "hash mismatch"
-    assert restored.url == original.url, "url mismatch"
+    assert restored.datalake == original.datalake, "datalake mismatch"
     assert restored.anchor == original.anchor, "anchor mismatch"
     assert restored.keyby == original.keyby, "keyby mismatch"
     assert restored.fqcn == original.fqcn, "fqcn mismatch"

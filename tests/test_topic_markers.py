@@ -1,11 +1,11 @@
 """Topic markers -- a topic declared by what it IS, not by a sentinel value.
 
-``DIRTOPIC`` is ``None`` and ``SYNTOPIC`` is ``()``: values chosen so they
+`DIRTOPIC` is `None` and `SYNTOPIC` is `()`: values chosen so they
 cannot collide with a filename, which a reader still has to know by heart.
-``DIR`` and ``SYNTHETIC`` say the same things as themselves, and ``DATASLICE`` says
+`DIR` and `SYNTHETIC` say the same things as themselves, and `DATASLICE` says
 the one thing no sentinel could -- what columns the slice has, which is the
-reason the markers exist at all.  Under ``SLICETOPIC`` a slice's columns lived
-in whatever dict ``__build__`` happened to hand the writers: they reached no
+reason the markers exist at all.  Under `SLICETOPIC` a slice's columns lived
+in whatever dict `__build__` happened to hand the writers: they reached no
 hash, so a block could change shape and go on claiming to be the same block.
 
 A declaration holding a marker IS a marker declaration -- nothing announces it,
@@ -15,7 +15,7 @@ renders as its value, and a filename renders quoted where the older spelling
 renders it bare.  So adopting the markers re-keys a block, and every block
 spelled the older way keeps its rendering, and its hashes, exactly.
 
-The other half: a ``Datatable`` spelled with the markers stops carrying its
+The other half: a `Datatable` spelled with the markers stops carrying its
 TABLET's slice topics in its own signature.  Another block's topics were never its
 identity to hold, and the TABLET is already part of the table.
 """
@@ -243,16 +243,16 @@ class TestAMarkerBehavesAsTheSentinelItReplaces:
 class TestAMarkerIsNotItsName:
     """Within one declaration, a marker and a file named for it stay apart.
 
-    ``{'masks': DIR, 'x': 'DIR'}`` is a directory topic beside a topic stored in
-    a file called ``DIR``.  A leaf renders into the type string as its own text,
-    so left bare the two would both render ``=DIR`` and one block's two topics
+    `{'masks': DIR, 'x': 'DIR'}` is a directory topic beside a topic stored in
+    a file called `DIR`.  A leaf renders into the type string as its own text,
+    so left bare the two would both render `=DIR` and one block's two topics
     would collide onto one segment while meaning different things.  Quoting the
     filename is what keeps them apart -- in the journal, where both are only ever
     text in a column, as much as in the hash.
 
     Across declarations they can still collide: a sentinel-spelled block renders
-    its filenames bare, so its ``{'masks': 'DIR'}`` renders as a marker-spelled
-    block's ``{'masks': DIR}`` does.  Closing that would mean re-rendering every
+    its filenames bare, so its `{'masks': 'DIR'}` renders as a marker-spelled
+    block's `{'masks': DIR}` does.  Closing that would mean re-rendering every
     block that predates the markers, which is the one thing the era exists to
     avoid.  Hence *within*: what one declaration says must be unambiguous.
     """
@@ -868,7 +868,7 @@ def test_declaring_subdirs_keeps_it_one_directory_topic(tmp_path):
     class D(Datablock):
         TOPICS = {'data': DATADIR('meta', 'data', 'videos', note='a lerobot dataset')}
 
-    b = D(url=str(tmp_path))
+    b = D(datalake=str(tmp_path))
     assert b._is_dir_topic_('data') is True
     assert b.is_topicgroup('data') is False
     assert isinstance(b.path('data'), str)
@@ -880,7 +880,7 @@ def test_validity_wants_every_declared_subdir(tmp_path):
     class D(Datablock):
         TOPICS = {'data': DATADIR('meta', 'data', 'videos')}
 
-    b = D(url=str(tmp_path))
+    b = D(datalake=str(tmp_path))
     root = pathlib.Path(b.path('data', local=True))
     root.mkdir(parents=True)
     assert b.valid_topic('data') is False
@@ -894,7 +894,7 @@ def test_subdirs_nest(tmp_path):
     class D(Datablock):
         TOPICS = {'data': DATADIR({'videos': ('chunk-000',)})}
 
-    b = D(url=str(tmp_path))
+    b = D(datalake=str(tmp_path))
     root = pathlib.Path(b.path('data', local=True))
     (root / 'videos').mkdir(parents=True)
     assert b.valid_topic('data') is False
@@ -938,6 +938,6 @@ def test_declaring_subdirs_moves_the_hash_and_a_bare_marker_does_not(tmp_path):
     class Declared(Datablock):
         TOPICS = {'data': DATADIR('meta', note='a lerobot dataset')}
 
-    hashes = {c.__name__: c(url=str(tmp_path)).hash for c in (Bare, Noted, Declared)}
+    hashes = {c.__name__: c(datalake=str(tmp_path)).hash for c in (Bare, Noted, Declared)}
     assert len(set(hashes.values())) == 3, hashes
     assert repr(DATADIR) == 'DATADIR' and repr(DATADIR()) == 'DATADIR'

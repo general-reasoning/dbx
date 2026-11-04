@@ -482,7 +482,7 @@ class DatatablePartition(Datablock):
         """What a part takes from its partition: where it is, and the workers it builds its tablets with.
 
         Where: as a table gives its tablets its url, a part of a partition belongs
-        where the partition does, not wherever DBX_ROOT happens to point in the
+        where the partition does, not wherever DBX_DATALAKE happens to point in the
         process that asks for it. The workers: each part is built by its own
         build(), one after another, and builds its tablets -- pieces, packed
         tablets, core tablets -- in parallel, as the partition scanned in parallel.

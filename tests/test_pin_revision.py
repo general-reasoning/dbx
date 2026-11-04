@@ -573,7 +573,7 @@ class TestInstRemoteDispatch:
 class TestInstRemoteEqualsRinst:
     """`.rinst(...)` must be a pure shorthand for `.inst(remote=True, ...)`.
 
-    Enforced by comparing what actually reaches :func:`remote` on both routes,
+    Enforced by comparing what actually reaches `remote` on both routes,
     so a parameter added to one and forgotten on the other fails here.
     """
 

@@ -100,7 +100,7 @@ def test_datablock_logger_has_working_stack_depth(monkeypatch, tmp_path):
     """Datablock's log should have a valid stack_depth so selected() works."""
     from dbx.datablocks import Datablock
 
-    monkeypatch.setenv('DBX_ROOT', str(tmp_path))
+    monkeypatch.setenv('DBX_DATALAKE', str(tmp_path))
     monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
     monkeypatch.setenv('DBX_LOG_SELECTED', 'True')
 

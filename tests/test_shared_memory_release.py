@@ -1,7 +1,7 @@
 """
 A StreamingDataset's shared memory is released when the dataset is.
 
-mosaicml-streaming registers each SharedMemory it creates with ``atexit``, so
+mosaicml-streaming registers each SharedMemory it creates with `atexit`, so
 the registry kept every segment -- and its file descriptors -- until the process
 exited. A process opening a dataset per tablet ran out of descriptors: the suite
 itself died of it, in Metal failing to load its shader library ("Too many open

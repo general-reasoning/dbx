@@ -2,7 +2,7 @@
 Tests for BuildJournalEntry.ls / .list / .size.
 
 These mirror Datablock.ls/.list/.size but resolve the topic path from
-the journal entry's recorded ``paths`` field rather than a live block.
+the journal entry's recorded `paths` field rather than a live block.
 
 Verifies:
 1. entry.pretty.paths() / entry.pretty.topics() parse the recorded stringified dicts.
@@ -133,3 +133,20 @@ class TestMissingTopic:
         block, entry = _built(SingleTopicBlock, tmp_path)
         with pytest.raises(KeyError):
             entry.pretty.list('nonexistent')
+
+
+def test_originst_is_trueinst(monkeypatch):
+    """`originst` and `trueinst` name one call, `rinst`, from either side."""
+    from dbx.journals import BuildJournalEntry
+    seen = []
+    monkeypatch.setattr(BuildJournalEntry, 'rinst', lambda self, **kw: seen.append(kw) or 'block')
+    entry = BuildJournalEntry.__new__(BuildJournalEntry)
+    assert entry.originst(revision='abc') == entry.trueinst(revision='abc') == 'block'
+    assert seen[0] == seen[1] == dict(gitrepo=None, revision='abc', handle=None)
+
+
+def test_an_old_quote_spelling_url_still_evaluates(tmp_path):
+    """Quotes journaled before `url` was renamed `datalake` spell `url=`: Datablock still takes it, for them."""
+    from dbx.datablocks import Datablock
+    old = Datablock(url=str(tmp_path))
+    assert old.datalake == str(tmp_path) and old.hash == Datablock(datalake=str(tmp_path)).hash

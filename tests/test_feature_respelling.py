@@ -50,8 +50,8 @@ def setup_env(monkeypatch):
 def _the_old_name(monkeypatch):
     """Featuretablet and Featuretable as they were before feature_namemap was renamed feature_for_column.
 
-    And before their upstream field was renamed ``upstream``: the code reads
-    ``var.upstream``, so the old VARs answer it under the old field.
+    And before their upstream field was renamed `upstream`: the code reads
+    `var.upstream`, so the old VARs answer it under the old field.
     """
     from dataclasses import dataclass
     from dbx import Datablock, Datacollator

@@ -45,7 +45,7 @@ dbx.execjournal(loc=None, *, iloc=None, datalake=None, index=..., **filters)
 ```
 
 This reads `<datalake>/.journal/exec/`. `datalake` defaults to
-`DBX_DATALAKE`, then `DBX_ROOT`, then `DBX_URL`. That is where `dbx.exec`
+`DBX_DATALAKE`. That is where `dbx.exec`
 writes every command, whatever datalake the command's blocks use.
 
 The result is an `ExecJournalFrame`, **newest first**, indexed by the

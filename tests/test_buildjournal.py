@@ -1,9 +1,9 @@
 """
 `BuildJournal`: the handle a block writes its journal through and reads it with.
 
-Constructing one touches no storage; ``read()`` reads, ``write()`` writes. A
-handle has a ``session`` fixed for its lifetime and written to every entry,
-and remembers a reference to every entry it wrote (``written_entries()``).
+Constructing one touches no storage; `read()` reads, `write()` writes. A
+handle has a `session` fixed for its lifetime and written to every entry,
+and remembers a reference to every entry it wrote (`written_entries()`).
 """
 import copy
 import functools
@@ -65,7 +65,7 @@ class Stack(Datastack):
         return self.var.n
 
     def __block__(self, idx):
-        return Built(datalake=self.url, spec={'x': idx})
+        return Built(datalake=self.datalake, spec={'x': idx})
 
 
 class TestReadingIsAQuery:
@@ -86,14 +86,14 @@ class TestReadingIsAQuery:
 
     def test_a_block_reads_under_its_own_datalake(self, tmp_path, monkeypatch):
         """Whatever the default datalake is."""
-        monkeypatch.setenv('DBX_ROOT', str(tmp_path / 'elsewhere'))
+        monkeypatch.setenv('DBX_DATALAKE', str(tmp_path / 'elsewhere'))
         b = block(tmp_path / 'lake')
         b.build()
         assert len(b.buildjournal(event='build:end')) == 1
 
 
 class TestABlockHasNoJournalOfItsOwn:
-    """Which session an entry goes under is the open ``with``'s to say, never a block's."""
+    """Which session an entry goes under is the open `with`'s to say, never a block's."""
 
     def test_buildjournal_is_not_an_argument(self, tmp_path):
         with pytest.raises(TypeError, match=r"with dbx\.BuildJournal\(\)"):
@@ -128,19 +128,19 @@ class TestAJournalIsNotIdentity:
     @pytest.mark.parametrize('cls, spec', [(Built, {'x': 3}), (Stack, {'n': 2})])
     def test_every_way_of_getting_one_leaves_identity_alone(self, tmp_path, cls, spec):
         url = str(tmp_path)
-        ref = _identity(cls(url=url, spec=spec))
+        ref = _identity(cls(datalake=url, spec=spec))
         # Two sessions -- two commands -- and a block carried across each way it travels.
         for dj in (BuildJournal(), BuildJournal()):
             with dj:
-                scoped = cls(url=url, spec=spec)
+                scoped = cls(datalake=url, spec=spec)
                 assert BuildJournal.current() is dj
                 for b in (scoped, scoped.set(tag=None), pickle.loads(pickle.dumps(scoped))):
                     assert _identity(b) == ref
 
     def test_nor_that_of_the_blocks_it_is_handed_to(self, tmp_path):
-        plain = Stack(url=str(tmp_path))
+        plain = Stack(datalake=str(tmp_path))
         with BuildJournal():
-            scoped = Stack(url=str(tmp_path))
+            scoped = Stack(datalake=str(tmp_path))
             for i in range(plain.n_blocks):
                 assert _identity(scoped.block(i)) == _identity(plain.block(i))
 
@@ -212,10 +212,10 @@ class TestWrittenEntries:
 
 
 class TestLegacySessionColumn:
-    """``session`` named the TREE until it was renamed; now it is its own column.
+    """`session` named the TREE until it was renamed; now it is its own column.
 
     A journal spanning both has rows of each kind, and each is read by its own
-    meaning: decided per row, by whether the row has a ``tree``.
+    meaning: decided per row, by whether the row has a `tree`.
     """
 
     def test_old_and_new_rows_in_one_journal(self, tmp_path):
@@ -235,7 +235,7 @@ class TestLegacySessionColumn:
 
 
 class TestWithScope:
-    """``with BuildJournal()`` is the session of every entry written while it is open."""
+    """`with BuildJournal()` is the session of every entry written while it is open."""
 
     def test_entries_inside_go_under_it(self, tmp_path):
         with BuildJournal() as dj:
@@ -246,7 +246,7 @@ class TestWithScope:
         assert ids(dj.written_entries()) == written_order(b)
 
     def test_decided_when_it_writes_not_when_it_was_made(self, tmp_path):
-        """Built after the inner ``with`` closed: the next one out, and nothing to the closed one."""
+        """Built after the inner `with` closed: the next one out, and nothing to the closed one."""
         with BuildJournal() as outer:
             with BuildJournal() as inner:
                 b = block(tmp_path)
@@ -277,7 +277,7 @@ class TestWithScope:
         assert all(j is dj for j in seen)
 
     def test_a_threads_own_is_its_own(self):
-        """A ``with`` opened in a thread is that thread's: its siblings, and the main thread, do not see it."""
+        """A `with` opened in a thread is that thread's: its siblings, and the main thread, do not see it."""
         import threading
         opened, release, seen = threading.Event(), threading.Event(), {}
 
@@ -312,7 +312,7 @@ class TestExec:
 
     @pytest.fixture(autouse=True)
     def lake(self, tmp_path, monkeypatch):
-        monkeypatch.setenv('DBX_ROOT', str(tmp_path))
+        monkeypatch.setenv('DBX_DATALAKE', str(tmp_path))
 
     def _row(self, tmp_path):
         from dbx.databits import read_exec_journal
@@ -373,7 +373,7 @@ class TestExecJournal:
 
     @pytest.fixture(autouse=True)
     def lake(self, tmp_path, monkeypatch):
-        monkeypatch.setenv('DBX_ROOT', str(tmp_path))
+        monkeypatch.setenv('DBX_DATALAKE', str(tmp_path))
 
     def _run(self, tmp_path):
         return dbx.exec("a = Built(datalake=root, spec={'x': 1}); b = Built(datalake=root, spec={'x': 2}); "
@@ -419,7 +419,7 @@ class TestExecJournal:
 
 
 class TestRepr:
-    """``repr()``: every kwarg, where ``quote()`` keeps only what reconstructs a block."""
+    """`repr()`: every kwarg, where `quote()` keeps only what reconstructs a block."""
 
     def test_it_carries_what_quote_leaves_out(self, tmp_path):
         b = block(tmp_path, tree='T-1')
@@ -431,7 +431,7 @@ class TestRepr:
         b = block(tmp_path)
         r = b.repr()
         # url and anchor as quote() renders them: only when given, so that a
-        # block rooted by DBX_ROOT stays relocatable.
+        # block rooted by DBX_DATALAKE stays relocatable.
         assert all(f"{k}=" in r for k in b.dfn if not k.startswith('__') and k not in ('url', 'anchor'))
 
     def test_the_tree_is_the_one_the_block_has(self, tmp_path):
@@ -473,7 +473,7 @@ class TestExecTimes:
 
     @pytest.fixture(autouse=True)
     def lake(self, tmp_path, monkeypatch):
-        monkeypatch.setenv('DBX_ROOT', str(tmp_path))
+        monkeypatch.setenv('DBX_DATALAKE', str(tmp_path))
 
     def test_start_and_end_with_datetime_the_start(self, tmp_path):
         import time
@@ -492,11 +492,11 @@ class TestExecTimes:
 
 
 class TestExecOutcome:
-    """``success``, ``exception`` and ``traceback``: whether a command raised, what, and where."""
+    """`success`, `exception` and `traceback`: whether a command raised, what, and where."""
 
     @pytest.fixture(autouse=True)
     def lake(self, tmp_path, monkeypatch):
-        monkeypatch.setenv('DBX_ROOT', str(tmp_path))
+        monkeypatch.setenv('DBX_DATALAKE', str(tmp_path))
 
     def test_a_command_that_returned(self, tmp_path):
         dbx.exec("1 + 1")
@@ -541,11 +541,11 @@ class TestExecOutcome:
 
 
 class TestJournalIndex:
-    """`dbx.journal()` indexes by ``id`` by default; ``index=None`` numbers it."""
+    """`dbx.journal()` indexes by `id` by default; `index=None` numbers it."""
 
     @pytest.fixture(autouse=True)
     def lake(self, tmp_path, monkeypatch):
-        monkeypatch.setenv('DBX_ROOT', str(tmp_path))
+        monkeypatch.setenv('DBX_DATALAKE', str(tmp_path))
 
     def test_the_exec_journal_by_default(self, tmp_path):
         dbx.exec("1 + 1")
@@ -579,7 +579,7 @@ class TestExecJournalShape:
 
     @pytest.fixture(autouse=True)
     def lake(self, tmp_path, monkeypatch):
-        monkeypatch.setenv('DBX_ROOT', str(tmp_path))
+        monkeypatch.setenv('DBX_DATALAKE', str(tmp_path))
 
     def test_when_then_exec_first_comment_and_success_last(self, tmp_path):
         dbx.exec("1 + 1  # why")
@@ -642,7 +642,7 @@ class TestFilterPatterns:
 
     @pytest.fixture(autouse=True)
     def lake(self, tmp_path, monkeypatch):
-        monkeypatch.setenv('DBX_ROOT', str(tmp_path))
+        monkeypatch.setenv('DBX_DATALAKE', str(tmp_path))
 
     @pytest.fixture
     def ids(self):
@@ -711,7 +711,7 @@ class TestConstructed:
 
     @pytest.fixture(autouse=True)
     def lake(self, tmp_path, monkeypatch):
-        monkeypatch.setenv('DBX_ROOT', str(tmp_path))
+        monkeypatch.setenv('DBX_DATALAKE', str(tmp_path))
 
     def _run(self, tmp_path):
         return dbx.exec(
@@ -770,7 +770,7 @@ class TestExecJournalBuildJournalParameters:
 
     @pytest.fixture(autouse=True)
     def lake(self, tmp_path, monkeypatch):
-        monkeypatch.setenv('DBX_ROOT', str(tmp_path))
+        monkeypatch.setenv('DBX_DATALAKE', str(tmp_path))
 
     def _run(self, tmp_path):
         return dbx.exec(
@@ -820,7 +820,7 @@ class TestTwoJournals:
 
     @pytest.fixture(autouse=True)
     def lake(self, tmp_path, monkeypatch):
-        monkeypatch.setenv('DBX_ROOT', str(tmp_path))
+        monkeypatch.setenv('DBX_DATALAKE', str(tmp_path))
 
     def test_each_says_which_it_reads(self, tmp_path):
         from dbx.databits import ExecJournalFrame
@@ -874,13 +874,13 @@ class FailingStack(Datastack):
         return 2
 
     def __block__(self, idx):
-        return Timed(datalake=self.url, spec={'delay': 6.0 if idx == 0 else 3.0, 'fail': idx == 1})
+        return Timed(datalake=self.datalake, spec={'delay': 6.0 if idx == 0 else 3.0, 'fail': idx == 1})
 
 
 def _built_under_the_scope(i, delay=0.0):
     """Top level, so a spawned worker can unpickle it by name."""
     time.sleep(delay)
-    b = Built(datalake=os.environ['DBX_ROOT'], spec={'x': 100 + i})
+    b = Built(datalake=os.environ['DBX_DATALAKE'], spec={'x': 100 + i})
     b.build()
     return b.hash
 
@@ -895,7 +895,7 @@ class TestAcrossProcesses:
 
     @pytest.fixture(autouse=True)
     def lake(self, tmp_path, monkeypatch):
-        monkeypatch.setenv('DBX_ROOT', str(tmp_path))
+        monkeypatch.setenv('DBX_DATALAKE', str(tmp_path))
 
     def test_a_stack_built_in_worker_processes(self, tmp_path):
         s = dbx.exec("s = Stack(datalake=root, parallelization='multiprocessing', n_workers=2); s.build(); s",
@@ -995,7 +995,7 @@ class TestSessionIndex:
 
     @pytest.fixture(autouse=True)
     def lake(self, tmp_path, monkeypatch):
-        monkeypatch.setenv('DBX_ROOT', str(tmp_path))
+        monkeypatch.setenv('DBX_DATALAKE', str(tmp_path))
 
     def test_a_command_indexes_its_entries(self, tmp_path):
         b = dbx.exec("b = Built(datalake=root, spec={'x': 1}); b.build(); b", Built=Built, root=str(tmp_path))
@@ -1013,14 +1013,14 @@ class TestSessionIndex:
         assert ids(BuildJournal.session_entries(dj.session, datalake=str(tmp_path))) == written_order(scoped, session=dj.session)
 
     def test_a_process_the_command_started_is_part_of_it(self, tmp_path):
-        dbx.exec("run(\"Child(datalake=os.environ['DBX_ROOT']).build()\")", run=_run_child)
+        dbx.exec("run(\"Child(datalake=os.environ['DBX_DATALAKE']).build()\")", run=_run_child)
         row = dbx.execjournal(iloc=0)
         frame = row.buildjournal()
         assert list(frame['anchor']) == ['__main__.Child'] * 2
         assert list(frame['session']) == [row['session']] * 2
 
     def test_a_command_run_in_that_process_joins_the_session(self, tmp_path):
-        dbx.exec("run(\"dbx.exec('Child(datalake=os.environ[\\\\'DBX_ROOT\\\\']).build()', Child=Child)\")",
+        dbx.exec("run(\"dbx.exec('Child(datalake=os.environ[\\\\'DBX_DATALAKE\\\\']).build()', Child=Child)\")",
                  run=_run_child)
         rows = dbx.execjournal()
         assert rows['session'].nunique() == 1 and len(rows) == 2
@@ -1110,7 +1110,7 @@ class TestAnEntryRecordsTheBlockInItself:
 
 
 class TestAPrefixIsEnough:
-    """``loc=`` -- and a frame's ``get`` -- take any prefix of exactly one id, where the frame is indexed by id."""
+    """`loc=` -- and a frame's `get` -- take any prefix of exactly one id, where the frame is indexed by id."""
 
     @pytest.fixture
     def frame(self, tmp_path):
@@ -1150,7 +1150,7 @@ class TestAPrefixIsEnough:
 
 
 class TestBuildJournalBuildersAreNamedForIt:
-    """What builds a BuildJournal or BuildJournalFrame is called ``buildjournal``, ``BuildJournal``, ``*_buildjournal``."""
+    """What builds a BuildJournal or BuildJournalFrame is called `buildjournal`, `BuildJournal`, `*_buildjournal`."""
 
     def test_the_new_names(self):
         assert callable(Datablock.buildjournal) and callable(Datablock.BuildJournal)

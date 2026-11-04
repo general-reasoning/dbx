@@ -1,6 +1,6 @@
 """A key renamed where it is -- within a field's dict, or a nested block's -- is a dotted move to a dotted name.
 
-``redirect_vars={'collator.columns.stratifyby': 'collator.columns.groupby'}``
+`redirect_vars={'collator.columns.stratifyby': 'collator.columns.groupby'}`
 renders the current entry back under the name it had, in the same place.
 Every entry is taken out before any is put back, so names that swap places --
 stratifyby to groupby as partitionby goes to stratifyby -- each read what was

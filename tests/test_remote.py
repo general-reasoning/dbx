@@ -38,7 +38,7 @@ class TestRemote(unittest.TestCase):
     def setUpClass(cls):
         # Initialize Ray once for all tests in this class
         os.environ.setdefault('DBX_DIRTY_REPO_OK', '1')
-        os.environ.setdefault('DBX_ROOT', '/tmp/dbx_test')
+        os.environ.setdefault('DBX_DATALAKE', '/tmp/dbx_test')
         ray.init(ignore_reinit_error=True)
 
     @classmethod

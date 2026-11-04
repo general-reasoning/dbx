@@ -1,9 +1,9 @@
 """
 dbx's classes live in the modules they are defined in, under the names they have now.
 
-The modules were once ``dbx.datapoints``, ``dbx.datafeatures``, ``dbx.datamodels``
-and ``dbx.dataprobes``, and the classes had other names (``DatapointTablet``,
-``DatafeatureTable``, ...). Those names are gone: a class's `fqcn` -- the anchor
+The modules were once `dbx.datapoints`, `dbx.datafeatures`, `dbx.datamodels`
+and `dbx.dataprobes`, and the classes had other names (`DatapointTablet`,
+`DatafeatureTable`, ...). Those names are gone: a class's `fqcn` -- the anchor
 its artifacts are stored under -- is its real module and name. What was stored
 under an old module name is reached by a specialization naming that anchor -- except
 partitions, rebuilt since their roles were renamed (see DATAPARTITION.md, "Identities").

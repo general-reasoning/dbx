@@ -1,7 +1,7 @@
 """
 Every block respelled with the topic markers reconstructs the identity it had.
 
-`DATAFILE('x')` names the same file as ``'x'``, `DATADICT` the same file with its
+`DATAFILE('x')` names the same file as `'x'`, `DATADICT` the same file with its
 keys declared -- but they render differently, so each respelling is a new hash,
 and each respelled class declares a Specialization back to its old spelling.
 Here each class is put back into its old spelling IN PLACE -- a block's anchor
@@ -62,7 +62,7 @@ def test_still(tmp_path, monkeypatch):
 def test_a_partition(tmp_path, monkeypatch):
     """The partition from before method/seed/groupby/stratifyby/balance -- and before its topic was
     respelled -- is no longer reached, by a partition built with method='largest_first', the one it
-    computed: its topic was ``tabs``, and is ``tablets`` since 2026-10-10, and a specialization takes a
+    computed: its topic was `tabs`, and is `tablets` since 2026-10-10, and a specialization takes a
     topic only under the name it had. What reached it was retired then; it is rebuilt."""
     from dataclasses import dataclass
     from dbx.datablocks import Datablock
@@ -150,7 +150,7 @@ def test_a_table_reaches_its_tablets_past_not_its_own():
     """A table's own topics are markers over its tablets, written again in a moment; its tablets are
     what is worth reaching, and each is, by its TABLET's specializations. A table declares its VAR
     renames -- what a block holding it, a partition say, renders it as -- and a Featuretable
-    those again as built while a table declared tabs and tab_paths, reading only ``done``."""
+    those again as built while a table declared tabs and tab_paths, reading only `done`."""
     from dbx.datablocks import ABSENT, SAME
     from dbx.datatables import Datatable
     from dbx.featuretables import BipolarFeaturetable, Featuretable
@@ -234,7 +234,7 @@ def test_a_featuretable_reconstructs_its_tab_paths_era_identity(tmp_path, monkey
 
 def test_a_table_built_with_more_topics_is_adopted_reading_only_done(tmp_path, monkeypatch):
     """The topics a table no longer declares are named for its identity and never read: the
-    adoption reads ``done``, the tablets are its TABLET's, and nothing is owed."""
+    adoption reads `done`, the tablets are its TABLET's, and nothing is owed."""
     from dbx.datablocks import Datablock
     from dbx.featuretables import Featuretable
     url = str(tmp_path)

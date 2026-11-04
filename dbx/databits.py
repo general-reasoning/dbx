@@ -667,42 +667,24 @@ def eval(name):
     return term
 
 
-# The variables a datalake is read from, in precedence order. DBX_DATALAKE is
-# its name; DBX_ROOT and DBX_URL are its names from before the rename --
-# deprecated, and still read, in the order they always were.
-DATALAKE_ENV_VARS = ('DBX_DATALAKE', 'DBX_ROOT', 'DBX_URL')
-
-
-def default_datalake_var() -> 'str | None':
-    """The variable `default_datalake()` reads: the first of `DATALAKE_ENV_VARS` set, or None."""
-    return next((v for v in DATALAKE_ENV_VARS if os.environ.get(v)), None)
-
-
 def default_datalake() -> 'str | None':
-    """The datalake the environment names: `DBX_DATALAKE`, else `DBX_ROOT`, else `DBX_URL`.
-
-    `DBX_ROOT` and `DBX_URL` are its names from before the rename,
-    deprecated, and still read, in the order they always were.
-    """
-    var = default_datalake_var()
-    return os.environ[var] if var else None
+    """The datalake the environment names: `DBX_DATALAKE`, or None when it is unset."""
+    return os.environ.get('DBX_DATALAKE') or None
 
 
-def anchors(datalake: str | None = None, *, storage_options: dict | None = None,
-            url: str | None = None) -> list[str]:
-    """Return every anchor used in the datalake at *url*, sorted.
+def anchors(datalake: str | None = None, *, storage_options: dict | None = None) -> list[str]:
+    """Return every anchor used in *datalake*, sorted.
 
     A block lives at `{root}/{anchor}/{key}/...`, so an anchor is a top-level
     directory of the root. Dot-directories (`.journal` and the like) are the
     lake's own bookkeeping, not anchors, and are left out, as are plain files.
 
-    *datalake* (`url`, its old name) defaults to `DBX_DATALAKE`, then
-    `DBX_ROOT`, then `DBX_URL` -- as a block reads them -- and may be a
-    specline.
+    *datalake* defaults to `DBX_DATALAKE` -- as a block reads it -- and may
+    be a specline.
     """
-    url = datalake or url or default_datalake()
+    url = datalake or default_datalake()
     if url is None:
-        raise ValueError("No datalake for anchors(): pass datalake= or set DBX_DATALAKE (or DBX_ROOT, or DBX_URL)")
+        raise ValueError("No datalake for anchors(): pass datalake= or set DBX_DATALAKE")
     url = eval(url)
     if storage_options is None:
         storage_options = default_storage_options()

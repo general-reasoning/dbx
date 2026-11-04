@@ -20,15 +20,8 @@ def test_anchors_lists_top_level_dirs_only(tmp_path):
     assert dbx.anchors(str(_lake(tmp_path))) == ['custom_anchor', 'pkg.mod.Block']
 
 
-def test_anchors_defaults_to_dbx_root_ahead_of_dbx_url(tmp_path, monkeypatch):
-    monkeypatch.setenv('DBX_ROOT', str(_lake(tmp_path)))
-    monkeypatch.setenv('DBX_URL', str(tmp_path / 'elsewhere'))
-    assert dbx.anchors() == ['custom_anchor', 'pkg.mod.Block']
-
-
-def test_anchors_falls_back_to_dbx_url(tmp_path, monkeypatch):
-    monkeypatch.delenv('DBX_ROOT', raising=False)
-    monkeypatch.setenv('DBX_URL', str(_lake(tmp_path)))
+def test_anchors_defaults_to_dbx_datalake(tmp_path, monkeypatch):
+    monkeypatch.setenv('DBX_DATALAKE', str(_lake(tmp_path)))
     assert dbx.anchors() == ['custom_anchor', 'pkg.mod.Block']
 
 
@@ -42,9 +35,8 @@ def test_anchors_of_missing_root_is_empty(tmp_path):
 
 
 def test_anchors_without_any_url_raises(monkeypatch):
-    monkeypatch.delenv('DBX_ROOT', raising=False)
-    monkeypatch.delenv('DBX_URL', raising=False)
-    with pytest.raises(ValueError, match='DBX_ROOT'):
+    monkeypatch.delenv('DBX_DATALAKE', raising=False)
+    with pytest.raises(ValueError, match='DBX_DATALAKE'):
         dbx.anchors()
 
 

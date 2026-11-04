@@ -1,28 +1,28 @@
-"""Round-trip and rendering tests for ``Datablock.quote()`` / ``.cite()``.
+"""Round-trip and rendering tests for `Datablock.quote()` / `.cite()`.
 
 The two methods have opposite contracts, and neither was covered:
 
-* ``quote()`` is the **evaluable** form. ``dbx.eval(block.quote())`` must give
+* `quote()` is the **evaluable** form. `dbx.eval(block.quote())` must give
   back an equivalent block -- same identity *and* same operational kwargs,
-  because ``local`` decides where artifacts are staged.
-* ``cite()`` is laid out to be read: it recurses over the object graph, which
+  because `local` decides where artifacts are staged.
+* `cite()` is laid out to be read: it recurses over the object graph, which
   keeps it readable at depth. It is faithful to identity all the same --
-  ``dbx.eval(block.cite())`` has the block's hash -- and that is tested, as
+  `dbx.eval(block.cite())` has the block's hash -- and that is tested, as
   what keeps the presentation correct.
-* A specline naming no datablock -- given, or a ``VAR`` default -- stays the
+* A specline naming no datablock -- given, or a `VAR` default -- stays the
   line in the hash, the quote and the cite: a default hashes as the same line
   given, and neither moves with the environment.
 
 Every test here corresponds to a failure that actually happened:
 
-* ``quote()`` losing its ``$`` prefix -- ``is_specline()`` went False and
-  ``dbx.eval`` silently returned the *string* instead of a block. No exception.
-* ``quote(pretty=True)`` running ``pprint.pformat`` over the already-joined
+* `quote()` losing its `$` prefix -- `is_specline()` went False and
+  `dbx.eval` silently returned the *string* instead of a block. No exception.
+* `quote(pretty=True)` running `pprint.pformat` over the already-joined
   kwarg string, so its repr became a single positional argument
   ("__init__() takes 1 positional argument but 2 were given").
-* nested children inheriting ``pretty=True``, whose newlines the parent's
-  ``repr`` escaped to ``\\n``, which ``deslash`` then stripped to a bare ``n``.
-* ``tailkwargs`` being dropped from ``quote()``, silently changing ``local``.
+* nested children inheriting `pretty=True`, whose newlines the parent's
+  `repr` escaped to `\\n`, which `deslash` then stripped to a bare `n`.
+* `tailkwargs` being dropped from `quote()`, silently changing `local`.
 """
 import pytest
 from dataclasses import dataclass
@@ -90,7 +90,7 @@ class Located(Datablock):
 
 @pytest.fixture
 def nested(tmp_path):
-    """``Top -> Mid -> Leaf``, each tagged and with an operational kwarg."""
+    """`Top -> Mid -> Leaf`, each tagged and with an operational kwarg."""
     leaf = Leaf(datalake=str(tmp_path), spec=dict(label='leaf', size=3)).set(tag='leaf')
     mid = Mid(datalake=str(tmp_path), spec=dict(leaf=leaf, seed=42),
               local=str(tmp_path / 'local'), n_workers=7).set(tag='mid')
@@ -106,7 +106,7 @@ class TestQuoteRoundTrip:
 
     @pytest.mark.parametrize('pretty', [False, True])
     def test_quote_is_a_specline(self, nested, pretty):
-        """Losing the ``$`` makes dbx.eval return a str, with no error."""
+        """Losing the `$` makes dbx.eval return a str, with no error."""
         q = nested.quote(pretty=pretty)
         assert q.startswith('$'), q[:80]
         assert Datablock.is_specline(q)
@@ -355,7 +355,7 @@ class TestCiteInJournal:
 
 
 class TestPrettyQuote:
-    """A recorded quote reads as a cite: nested blocks indented, nothing escaped; ``pretty=False`` the evaluable text."""
+    """A recorded quote reads as a cite: nested blocks indented, nothing escaped; `pretty=False` the evaluable text."""
 
     def test_a_recorded_quote_lays_out_as_a_cite(self, nested):
         nested.write_journal_entry(event='note')

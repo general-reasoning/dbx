@@ -1,12 +1,12 @@
 """
 Tests for dbx being available in the dbx.eval() evaluation context.
 
-The ``eval()`` function in ``databits.py`` builds an evaluation context
-from the function-path portion of the specline (via ``get_named_const_and_cxt``).
-When the specline's top-level function is not in the ``dbx`` package (e.g.
-``$os.path.join(dbx.getenv('ROOT'), 'sub')``), the context would only contain
-``os`` and ``os.path`` — not ``dbx``.  The fix ensures ``dbx`` is always
-injected into the eval context so that ``dbx.*`` references in arguments work.
+The `eval()` function in `databits.py` builds an evaluation context
+from the function-path portion of the specline (via `get_named_const_and_cxt`).
+When the specline's top-level function is not in the `dbx` package (e.g.
+`$os.path.join(dbx.getenv('ROOT'), 'sub')`), the context would only contain
+`os` and `os.path` — not `dbx`.  The fix ensures `dbx` is always
+injected into the eval context so that `dbx.*` references in arguments work.
 
 Covers:
 1. dbx.getenv() works when the specline function IS in dbx (baseline).
@@ -23,7 +23,7 @@ from dbx.databits import eval as dbx_eval, env, getenv
 
 @pytest.fixture(autouse=True)
 def setup_env(monkeypatch):
-    monkeypatch.setenv('DBX_ROOT', '/tmp/dbx_test_eval_cxt')
+    monkeypatch.setenv('DBX_DATALAKE', '/tmp/dbx_test_eval_cxt')
     monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
 
 

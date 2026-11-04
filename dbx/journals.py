@@ -495,8 +495,7 @@ def write_exec_journal(s: str, datalake: str | None = None, storage_options: dic
                        comment: str | None = None, session: str | None = None,
                        buildjournal_entries=None, output_captures=None, dt: str | None = None,
                        end_dt: str | None = None, success: bool | None = None,
-                       exception: str | None = None, traceback: str | None = None,
-                       url: str | None = None) -> dict:
+                       exception: str | None = None, traceback: str | None = None) -> dict:
     """Record an exec expression string in the <datalake>/.journal/exec/ journal.
 
     `exec` holds *s* VERBATIM -- the string as it was typed, comment and all,
@@ -519,7 +518,7 @@ def write_exec_journal(s: str, datalake: str | None = None, storage_options: dic
     and `traceback` where, as Python prints it. Both are None for a command
     that succeeded. Returns the row as written.
     """
-    dbx_url = datalake or url or default_datalake() or './dbx'
+    dbx_url = datalake or default_datalake() or './dbx'
     exec_dir = os.path.join(dbx_url, '.journal', 'exec')
     # DBX_STORAGE_OPTIONS by default, as the build journal's: an ssh datalake may be reachable only through them.
     if storage_options is None:
@@ -764,7 +763,7 @@ class ExecJournalEntry(pd.Series):
     # 2. Declared API ------------------------------------------------------
 
     def dataentries(self, anchor=None, *, datalake=None, storage_options=None, log=None,
-                    n_workers: int | None = None, unnormalized: bool = False, url=None,
+                    n_workers: int | None = None, unnormalized: bool = False,
                     **filter_kwargs) -> list:
         """The `BuildJournalEntry` of every build journal entry this command wrote, in the order written.
 
@@ -772,12 +771,12 @@ class ExecJournalEntry(pd.Series):
         """
         frame = self.buildjournal(anchor, datalake=datalake, storage_options=storage_options, log=log,
                                  n_workers=n_workers, index=None, unnormalized=unnormalized,
-                                 url=url, **filter_kwargs)
+                                 **filter_kwargs)
         return [frame.get(i, dropna=True) for i in range(len(frame))]
 
     def buildjournal(self, anchor=None, loc=None, *, iloc=None, datalake=None, storage_options=None,
                     log=None, n_workers: int | None = None, index: 'str | None' = ...,
-                    unnormalized: bool = False, url=None, **filter_kwargs):
+                    unnormalized: bool = False, **filter_kwargs):
         """The build journal entries this command wrote, as one `BuildJournalFrame`.
 
         Takes what `buildjournal` takes, and means the same by it, over
@@ -786,11 +785,11 @@ class ExecJournalEntry(pd.Series):
         anchor string or a block -- keeps that anchor's entries, and None all
         of them. *filter_kwargs* are build journal filters; *loc* / *iloc*
         answer with the one `BuildJournalEntry`; *index* defaults to `'id'`,
-        as there. *datalake* (`url`, its old name) is where the command's
+        as there. *datalake* is where the command's
         session index is read -- the datalake its exec journal was read from,
         unless given.
         """
-        lake = one_datalake(datalake, url, 'buildjournal') or self.datalake
+        lake = datalake or self.datalake
         return _written_buildjournal_(
             ExecJournalEntry._written_refs_(self, lake, self.storage_options),
             anchor, loc, iloc, storage_options=self.storage_options if storage_options is None else storage_options,
@@ -1031,7 +1030,7 @@ class ExecJournalFrame(pd.DataFrame):
         return ExecJournalEntry(row, storage_options=self.storage_options, datalake=self.datalake)
 
     def dataentries(self, anchor=None, *, datalake=None, storage_options=None, log=None,
-                    n_workers: int | None = None, unnormalized: bool = False, url=None,
+                    n_workers: int | None = None, unnormalized: bool = False,
                     **filter_kwargs) -> list:
         """The build journal entries every command here wrote: row by row, each in the order written.
 
@@ -1039,14 +1038,14 @@ class ExecJournalFrame(pd.DataFrame):
         """
         frame = self.buildjournal(anchor, datalake=datalake, storage_options=storage_options, log=log,
                                  n_workers=n_workers, index=None, unnormalized=unnormalized,
-                                 url=url, **filter_kwargs)
+                                 **filter_kwargs)
         return [frame.get(i, dropna=True) for i in range(len(frame))]
 
     def buildjournal(self, anchor=None, loc=None, *, iloc=None, datalake=None, storage_options=None,
                     log=None, n_workers: int | None = None, index: 'str | None' = ...,
-                    unnormalized: bool = False, url=None, **filter_kwargs):
+                    unnormalized: bool = False, **filter_kwargs):
         """What `dataentries` reads, as one `BuildJournalFrame`. Takes what `ExecJournalEntry.buildjournal` takes."""
-        lake = one_datalake(datalake, url, 'buildjournal') or self.datalake
+        lake = datalake or self.datalake
         return _written_buildjournal_(
             self._written_refs_(lake),
             anchor, loc, iloc, storage_options=self.storage_options if storage_options is None else storage_options,
@@ -1231,7 +1230,6 @@ def read_exec_journal(
     log: Datalog | None = None,
     n_workers: int = 8,
     index: str | None = None,
-    url: str | None = None,
     **filter_kwargs,
 ):
     """Read recorded dbx.exec() entries from the <datalake>/.journal/exec/ journal.
@@ -1243,7 +1241,7 @@ def read_exec_journal(
     if n_workers is None:
         n_workers = 8
 
-    dbx_url = datalake or url or default_datalake() or './dbx'
+    dbx_url = datalake or default_datalake() or './dbx'
     exec_dir = os.path.join(dbx_url, '.journal', 'exec')
     # DBX_STORAGE_OPTIONS by default, as the build journal's: an ssh datalake may be reachable only through them.
     if storage_options is None:
@@ -1378,16 +1376,16 @@ class _ReadParquetCallable:
 
 
 def execjournal(loc=None, *, iloc=None, datalake=None, storage_options=None, log=None,
-                n_workers=8, index: 'str | None' = ..., url=None, **filter_kwargs):
+                n_workers=8, index: 'str | None' = ..., **filter_kwargs):
     """Read the exec journal: every `dbx.exec` command, newest first, then filtered.
 
     An `ExecJournalFrame`, or the `ExecJournalEntry` at *loc* / *iloc*. *index*
     defaults to `'id'`, so `loc=` is a command's id; `index=None` numbers
     the rows. Filters are patterns, as on a build journal -- see
-    `buildjournal`. *datalake* (`url`, its old name) defaults to
-    `DBX_DATALAKE`, then `DBX_ROOT`, then `DBX_URL`.
+    `buildjournal`. *datalake* defaults to
+    `DBX_DATALAKE`.
     """
-    return read_exec_journal(datalake=datalake or url, loc=loc, iloc=iloc, storage_options=storage_options,
+    return read_exec_journal(datalake=datalake, loc=loc, iloc=iloc, storage_options=storage_options,
                              log=log, n_workers=n_workers, index=index, **filter_kwargs)
 
 
@@ -1452,22 +1450,21 @@ def normalize_journal_frame(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def buildjournal(cls_anchor_or_df, loc=None, *, iloc=None, datalake=None, storage_options=None, log=None, n_workers=8, index: 'str | None' = ..., unnormalized: bool = False, url=None, **filter_kwargs):
+def buildjournal(cls_anchor_or_df, loc=None, *, iloc=None, datalake=None, storage_options=None, log=None, n_workers=8, index: 'str | None' = ..., unnormalized: bool = False, **filter_kwargs):
     """Read a build journal, or wrap a frame of one.
 
     Parameters
     ----------
     cls_anchor_or_df : type | str | Datablock | pd.DataFrame
-        A Datablock class, an anchor string, a block (whose url, storage
+        A Datablock class, an anchor string, a block (whose datalake, storage
         options and log are then the defaults), or a raw DataFrame to wrap.
     loc : int, optional
         If given, return a single `BuildJournalEntry` at this label index.
     iloc : int, optional
         If given, return a single `BuildJournalEntry` at this positional index.
         Mutually exclusive with *loc*.
-    url : str, optional
-        The datalake (`url`, its old name, is accepted). Defaults to
-        `DBX_DATALAKE`, then `DBX_ROOT`, then `DBX_URL`.
+    datalake : str, optional
+        The datalake. Defaults to `DBX_DATALAKE`.
     storage_options : dict, optional
         Storage options for fsspec.  Defaults to `default_storage_options()`.
     log : Datalog, optional
@@ -1496,7 +1493,6 @@ def buildjournal(cls_anchor_or_df, loc=None, *, iloc=None, datalake=None, storag
     if cls_anchor_or_df is None:
         raise TypeError("buildjournal() needs an anchor, a Datablock class or block, or a frame; "
                         "the exec journal is execjournal()")
-    url = one_datalake(datalake, url, 'buildjournal')
     if loc is not None and iloc is not None:
         raise ValueError("Specify at most one of 'loc' and 'iloc', not both.")
     if isinstance(cls_anchor_or_df, pd.DataFrame):
@@ -1510,13 +1506,13 @@ def buildjournal(cls_anchor_or_df, loc=None, *, iloc=None, datalake=None, storag
     else:
         anchor = _anchor_of_(cls_anchor_or_df)
         if not isinstance(cls_anchor_or_df, (str, type)) and hasattr(cls_anchor_or_df, 'anchor'):
-            if url is None and hasattr(cls_anchor_or_df, 'datalake'):
-                url = cls_anchor_or_df.datalake
+            if datalake is None and hasattr(cls_anchor_or_df, 'datalake'):
+                datalake = cls_anchor_or_df.datalake
             if storage_options is None and hasattr(cls_anchor_or_df, 'storage_options'):
                 storage_options = cls_anchor_or_df.storage_options
             if log is None and hasattr(cls_anchor_or_df, 'log'):
                 log = cls_anchor_or_df.log
-        return datablocks.Datablock.BuildJournal(anchor, loc=loc, iloc=iloc, datalake=url, storage_options=storage_options, log=log, n_workers=n_workers, index=index, unnormalized=unnormalized, **filter_kwargs)
+        return datablocks.Datablock.BuildJournal(anchor, loc=loc, iloc=iloc, datalake=datalake, storage_options=storage_options, log=log, n_workers=n_workers, index=index, unnormalized=unnormalized, **filter_kwargs)
 
 
 def _on_fs_of_(path, url):
@@ -1648,7 +1644,7 @@ def journal(cls_anchor_or_df=None, loc=None, **kwargs):
 
 
 def constructed(anchor=None, *, event=..., datalake=None, storage_options=None,
-                n_workers=8, url=None, **filters) -> 'BuildJournalFrame':
+                n_workers=8, **filters) -> 'BuildJournalFrame':
     """The build journal entries of what was CONSTRUCTED: built, redirected, copied in, or noted.
 
     *anchor* -- a Datablock class, an anchor string or a block -- reads that
@@ -1664,7 +1660,7 @@ def constructed(anchor=None, *, event=..., datalake=None, storage_options=None,
         event = CONSTRUCTED_EVENTS
     if event is not None:
         filters['event'] = event
-    datalake = one_datalake(datalake, url, 'constructed')
+    datalake = datalake
     if anchor is not None:
         return buildjournal(anchor, datalake=datalake, storage_options=storage_options,
                            n_workers=n_workers, **filters)
@@ -1906,7 +1902,7 @@ class Pretty:
     So `paths()`, `signature()`, `type()` and their `*str()` renderings
     are calls and `hash`, `anchor`, `key` are not, and code written
     against a live block reads one of these unchanged. Accessors with no `Datablock` counterpart
-    (`gitrepo`, `url`, `id`, `keyby`) are here too, because they
+    (`gitrepo`, `id`, `keyby`) are here too, because they
     describe the block rather than the journal.
     """
 
@@ -2190,11 +2186,6 @@ class Pretty:
     def datalake(self):
         """The datalake the block was stored in -- recorded as `url` before the rename."""
         return BuildJournalEntry.column(self._entry, 'datalake')
-
-    @property
-    def url(self):
-        """The name `datalake` had first."""
-        return self.datalake
 
     @property
     def root(self):
@@ -2652,7 +2643,7 @@ class BuildJournalEntry(pd.Series):
         return self.rinst(gitrepo=gitrepo, revision=revision, handle=handle, **remote_kwargs)
 
     def originst(self, gitrepo=None, revision='journal_entry', *, handle=None, **remote_kwargs):
-        """Alias for :meth:`trueinst`, naming the same thing from the other side.
+        """Alias for `trueinst`, naming the same thing from the other side.
 
         `trueinst` says which of the two instantiations is the true one; `originst`
         says what it reconstructs -- the ORIGINAL block, as the entry recorded it,
@@ -2813,14 +2804,6 @@ class BuildJournalFrame(pd.DataFrame):
         """A frame pandas made out of one of these -- wrapped, not read again: it already was."""
         return _derived_frame_(cls, {'storage_options': {}, 'logger': Datalog(), 'read_anchor': None,
                                      'read_datalake': None, 'by_hash': False}, args, kwargs)
-
-
-def one_datalake(datalake, url, what):
-    """*datalake*, or *url* -- its name before the rename -- and never two that disagree."""
-    if url is not None and datalake is not None and url != datalake:
-        raise ValueError(f"{what}: datalake={datalake!r} and url={url!r} disagree; "
-                         f"url is datalake's old name")
-    return datalake if datalake is not None else url
 
 
 # The BuildJournals opened by `with` in the MAIN thread, innermost last. Every
@@ -3046,16 +3029,16 @@ class BuildJournal:
         *anchor* has no directory under *datalake*.
         """
         log = log or Datalog()
-        fs, anchordirpath, _ = cls._anchordir_(anchor, one_datalake(datalake, None, 'BuildJournal.list'),
+        fs, anchordirpath, _ = cls._anchordir_(anchor, datalake,
                                                storage_options, log)
         return [fs_full_path(fs, f) for f in cls._list_(fs, anchordirpath, anchor, n_workers=n_workers or 8,
                                                         log=log, progress=progress)]
 
     @classmethod
     def read(cls, anchor, loc: int = None, *, iloc: int = None, datalake=None, storage_options=None,
-             log=None, n_workers=None, index=None, unnormalized: bool = False, url=None, desc=None,
+             log=None, n_workers=None, index=None, unnormalized: bool = False, desc=None,
              progress=None, **filter_kwargs):
-        """Read *anchor*'s journal under *url*: every entry, newest first, then filtered.
+        """Read *anchor*'s journal under *datalake*: every entry, newest first, then filtered.
 
         The files `list` lists. *progress*: whether to show the read -- an INFO
         line around listing the files and a bar over reading them. None, the
@@ -3068,14 +3051,14 @@ class BuildJournal:
         the caller.
 
         Returns a `BuildJournalFrame`, or the one `BuildJournalEntry` at *loc*
-        (a label) or *iloc* (a position). *datalake* (`url`, its old name)
-        defaults to `DBX_DATALAKE`, `DBX_ROOT`, `DBX_URL`.
+        (a label) or *iloc* (a position). *datalake*
+        defaults to `DBX_DATALAKE`.
         """
         log = log or Datalog()
         n_workers = n_workers or 8
         if loc is not None and iloc is not None:
             raise ValueError("Specify at most one of 'loc' and 'iloc', not both.")
-        fs, anchordirpath, storage_options = cls._anchordir_(anchor, one_datalake(datalake, url, 'BuildJournal.read'),
+        fs, anchordirpath, storage_options = cls._anchordir_(anchor, datalake,
                                                              storage_options, log)
         report = progress if callable(progress) else None
 
@@ -4099,7 +4082,7 @@ class PipeJournal(BuildJournal):
         or `:` and the rest, as dbx names events -- `ckpt` matches every
         `ckpt=<tag>` a `Still` writes as it checkpoints.
 
-        *datalake* defaults to `DBX_DATALAKE`, `DBX_ROOT`, `DBX_URL`.
+        *datalake* defaults to `DBX_DATALAKE`.
         Rows are numbered 0..N-1, newest first. *progress* is taken as
         `BuildJournal.read` takes it, for reading the journal.
         """
@@ -4324,7 +4307,7 @@ class PipeJournal(BuildJournal):
 
 
 def pipejournal(loc=None, *, iloc=None, construct_only: bool = False, extra_construction_events=(), datalake=None,
-                storage_options=None, log=None, n_workers=8, url=None, progress=None, **filter_kwargs):
+                storage_options=None, log=None, n_workers=8, progress=None, **filter_kwargs):
     """Read the pipeline journal: every `Pipeline` created, one row each, newest first, then filtered.
 
     `PipeJournal.collect`: a `BuildJournalFrame` with an `entrypaths` column,
@@ -4333,13 +4316,13 @@ def pipejournal(loc=None, *, iloc=None, construct_only: bool = False, extra_cons
     *extra_construction_events* (`'ckpt'`, say) -- or the `BuildJournalEntry` at *loc* /
     *iloc*, both positions here, as the rows are numbered. Filters are
     patterns, as on a build journal -- see `buildjournal`. *datalake*
-    (`url`, its old name) defaults to `DBX_DATALAKE`, then `DBX_ROOT`,
-    then `DBX_URL`. *progress* is taken as `BuildJournal.read` takes it.
+    defaults to `DBX_DATALAKE`. *progress* is taken
+    as `BuildJournal.read` takes it.
     """
     if loc is not None and iloc is not None:
         raise ValueError("Specify at most one of 'loc' and 'iloc', not both.")
     frame = PipeJournal.collect(construct_only=construct_only, extra_construction_events=extra_construction_events,
-                                datalake=one_datalake(datalake, url, 'pipejournal'),
+                                datalake=datalake,
                                 storage_options=storage_options, log=log, n_workers=n_workers, progress=progress,
                                 **filter_kwargs)
     if loc is not None:

@@ -107,7 +107,6 @@ from .journals import (
     Pretty,
     BuildJournalEntry,
     BuildJournalFrame,
-    one_datalake,
     BuildJournal,
     Datalog,
     DEFAULT_BUILDJOURNAL,
@@ -320,7 +319,7 @@ class TOPICMARKER(metaclass=TopicMarkerMeta):
 
 
 def _render_subdirs_(subdirs) -> str:
-    """``((name, children), ...)`` back as the positionals that spell it.
+    """`((name, children), ...)` back as the positionals that spell it.
 
     A leaf is its name; a level with children is a dict. The rendering reaches the type
     string, so it has to be injective -- which it is, because a name is a string and a
@@ -335,10 +334,10 @@ def _render_subdirs_(subdirs) -> str:
 
 
 def _check_subdirs_(kind, subdirs):
-    """A declared subdirectory tree, canonicalised to ``((name, children), ...)``.
+    """A declared subdirectory tree, canonicalised to `((name, children), ...)`.
 
     Accepts a sequence of names, or a dict mapping a name to its own children --
-    ``('meta', 'data')``, ``{'videos': ('chunk-000',)}`` -- and nests to any depth. The
+    `('meta', 'data')`, `{'videos': ('chunk-000',)}` -- and nests to any depth. The
     canonical form is what renders into the type string, so two spellings of one tree
     reach one hash.
     """
@@ -507,11 +506,11 @@ class DATADIR(TOPICMARKER, metaclass=_DirMarkerMeta_):
     # Unset on the bare marker, and set by the call that parameterises it.
     note = None
 
-    #: Subdirectories this topic must contain, ``((name, children), ...)``; None when
-    #: undeclared, and then only the directory itself has to exist.
+    # Subdirectories this topic must contain, `((name, children), ...)`; None when
+    # undeclared, and then only the directory itself has to exist.
     subdirs = None
 
-    #: Only a directory may declare what is inside it -- see `_NotedMarkerMeta_`.
+    # Only a directory may declare what is inside it -- see `_NotedMarkerMeta_`.
     SUBDIRS_OK = True
 
 
@@ -962,7 +961,7 @@ def _marker_named_(name):
     return marker
 
 
-def valid(*args, n_workers=None, summary=False, datalake=None, events=None, url=None, **kwargs):
+def valid(*args, n_workers=None, summary=False, datalake=None, events=None, **kwargs):
     """Check validity of the top matching build/instance for specified events for given anchors.
 
     Parameters
@@ -974,8 +973,8 @@ def valid(*args, n_workers=None, summary=False, datalake=None, events=None, url=
     summary : bool, default False
         If True, return the boolean AND of all validation results.
         If False, return a dict mapping anchor to its validation results.
-    url : str, optional
-        Storage URL for reading journals.
+    datalake : str, optional
+        The datalake whose journals are read.
     events : list[str] | str, optional
         Event name(s) to check validity for. Defaults to `['build:end']`.
     **kwargs
@@ -995,7 +994,7 @@ def valid(*args, n_workers=None, summary=False, datalake=None, events=None, url=
         parser.add_argument("anchors", nargs="*", help="Anchor keys or Datablock names")
         parser.add_argument("--n-workers", type=int, default=None, help="Number of workers for journal scanning")
         parser.add_argument("--summary", action="store_true", help="Return boolean AND of results")
-        parser.add_argument("--datalake", "--url", dest="url", type=str, default=None, help="The datalake")
+        parser.add_argument("--datalake", type=str, default=None, help="The datalake")
         parser.add_argument("--events", nargs="+", default=None, help="Event names to check validity for (default: build:end)")
 
         cli_argv = [a for a in sys.argv[1:] if not a.startswith(databits.PIN_FLAGS)]
@@ -1006,8 +1005,8 @@ def valid(*args, n_workers=None, summary=False, datalake=None, events=None, url=
             n_workers = parsed.n_workers
         if parsed.summary:
             summary = True
-        if parsed.url is not None and url is None:
-            url = parsed.url
+        if parsed.datalake is not None and datalake is None:
+            datalake = parsed.datalake
         if parsed.events is not None and events is None:
             events = parsed.events
 
@@ -1045,9 +1044,8 @@ def valid(*args, n_workers=None, summary=False, datalake=None, events=None, url=
         j_kwargs = dict(kwargs)
         if n_workers is not None:
             j_kwargs['n_workers'] = n_workers
-        url = one_datalake(datalake, url, 'valid')
-        if url is not None:
-            j_kwargs['datalake'] = url
+        if datalake is not None:
+            j_kwargs['datalake'] = datalake
 
         try:
             j = buildjournal(anchor_key, **j_kwargs)
@@ -2164,7 +2162,7 @@ class Datablock:
         self._uuid = uuid.uuid4().hex[:16] if uuid16 else str(uuid.uuid4())  # unique per live instance, not preserved across serialization
         self.log.detailed(f"__init__: ------------------------------------------------> {tag=}")
         state = {
-            'datalake': one_datalake(datalake, url, type(self).__name__),
+            'datalake': datalake if datalake is not None else url,
             'spec': spec,
             'anchor': anchor,
             'tag': tag,
@@ -2244,8 +2242,7 @@ class Datablock:
         if self.datalake is None:
             self.datalake = default_datalake()
         if self.datalake is None:
-            raise ValueError(f"No datalake for {self.__class__.__name__}: pass datalake= or set "
-                             f"DBX_DATALAKE (or DBX_ROOT, or DBX_URL)")
+            raise ValueError(f"No datalake for {self.__class__.__name__}: pass datalake= or set DBX_DATALAKE")
 
         self._local_ = _unquote(state.get('local'))
         if self._local_ == 'None':
@@ -3648,13 +3645,13 @@ class Datablock:
                                 specialization=specialization)
 
     def redirected(self) -> bool:
-        """True if this datablock is redirected, from the hidden ``.redirection`` topic alone -- no journal read.
+        """True if this datablock is redirected, from the hidden `.redirection` topic alone -- no journal read.
 
-        The DIRECTORY existing is not a redirection: ``paths.yaml`` is the only
+        The DIRECTORY existing is not a redirection: `paths.yaml` is the only
         file written there and the only one every reader resolves through, so a
-        ``.redirection/`` left empty -- by a cleared redirection, or by a write
+        `.redirection/` left empty -- by a cleared redirection, or by a write
         that failed after the directory was made -- used to report True here
-        while :meth:`get_redirection` returned None for the same datablock.
+        while `get_redirection` returned None for the same datablock.
         """
         if not getattr(self, 'redirect', False):
             return False
@@ -3686,9 +3683,9 @@ class Datablock:
         recorded as itself, so the journal says a specialization was installed
         and which one -- not merely that some paths were.
 
-        :meth:`UNSAFE_clear_redirection` undoes it, and is the only thing that
-        does: deleting ``.redirection/paths.yaml`` by hand leaves the journal's
-        record in place, and the journal is what :meth:`get_redirection` reads first.
+        `UNSAFE_clear_redirection` undoes it, and is the only thing that
+        does: deleting `.redirection/paths.yaml` by hand leaves the journal's
+        record in place, and the journal is what `get_redirection` reads first.
 
         *dry_run* resolves the whole thing and reports what it WOULD record --
         to stdout, and as the `Redirection` it returns -- without
@@ -4183,27 +4180,27 @@ class Datablock:
         )
 
     def ship_targets(self) -> dict:
-        """``{topic: target}`` this datablock ships to by DEFAULT; ``{}`` unless overridden.
+        """`{topic: target}` this datablock ships to by DEFAULT; `{}` unless overridden.
 
         The one place a subclass says where its generated files belong, so a caller
-        can write :meth:`UNSAFE_ship` with no arguments and still land them in the
+        can write `UNSAFE_ship` with no arguments and still land them in the
         right place. A subclass may take keywords of its own (which checkout, which
         store) as long as calling it bare works.
         """
         return {}
 
     def __relocate_shipment__(self, topic, target, workdir, **kwargs):
-        """The path :meth:`UNSAFE_ship` should send for *topic*; by default its own.
+        """The path `UNSAFE_ship` should send for *topic*; by default its own.
 
         The hook for shipping bytes that differ from the stored ones -- a config whose
-        absolute paths must become ``${oc.env:ROOT}/...`` before it is checked in
+        absolute paths must become `${oc.env:ROOT}/...` before it is checked in
         somewhere else, say. *kwargs* is whatever the caller passed as
-        ``UNSAFE_ship(relocate={...})``; *target* is where this is going, which the
-        caller usually does not spell out because :meth:`ship_targets` did.
+        `UNSAFE_ship(relocate={...})`; *target* is where this is going, which the
+        caller usually does not spell out because `ship_targets` did.
 
         *workdir* is a CALLABLE, not a directory: call it to get a temporary directory
-        to write into, and :meth:`UNSAFE_ship` removes that directory afterwards. A
-        hook that does not call it costs nothing, so returning ``self.path(topic)`` --
+        to write into, and `UNSAFE_ship` removes that directory afterwards. A
+        hook that does not call it costs nothing, so returning `self.path(topic)` --
         the default -- never stages a byte, however large the topic is.
 
             def __relocate_shipment__(self, topic, target, workdir, root_env=None):
@@ -4215,7 +4212,7 @@ class Datablock:
 
         A topic whose hook relocates it must NOT then be redirected onto what was
         shipped: the shipped copy is deliberately not this block's data. See
-        :meth:`UNSAFE_ship_redirect`.
+        `UNSAFE_ship_redirect`.
         """
         return self.path(*topic.split('/'))
 
@@ -4224,21 +4221,21 @@ class Datablock:
                     validate: bool = True, show_progress: bool = True):
         """Copy named topics OUT, to locations a reader needs no dbx to find.
 
-        The outbound mirror of :meth:`UNSAFE_copy_from`: that one takes one source
+        The outbound mirror of `UNSAFE_copy_from`: that one takes one source
         anchorkeypath and copies every topic in, this one takes a target PER TOPIC and
         copies only the topics named. A topic left out is not shipped, which is how a
         block ships its generated config and keeps its checkpoints to itself.
 
-        *targets* is ``{topic: target}``, a dict and not keywords: a keyword tail would
+        *targets* is `{topic: target}`, a dict and not keywords: a keyword tail would
         make every option name a topic nobody can ship. Omitted, it is
-        :meth:`ship_targets`. Either side of a pair may be local or an fsspec URL.
+        `ship_targets`. Either side of a pair may be local or an fsspec URL.
 
-        *relocate* is handed to :meth:`__relocate_shipment__`, the hook that may write
+        *relocate* is handed to `__relocate_shipment__`, the hook that may write
         the bytes to send somewhere other than where the topic lives -- rewriting a
-        path a config carries, say. ``{}`` or None is the default no-op hook: the topic
+        path a config carries, say. `{}` or None is the default no-op hook: the topic
         ships from where it is, and nothing is staged however large it is.
 
-        Unlike :meth:`UNSAFE_copy_from`, this asserts the block IS valid: shipping
+        Unlike `UNSAFE_copy_from`, this asserts the block IS valid: shipping
         copies data out, and data that is not there is not what you meant to send.
 
         The targets go in the journal. That is what makes a shipped file traceable: a
@@ -4287,11 +4284,11 @@ class Datablock:
         return shipped
 
     def ship_tag_targets(self, root, topics=None) -> dict:
-        """``{topic: target}`` that :meth:`UNSAFE_ship_tag` ships to: each topic under ``{root}/{tag}``.
+        """`{topic: target}` that `UNSAFE_ship_tag` ships to: each topic under `{root}/{tag}`.
 
-        A topic lands where it sits under this block's own :meth:`dirpath` -- a
-        directory topic at ``{root}/{tag}/{topic}``, a file topic's file inside it
-        (``{root}/{tag}/facts/facts.json``) -- so the shipped tree reads like the
+        A topic lands where it sits under this block's own `dirpath` -- a
+        directory topic at `{root}/{tag}/{topic}`, a file topic's file inside it
+        (`{root}/{tag}/facts/facts.json`) -- so the shipped tree reads like the
         block's own. *topics* defaults to every topic with a location.
         """
         if not self.tag:
@@ -4311,9 +4308,9 @@ class Datablock:
     def UNSAFE_ship_tag(self, root, topics=None, /, *, relocate: dict | None = None,
                         OVERRIDE: bool = False, overwrite: bool = False,
                         validate: bool = True, show_progress: bool = True):
-        """:meth:`UNSAFE_ship` every topic -- or the *topics* named -- to ``{root}/{tag}``.
+        """`UNSAFE_ship` every topic -- or the *topics* named -- to `{root}/{tag}`.
 
-        Sugar for ``UNSAFE_ship(self.ship_tag_targets(root, topics))``: a tagged block
+        Sugar for `UNSAFE_ship(self.ship_tag_targets(root, topics))`: a tagged block
         lands under its tag, its topics laid out as in its own directory. *root* may be
         local or an fsspec URL. A block without a tag is refused: it has no name to
         land under.
@@ -4326,19 +4323,19 @@ class Datablock:
                              validate: bool = True, show_progress: bool = True):
         """Ship, then read the shipped topics from where they were shipped.
 
-        After this the shipped location is the single source of truth: :meth:`read`
-        and :meth:`path` answer through it, so the block and the team are looking at
+        After this the shipped location is the single source of truth: `read`
+        and `path` answer through it, so the block and the team are looking at
         one copy rather than two that can drift. Topics not named keep reading their
-        own data -- :meth:`UNSAFE_redirect` redirects only what it is given, and
-        :meth:`UNSAFE_clear_redirection` is what undoes it.
+        own data -- `UNSAFE_redirect` redirects only what it is given, and
+        `UNSAFE_clear_redirection` is what undoes it.
 
         Shipping a topic that already reads from its target is a no-op rather than
         an error, so calling this twice is harmless.
 
-        *relocate* is REFUSED here. It asks :meth:`__relocate_shipment__` to send bytes
+        *relocate* is REFUSED here. It asks `__relocate_shipment__` to send bytes
         that differ from the stored ones, and redirecting onto those would make this
         block read something it did not build -- the opposite of the one guarantee this
-        method exists for. Ship with :meth:`UNSAFE_ship` and leave the block reading its
+        method exists for. Ship with `UNSAFE_ship` and leave the block reading its
         own data. (A hook that relocates unasked is not caught here; only what the
         caller declares is.)
         """
@@ -5363,7 +5360,7 @@ class Datablock:
         local=True)`).  When this block's url is itself local this is the
         topic's canonical path; otherwise it is the DBX_LOCAL staging path,
         so writers always see a real local path regardless of where
-        url/DBX_ROOT points.
+        url/DBX_DATALAKE points.
 
         For directory topics (list-TOPICS, or dict-TOPICS with a `DIRTOPIC`
         value) *target* is linked to the topic directory itself. For file
@@ -5434,14 +5431,14 @@ class Datablock:
                                  cluster=cluster, run=run)
 
     @staticmethod
-    def BuildJournal(anchor, loc: int = None, *, iloc: int = None, datalake=None, storage_options=None, log=None, n_workers=8, index=None, unnormalized: bool = False, url=None, **filter_kwargs):
+    def BuildJournal(anchor, loc: int = None, *, iloc: int = None, datalake=None, storage_options=None, log=None, n_workers=8, index=None, unnormalized: bool = False, **filter_kwargs):
         """*anchor*'s journal. See `BuildJournal.read`."""
-        return BuildJournal.read(anchor, loc, iloc=iloc, datalake=one_datalake(datalake, url, 'BuildJournal'),
+        return BuildJournal.read(anchor, loc, iloc=iloc, datalake=datalake,
                                 storage_options=storage_options,
                                 log=log, n_workers=n_workers, index=index,
                                 unnormalized=unnormalized, **filter_kwargs)
 
-    def buildjournal(self, loc: int = None, *, iloc: int = None, datalake=None, storage_options=None, log=None, n_workers=None, index: str | None = None, unnormalized: bool = False, url=None, **filter_kwargs):
+    def buildjournal(self, loc: int = None, *, iloc: int = None, datalake=None, storage_options=None, log=None, n_workers=None, index: str | None = None, unnormalized: bool = False, **filter_kwargs):
         """This block's anchor's journal, under this block's datalake. See `BuildJournal.read`."""
         if loc is not None and iloc is not None:
             raise ValueError("Specify at most one of 'loc' and 'iloc', not both.")
@@ -5449,7 +5446,7 @@ class Datablock:
             self.anchor,
             loc=loc,
             iloc=iloc,
-            datalake=self.datalake if (datalake is None and url is None) else one_datalake(datalake, url, 'buildjournal'),
+            datalake=self.datalake if datalake is None else datalake,
             storage_options=self.storage_options if storage_options is None else storage_options,
             log=getattr(self, 'log', None) if log is None else log,
             n_workers=n_workers,
@@ -5491,15 +5488,6 @@ class Datablock:
         written to it.
         """
         return Pretty.of(self)
-
-    @property
-    def url(self) -> str:
-        """The name `datalake` had first."""
-        return self.datalake
-
-    @url.setter
-    def url(self, value):
-        self.datalake = value
 
     @property
     def is_local_fs(self):
@@ -6888,13 +6876,13 @@ class Datablock:
 
     def _UNSAFE_ship_topic_(self, topic, target, *, overwrite: bool = False,
                             relocate: dict | None = None):
-        """Copy one topic OUT to *target*. Returns ``{topic: target}`` as shipped.
+        """Copy one topic OUT to *target*. Returns `{topic: target}` as shipped.
 
-        The outbound counterpart of :meth:`_UNSAFE_copy_topic_`, and the same
+        The outbound counterpart of `_UNSAFE_copy_topic_`, and the same
         extension point: override it to ship a subset of a topic's files.
 
         A group ships its leaves under *target* as a directory, so the returned dict
-        is nested the way :meth:`_redirect_path_` walks it.
+        is nested the way `_redirect_path_` walks it.
         """
         topic = self._normtopic_((topic,))
         if self._is_syntopic_(*topic):
@@ -6986,7 +6974,7 @@ class Datablock:
 
     @staticmethod
     def _nest_topic_path_(topic, path):
-        """``('a','b'), p -> {'a': {'b': p}}`` -- the shape `_redirect_path_` walks."""
+        """`('a','b'), p -> {'a': {'b': p}}` -- the shape `_redirect_path_` walks."""
         out = path
         for name in reversed(topic):
             out = {name: out}

@@ -1,6 +1,6 @@
-"""Tests for string quoting in ``norm()`` and the :attr:`Datablock.LEGACY_NORM` escape hatch.
+"""Tests for string quoting in `norm()` and the `Datablock.LEGACY_NORM` escape hatch.
 
-``__repr_from_kwargs__`` is shared by three callers, two of which are identity:
+`__repr_from_kwargs__` is shared by three callers, two of which are identity:
 
     norm()      -> signature -> hash -> key -> storage path
     supernorm() -> supersignature -> superhash
@@ -9,8 +9,8 @@
 so quoting strings there unconditionally would move every existing hash and
 orphan every artifact already stored under the old one. The split is:
 
-* ``__repr__`` always quotes -- it is not an input to ``signature``.
-* ``norm``/``supernorm`` quote only when ``LEGACY_NORM`` is False (the default,
+* `__repr__` always quotes -- it is not an input to `signature`.
+* `norm`/`supernorm` quote only when `LEGACY_NORM` is False (the default,
   i.e. every new subclass). Subclasses whose artifacts predate the change set
   it to True and keep the exact bytes their hashes were computed from.
 
@@ -139,7 +139,7 @@ class TestOptionalRootkwargs:
 
 
 class TestSpecValueCollision:
-    """``n=5`` vs ``n='5'`` collided onto one norm under the legacy form."""
+    """`n=5` vs `n='5'` collided onto one norm under the legacy form."""
 
     @dataclass
     class _C(Datablock.VAR):
@@ -200,12 +200,12 @@ class TestQuoteStrsFlagIsOptIn:
 
 
 class TestLegacyOverride:
-    """``norm(legacy=...)`` renders the other era WITHOUT touching identity.
+    """`norm(legacy=...)` renders the other era WITHOUT touching identity.
 
-    ``legacy=False`` on a legacy block answers "what would this be if I dropped
+    `legacy=False` on a legacy block answers "what would this be if I dropped
     the marker", which is how typed values are read out of a diff for a class
-    that still carries one. The override must NOT leak into :attr:`hash`, which
-    is built from ``norm()`` with no override.
+    that still carries one. The override must NOT leak into `hash`, which
+    is built from `norm()` with no override.
     """
 
     def test_none_is_byte_identical_to_no_argument(self):

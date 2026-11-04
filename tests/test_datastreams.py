@@ -1,9 +1,9 @@
-"""Tests for the :mod:`dbx.datastreams` zip datasets.
+"""Tests for the `dbx.datastreams` zip datasets.
 
 Covers zipping two and three streams, length validation, the
-``zip_validator`` callback, ``None``-value filtering, and key merging --
-for both ``ZipStreamingDataset`` (map-style) and
-``ZipIterableStreamingDatasets`` (iterator-style), including the shard
+`zip_validator` callback, `None`-value filtering, and key merging --
+for both `ZipStreamingDataset` (map-style) and
+`ZipIterableStreamingDatasets` (iterator-style), including the shard
 alignment the latter needs before it may shuffle.
 """
 import os
@@ -34,7 +34,7 @@ def setup_env(monkeypatch):
 # ---------------------------------------------------------------------------
 
 class DictDataset:
-    """Minimal ``Dataset``-compatible object backed by a list of dicts."""
+    """Minimal `Dataset`-compatible object backed by a list of dicts."""
 
     def __init__(self, records: list[dict]):
         self._records = records

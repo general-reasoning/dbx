@@ -2,7 +2,7 @@
 
 Every tablet of a Featuretable holds its own `ModelEvaluatorBuilder`, evaluated
 from the table's spec. `ModelEvaluatorBuilder.evaluator` caches per process, by
-``(type(self), self.hash, device)``, so those builders share one evaluator --
+`(type(self), self.hash, device)`, so those builders share one evaluator --
 and one model -- per device, as the batches within a tablet do.
 """
 import os
@@ -24,8 +24,8 @@ from dbx.datatables import Datacollator
 
 N_TABLETS = 6
 
-#: Where `CountingEvaluatorFactory.model` records each construction: one file per
-#: model, named for the process that built it -- so worker processes are counted too.
+# Where `CountingEvaluatorFactory.model` records each construction: one file per
+# model, named for the process that built it -- so worker processes are counted too.
 BUILDS_DIR = 'EVALUATOR_CACHE_BUILDS_DIR'
 
 
@@ -64,7 +64,7 @@ class SampleTable(Datatable):
         return N_TABLETS
 
     def __tablet__(self, idx: int) -> SampleTablet:
-        return self.TABLET(datalake=self.url, spec=dict(n_samples=4 + idx), tag=f"tab_{idx}")
+        return self.TABLET(datalake=self.datalake, spec=dict(n_samples=4 + idx), tag=f"tab_{idx}")
 
 
 class Model(nn.Module):

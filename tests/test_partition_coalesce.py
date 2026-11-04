@@ -3,7 +3,7 @@
 
 *coalesce* decides what a part's tablets are once the partition is done, never which
 part a row goes to. So the tests compare each mode's parts with *coalesce*
-None's, row by row, by the rows of the table their ``source`` names.
+None's, row by row, by the rows of the table their `source` names.
 
 The table is DATAPARTITION.md's: five tablets of rows (stratum, partition), s1 and s3
 in p1, the others in p2, with a feature and a label per row for a probe -- 0 and 1 by turns,
@@ -25,7 +25,7 @@ def setup_env(monkeypatch):
     monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
 
 
-#: Each tablet's rows, (stratum, partition).
+# Each tablet's rows, (stratum, partition).
 TABLETS = [
     [('s1', 'p1')] * 4,
     [('s2', 'p2'), ('s2', 'p2'), ('s3', 'p1'), ('s3', 'p1')],

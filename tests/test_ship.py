@@ -1,7 +1,7 @@
-"""``UNSAFE_ship`` — copying topics OUT, to readers who have no dbx.
+"""`UNSAFE_ship` — copying topics OUT, to readers who have no dbx.
 
-The outbound mirror of ``UNSAFE_copy_from``: a target per topic, and only the topics
-named. ``UNSAFE_ship_redirect`` then points the block at what it shipped, so the
+The outbound mirror of `UNSAFE_copy_from`: a target per topic, and only the topics
+named. `UNSAFE_ship_redirect` then points the block at what it shipped, so the
 shipped copy is the single source of truth rather than a second one that can drift.
 """
 import json
@@ -42,7 +42,7 @@ class Cfg(Datablock):
 
 @pytest.fixture
 def block(tmp_path):
-    return Cfg(url=str(tmp_path / 'store')).build()
+    return Cfg(datalake=str(tmp_path / 'store')).build()
 
 
 def test_ship_copies_a_file_topic_and_a_dir_topic(block, tmp_path):
@@ -99,7 +99,7 @@ def test_an_existing_target_is_not_silently_replaced(block, tmp_path):
 @pytest.mark.pinned
 def test_an_invalid_block_is_not_shipped(tmp_path):
     """Shipping sends data out. A block that has not built has none to send."""
-    unbuilt = Cfg(url=str(tmp_path / 'store2'))
+    unbuilt = Cfg(datalake=str(tmp_path / 'store2'))
     with pytest.raises(AssertionError):
         unbuilt.UNSAFE_ship({'facts': str(tmp_path / 'repo' / 'f.json')},
                             OVERRIDE=True, show_progress=False)
@@ -154,7 +154,7 @@ def test_the_default_hook_ships_the_topic_itself(block, tmp_path):
 
 
 def test_a_relocated_topic_ships_what_the_hook_wrote(tmp_path):
-    source = Rewriting(url=str(tmp_path / 'store')).build()
+    source = Rewriting(datalake=str(tmp_path / 'store')).build()
     target = str(tmp_path / 'repo' / 'facts.json')
     source.UNSAFE_ship({'facts': target}, relocate={'root_env': 'SOUNDCLONE_DATAROOT'},
                        OVERRIDE=True, show_progress=False)
@@ -175,7 +175,7 @@ def test_the_hook_s_workdir_is_removed_afterwards(tmp_path):
                 seen.append(os.path.dirname(out))
             return out
 
-    source = Noting(url=str(tmp_path / 'store')).build()
+    source = Noting(datalake=str(tmp_path / 'store')).build()
     source.UNSAFE_ship({'facts': str(tmp_path / 'repo' / 'facts.json')},
                        relocate={'root_env': 'ROOT'}, OVERRIDE=True, show_progress=False)
     assert seen and not os.path.exists(seen[0])
@@ -185,7 +185,7 @@ def test_the_hook_s_workdir_is_removed_afterwards(tmp_path):
 def test_ship_redirect_refuses_a_relocation(tmp_path):
     """Redirecting onto a relocated shipment would make `read()` answer with bytes the
     block never built -- the opposite of the guarantee ship_redirect exists for."""
-    source = Rewriting(url=str(tmp_path / 'store')).build()
+    source = Rewriting(datalake=str(tmp_path / 'store')).build()
     with pytest.raises(ValueError, match="not this block's data"):
         source.UNSAFE_ship_redirect({'facts': str(tmp_path / 'repo' / 'facts.json')},
                                     relocate={'root_env': 'ROOT'}, OVERRIDE=True,
@@ -231,7 +231,7 @@ def test_a_directory_topic_ships_its_contents_to_a_remote_target(block, tmp_path
 
 
 def test_ship_tag_lands_each_topic_under_root_and_tag_as_in_the_blocks_own_dir(tmp_path):
-    block = Cfg(url=str(tmp_path / 'store'), tag='proj.pipes.f:NAME').build()
+    block = Cfg(datalake=str(tmp_path / 'store'), tag='proj.pipes.f:NAME').build()
     root = tmp_path / 'shared'
     shipped = block.UNSAFE_ship_tag(str(root), OVERRIDE=True, show_progress=False)
     base = root / 'proj.pipes.f:NAME'
@@ -243,7 +243,7 @@ def test_ship_tag_lands_each_topic_under_root_and_tag_as_in_the_blocks_own_dir(t
 
 def test_ship_tag_ships_only_the_topics_named_and_to_a_url(tmp_path):
     import fsspec
-    block = Cfg(url=str(tmp_path / 'store'), tag='t').build()
+    block = Cfg(datalake=str(tmp_path / 'store'), tag='t').build()
     assert block.ship_tag_targets('memory:///lake/', ['facts']) == {'facts': 'memory:///lake/t/facts/facts.json'}
     block.UNSAFE_ship_tag('memory:///lake', ['facts'], OVERRIDE=True, overwrite=True, show_progress=False)
     assert fsspec.filesystem('memory').exists('/lake/t/facts/facts.json')

@@ -362,7 +362,7 @@ Remote tests rely on **Ray**. If you are running tests in an environment with a 
 
 | Variable | Description |
 |---|---|
-| `DBX_DATALAKE` | The datalake a block is stored in when not given `datalake=` (`DBX_ROOT`, then `DBX_URL`, its names before the rename, are still read after it) |
+| `DBX_DATALAKE` | The datalake a block is stored in when not given `datalake=` |
 | `DBX_STORAGE_OPTIONS` | fsspec options for every datalake path, `key=val;key=val`: see [CLUSTERS.md](CLUSTERS.md) |
 | `DBX_GIT_REPO` | Path to the git repository for revision tracking |
 | `DBX_DIRTY_REPO_OK` | Set to skip the dirty-repo check |

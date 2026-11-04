@@ -170,7 +170,7 @@ put({{"type": "result", "subtype": "success", "is_error": False, "result": "(fin
 
 @pytest.fixture
 def cli(tmp_path, monkeypatch):
-    """The fake CLI, as HYP_CLAUDE; ``cli.runs()`` what each run was given."""
+    """The fake CLI, as HYP_CLAUDE; `cli.runs()` what each run was given."""
     path = tmp_path / "bin" / "claude"
     path.parent.mkdir()
     path.write_text(FAKE.format(python=sys.executable))

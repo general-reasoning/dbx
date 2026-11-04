@@ -1,4 +1,4 @@
-"""Recursive, sparse ``diffnorm``: descend into nested blocks instead of blobbing.
+"""Recursive, sparse `diffnorm`: descend into nested blocks instead of blobbing.
 
 A norm is flat text, so a nested block arrives inside the parent's spec dict as
 one long string. The old comparison stopped at the top-level kwargs, so a single
@@ -7,12 +7,12 @@ changed leaf three levels down came back as::
     {'spec': (<2820-char string>, <2864-char string>)}
 
 -- two near-identical blobs to eyeball. The real-world case that prompted this
-was an ``IJEPAsaurUSStill`` whose only difference from a recorded build was that
-``num_workers`` and ``prefetch_factor`` had since been removed from VAR.
+was an `IJEPAsaurUSStill` whose only difference from a recorded build was that
+`num_workers` and `prefetch_factor` had since been removed from VAR.
 
 Structuring has to be conservative in one specific way: values that merely
-*look* parenthesised (a tuple like ``'(0.75, 1.5)'``) must stay leaves, or a
-diff would report ``{}`` for them and hide a real change.
+*look* parenthesised (a tuple like `'(0.75, 1.5)'`) must stay leaves, or a
+diff would report `{}` for them and hide a real change.
 """
 import pytest
 from dataclasses import dataclass
@@ -118,7 +118,7 @@ class TestRecursiveDescent:
 
 
 class TestTupleValuesStayLeaves:
-    """``'(0.75, 1.5)'`` is parenthesised but is NOT a nested block."""
+    """`'(0.75, 1.5)'` is parenthesised but is NOT a nested block."""
 
     def test_tuple_change_is_reported(self, tmp_path):
         a = _tree(tmp_path, ratio=(0.75, 1.5))
@@ -171,7 +171,7 @@ class TestDeslash:
     def test_deslash_does_not_break_parsing(self, tmp_path):
         """Deslashing must happen on output, not before the parse.
 
-        Stripping backslashes first would destroy the ``\\'`` escapes that mark
+        Stripping backslashes first would destroy the `\\'` escapes that mark
         where a nested norm's own quoted values begin and end, so the structure
         would collapse and the diff would come back at the wrong depth.
         """
@@ -211,7 +211,7 @@ class TestReport:
 
 
 class TestJournalFilters:
-    """``dict(event='build:end', iloc=0)`` used to silently drop the event."""
+    """`dict(event='build:end', iloc=0)` used to silently drop the event."""
 
     class Solo(Datablock):
         TOPICS = {'output': 'output.txt'}
@@ -228,7 +228,7 @@ class TestJournalFilters:
         """The exact bug: iloc=0 alone is the newest entry of ANY event.
 
         For a block whose artifact was copied in rather than built, the newest
-        entry is an ``UNSAFE_copy_from:END`` at the CURRENT identity, so the
+        entry is an `UNSAFE_copy_from:END` at the CURRENT identity, so the
         diff came back empty and the real difference against the recorded build
         stayed hidden.
         """
@@ -285,9 +285,9 @@ class TestSplitTopLevelItems:
 class TestTypedLeaves:
     """A norm is flat text, but the text records the type -- so recover it.
 
-    Reading ``('15.0', "'15.0'")`` off a diff, you cannot tell a float from a
+    Reading `('15.0', "'15.0'")` off a diff, you cannot tell a float from a
     string: both sides are strings, one of which happens to contain quotes.
-    Evaluated, the same pair reads ``(15.0, '15.0')`` -- which says the two sides
+    Evaluated, the same pair reads `(15.0, '15.0')` -- which says the two sides
     were rendered by different LEGACY_NORM settings, not that the value changed.
     """
 
@@ -369,7 +369,7 @@ class TestTypingNeverHidesADifference:
         return M
 
     def test_int_versus_float_is_still_reported(self):
-        """``1 == 1.0`` in Python, so evaluating first would drop this entirely."""
+        """`1 == 1.0` in Python, so evaluating first would drop this entirely."""
         M = self._cls()
         diff = M(datalake='/tmp/dbx-typed', spec=dict(n=1)).diffsubsig(
             M(datalake='/tmp/dbx-typed', spec=dict(n=1.0)).subsignaturestr())

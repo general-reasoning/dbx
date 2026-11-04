@@ -171,8 +171,7 @@ def test_the_corpus_is_kept_in_the_datalake(tmp_path, monkeypatch):
 
 
 def test_no_datalake_is_refused(monkeypatch):
-    for var in ("DBX_DATALAKE", "DBX_ROOT", "DBX_URL"):
-        monkeypatch.delenv(var, raising=False)
+    monkeypatch.delenv("DBX_DATALAKE", raising=False)
     with pytest.raises(SystemExit, match="DBX_DATALAKE"):
         dbxpipelines.HypDbxJournal.__default_data__(None)
 
@@ -896,25 +895,9 @@ def _blocked_lake_(tmp_path):
     return str(tmp_path / "file" / "lake")
 
 
-@pytest.mark.parametrize("var", ["DBX_ROOT", "DBX_URL"])
-def test_a_corpus_that_cannot_be_opened_says_where_it_came_from(tmp_path, monkeypatch, var):
+def test_a_corpus_that_cannot_be_opened_says_where_it_came_from(tmp_path, monkeypatch):
     from hyp import app as app_mod
 
-    for v in ("DBX_DATALAKE", "DBX_ROOT", "DBX_URL", "DBX_STORAGE_OPTIONS"):
-        monkeypatch.delenv(v, raising=False)
-    monkeypatch.setenv(var, _blocked_lake_(tmp_path))
-    with pytest.raises(SystemExit) as e:
-        app_mod.main(["--journal"])
-    said = str(e.value)
-    assert said.startswith(f"hyp: cannot open the corpus {tmp_path}/file/lake/.hyp (")
-    assert f"from {var}, deprecated: set DBX_DATALAKE instead; read as a local path" in said
-    assert "Error" in said.split("\n")[1], "the error itself, on a line of its own"
-
-
-def test_a_datalake_named_by_dbx_datalake_is_not_called_deprecated(tmp_path, monkeypatch):
-    from hyp import app as app_mod
-
-    monkeypatch.setenv("DBX_ROOT", "/elsewhere")
     monkeypatch.setenv("DBX_DATALAKE", _blocked_lake_(tmp_path))
     monkeypatch.delenv("DBX_STORAGE_OPTIONS", raising=False)
     with pytest.raises(SystemExit, match=r"\(from DBX_DATALAKE; read as a local path\)"):

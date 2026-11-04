@@ -1,9 +1,9 @@
 """
-``hashstr`` -> ``signature`` and ``superhashstr`` -> ``supersignature``.
+`hashstr` -> `signature` and `superhashstr` -> `supersignature`.
 
-The property is the string that :attr:`Datablock.hash` is the sha256 of, so
+The property is the string that `Datablock.hash` is the sha256 of, so
 the rename must be pure: same bytes, same hash, same key.  It is also a
-recorded field -- ``signature.txt``, a journal column, and a ``Bid`` field --
+recorded field -- `signature.txt`, a journal column, and a `Bid` field --
 and journals written before the rename recorded those columns under the old
 names, so reading them has to keep working.
 """
@@ -150,7 +150,7 @@ class TestPreRenameJournals:
 # ---------------------------------------------------------------------------
 
 class TestStrAndStructuredForms:
-    """``signature()``/``type()`` answer with dicts, ``signaturestr()``/``typestr()``
+    """`signature()`/`type()` answer with dicts, `signaturestr()`/`typestr()`
     with the text -- on a live block and on the `Block` a journal entry holds."""
 
     def test_live_block(self, block):

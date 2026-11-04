@@ -283,7 +283,7 @@ def test_collect_construct_only_counts_a_noted_entrypoint(lake):
 
 
 def test_extra_construction_events_count_too(lake):
-    """A still that only checkpointed -- ``ckpt=<tag>``, never build:end -- counts with ``ckpt`` among the extra events."""
+    """A still that only checkpointed -- `ckpt=<tag>`, never build:end -- counts with `ckpt` among the extra events."""
     ckpted, other = Flat(spec={'n': 5}), Flat(spec={'n': 6})
     for p in (ckpted, other):
         p.create()

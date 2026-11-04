@@ -1,7 +1,7 @@
 """A block whose VAR field was renamed reads the build made under the old name.
 
 Renaming a field re-keys every block of the class, though nothing about what
-it computes has changed. ``redirect_vars={current: historical}`` reconstructs
+it computes has changed. `redirect_vars={current: historical}` reconstructs
 the old identity by rendering each renamed field under its historical name --
 and in the historical sort order, which a rename can change.
 

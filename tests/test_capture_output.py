@@ -1,14 +1,14 @@
 """
-Output capture is a COMMAND's: ``dbx.exec(..., capture_output=True)``, or
-``--capture-output`` on the command line.
+Output capture is a COMMAND's: `dbx.exec(..., capture_output=True)`, or
+`--capture-output` on the command line.
 
 The command's process tees its stdout/stderr to a master `OutputCapture`,
 opened when the command starts and closed when it is over; every worker
 PROCESS a dbx executor sends its work to runs each callable inside a capture
 of its own, whose path comes home with the result. The exec journal records
-them all as ``output_captures``, the master at index 0, and
-``ExecJournalEntry.output()`` prints one. A block captures nothing: its
-journal entry's ``log`` is the capture open around its build.
+them all as `output_captures`, the master at index 0, and
+`ExecJournalEntry.output()` prints one. A block captures nothing: its
+journal entry's `log` is the capture open around its build.
 """
 import functools
 import os
@@ -28,7 +28,7 @@ from dbx.journals import OutputCapture
 @pytest.fixture(autouse=True)
 def lake(tmp_path, monkeypatch):
     monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
-    monkeypatch.setenv('DBX_ROOT', str(tmp_path))
+    monkeypatch.setenv('DBX_DATALAKE', str(tmp_path))
 
 
 class Loud(Datablock):
@@ -277,7 +277,7 @@ class TestOutput:
 
 
 def _run_cli(tmp_path, *argv, entry='pprint'):
-    env = dict(os.environ, DBX_ROOT=str(tmp_path), DBX_DIRTY_REPO_OK='1', DBX_USE_WORK_REPO='False')
+    env = dict(os.environ, DBX_DATALAKE=str(tmp_path), DBX_DIRTY_REPO_OK='1', DBX_USE_WORK_REPO='False')
     code = f"import sys, dbx; sys.argv = {['dbx.' + entry, *argv]!r}; sys.exit(dbx.{entry}())"
     return subprocess.run([sys.executable, '-c', code], capture_output=True, text=True, env=env,
                           cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))), timeout=120)
@@ -316,7 +316,7 @@ class TestTheCommandLine:
         runner.write_text(databits._PINNED_RUNNER.format(
             render=textwrap.indent(databits._PINNED_RENDER['pprint'], '    '),
             capture_flag=databits.CAPTURE_OUTPUT_FLAG))
-        env = dict(os.environ, DBX_ROOT=str(tmp_path), DBX_DIRTY_REPO_OK='1', DBX_USE_WORK_REPO='False')
+        env = dict(os.environ, DBX_DATALAKE=str(tmp_path), DBX_DIRTY_REPO_OK='1', DBX_USE_WORK_REPO='False')
         repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         env['PYTHONPATH'] = os.pathsep.join([repo] + ([env['PYTHONPATH']] if env.get('PYTHONPATH') else []))
         proc = subprocess.run([sys.executable, str(runner), '--capture-output', "'RENDERED'"],

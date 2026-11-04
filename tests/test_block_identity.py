@@ -5,10 +5,10 @@ It did not: an identity names no class, and a table spelled with the topic
 markers carries none of its TABLET's topics, so pointing a stack at another block
 class left its hash, and its `done`, exactly where they were.
 
-The entry is the class's fqcn: ``BLOCK=<fqcn>`` -- ``TABLET=<fqcn>`` for a table --
-after the spec, before the version and the topics. ``with_block=False`` computes
+The entry is the class's fqcn: `BLOCK=<fqcn>` -- `TABLET=<fqcn>` for a table --
+after the spec, before the version and the topics. `with_block=False` computes
 a type under the rules from before, as reconstructing a stack built then needs;
-a Specialization says the same with ``BLOCK=None`` -- a table's with ``TABLET=None``.
+a Specialization says the same with `BLOCK=None` -- a table's with `TABLET=None`.
 """
 from dataclasses import dataclass
 

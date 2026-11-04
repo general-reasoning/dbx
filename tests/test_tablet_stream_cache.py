@@ -1,13 +1,13 @@
 """A remote tablet is cached where the table says, not where mosaic guesses.
 
-``Stream`` left without a ``local=`` invents ``{tmpdir}/{blake2s(remote)}`` and
+`Stream` left without a `local=` invents `{tmpdir}/{blake2s(remote)}` and
 then REFUSES to reuse it, so the second open of the same remote tablet -- a second
 process, a second run, a retry after a crash -- dies with "Could not create a
 temporary local directory ... already exists". The table computed a cache
 directory and never passed it, so every remote read went to that guessed path.
 
-It cannot be passed to ``StreamingDataset`` either: mosaic takes ``streams=`` or
-``remote``/``local``, never both. It belongs on each ``Stream``, one
+It cannot be passed to `StreamingDataset` either: mosaic takes `streams=` or
+`remote`/`local`, never both. It belongs on each `Stream`, one
 subdirectory per tablet -- which is also what keeps two tablets from sharing a
 directory, itself the same collision.
 

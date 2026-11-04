@@ -32,7 +32,7 @@ class VersionedBlock(Datablock):
 
 @pytest.fixture(autouse=True)
 def setup_env(monkeypatch):
-    monkeypatch.setenv('DBX_ROOT', '/tmp/dbx')
+    monkeypatch.setenv('DBX_DATALAKE', '/tmp/dbx')
     monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
 
 

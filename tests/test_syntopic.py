@@ -1,15 +1,15 @@
 """
-``SYNTOPIC`` — a synthetic topic, one the block never stores.
+`SYNTOPIC` — a synthetic topic, one the block never stores.
 
-``DIRTOPIC`` and ``SYNTOPIC`` are both "no filename", but they answer different
-questions: a ``DIRTOPIC`` topic IS a location (a real directory that happens to
+`DIRTOPIC` and `SYNTOPIC` are both "no filename", but they answer different
+questions: a `DIRTOPIC` topic IS a location (a real directory that happens to
 hold no single named file), whereas a synthetic one has no location at all.
 Nothing on the filesystem is named, created, listed, copied or cleared for a
-``SYNTOPIC``, and — since a topic that was never going to be written cannot be
+`SYNTOPIC`, and — since a topic that was never going to be written cannot be
 missing — it cannot hold a block back from being valid.
 
-The two must never collapse into each other, which is why ``SYNTOPIC`` is ``()``
-and not another ``None``-alike — these tests pin that separation.
+The two must never collapse into each other, which is why `SYNTOPIC` is `()`
+and not another `None`-alike — these tests pin that separation.
 """
 import os
 

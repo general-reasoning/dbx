@@ -1,8 +1,8 @@
-"""``write_journal_entry()`` stamps every entry with its own ``entry_code``.
+"""`write_journal_entry()` stamps every entry with its own `entry_code`.
 
-Nothing else on an entry identifies a *row*: ``hash`` and ``key`` are shared by
-every entry of a block, ``uuid`` by every entry of one live instance, and
-``datetime`` only to its resolution. ``entry_code`` is a fresh uuid per call and
+Nothing else on an entry identifies a *row*: `hash` and `key` are shared by
+every entry of a block, `uuid` by every entry of one live instance, and
+`datetime` only to its resolution. `entry_code` is a fresh uuid per call and
 is returned, so a caller can address exactly the row it wrote.
 
 The one sharp edge is not about the code but about where entries live: a journal
@@ -94,7 +94,7 @@ class TestTheCodeIsRecorded:
 
 
 class TestDistinctFromTheTree:
-    """``tree`` identifies the build tree, ``id`` the entry."""
+    """`tree` identifies the build tree, `id` the entry."""
 
     def test_they_are_not_the_same_value(self, tmp_path):
         b = block(tmp_path)
@@ -159,7 +159,7 @@ class TestLegacyJournals:
 
     @pytest.mark.parametrize('legacy', ['session', 'uuid'])
     def test_a_tree_recorded_under_an_older_name_still_reads(self, tmp_path, legacy):
-        """``tree`` was ``session``, and before that ``uuid``."""
+        """`tree` was `session`, and before that `uuid`."""
         b = block(tmp_path, tree='RUN-7')
         b.write_journal_entry(event='note')
         entry = b.buildjournal(loc=0)

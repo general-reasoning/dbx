@@ -452,10 +452,10 @@ class TestSubmit:
         assert sorted(kube.clusters()) == ['one', 'two']
 
 
-class TestPipelineSubmit:
+class TestPipelineRunner:
     def test_a_call_ships_the_pipelines_quote_and_the_datalake(self, cluster, kubectl, tmp_path):
         p = Single(spec={'n': 3}, datalake=str(tmp_path), n_gpus=2)
-        run = p.submit(cluster).build_tree()
+        run = p.runner(cluster).build_tree()
         m = kubectl.created[0]
         expression = _env_(m)['DBX_SUBMIT_EXPRESSION']
         assert expression == f"dbx.eval({p.quote()!r}).entry.build_tree()" == run.record['expression']
@@ -464,14 +464,14 @@ class TestPipelineSubmit:
         assert dbx.eval(p.quote()).entry.hash == p.entry.hash
         assert _pipe_events_(p) == ['submit:BEGIN']
 
-    def test_entry_reads_as_the_call_and_arguments_travel_as_literals(self, cluster, kubectl, tmp_path):
+    def test_arguments_travel_as_literals(self, cluster, kubectl, tmp_path):
         p = Single(datalake=str(tmp_path))
-        p.submit(cluster, n_gpus=0).entry.build(extra=[1, 'a'])
+        p.runner(cluster, n_gpus=0).build(extra=[1, 'a'])
         assert _env_(kubectl.created[0])['DBX_SUBMIT_EXPRESSION'].endswith(".entry.build(extra=[1, 'a'])")
 
     def test_a_non_literal_argument_is_refused_before_anything_is_sent(self, cluster, kubectl, tmp_path):
         with pytest.raises(TypeError, match='literals'):
-            Single(datalake=str(tmp_path)).submit(cluster).build(object())
+            Single(datalake=str(tmp_path)).runner(cluster).build(object())
         assert kubectl.calls == []
 
     def test_the_runner_is_of_the_targets_kind_and_refuses_options_it_does_not_take(self, cluster, tmp_path):
@@ -479,26 +479,13 @@ class TestPipelineSubmit:
         assert type(p.runner(cluster)) is kube.KubeRunner
         with pytest.raises(TypeError, match='no option partition'):
             p.runner(cluster, partition='gpu')
-        with pytest.raises(TypeError, match='no option partition'):
-            p.submit(cluster, partition='gpu')
         with pytest.raises(ValueError, match="'kube', not 'slurm'"):
             p.runner(cluster, mode='slurm')
         assert type(p.runner(cluster, mode='kube')) is kube.KubeRunner
 
     def test_a_method_the_entry_lacks_is_an_attribute_error(self, cluster, tmp_path):
         with pytest.raises(AttributeError, match='no method'):
-            Single(datalake=str(tmp_path)).submit(cluster).no_such_method
-        with pytest.raises(AttributeError, match='no method'):
             Single(datalake=str(tmp_path)).runner(cluster).ship('no_such_method')
-
-    def test_submit_ships_what_runner_ships(self, cluster, kubectl, tmp_path):
-        p = Single(datalake=str(tmp_path))
-        p.submit(cluster).build_tree()
-        p.runner(cluster).build_tree()
-        p.runner(cluster).ship('build', extra=1)
-        exprs = [_env_(m)['DBX_SUBMIT_EXPRESSION'] for m in kubectl.created]
-        assert exprs[0] == exprs[1] and exprs[2].endswith('.entry.build(extra=1)')
-        assert [r.id for r in p.submit(cluster).runs()] == [m['metadata']['name'] for m in kubectl.created]
 
     def test_a_runner_with_no_target_launches_nothing(self, kubectl, tmp_path):
         with pytest.raises(TypeError, match='launches nothing'):
@@ -508,16 +495,16 @@ class TestPipelineSubmit:
     def test_a_valid_entry_is_not_built_again_unless_forced(self, cluster, kubectl, tmp_path):
         p = Single(datalake=str(tmp_path))
         p.entry.build()
-        run = p.submit(cluster).build_tree()
+        run = p.runner(cluster).build_tree()
         assert run.job is None and run.skipped and run.status() == 'skipped' and run.wait()
         assert type(run) is kube.KubeRun and 'skipped' in repr(run)
         assert kubectl.calls == []
-        assert p.submit(cluster, force=True).build_tree().job is not None
+        assert p.runner(cluster, force=True).build_tree().job is not None
 
 
 class TestWatching:
     def test_a_call_runs_captured_under_a_session_of_its_own_that_is_recorded(self, cluster, kubectl, tmp_path):
-        run = Single(datalake=str(tmp_path)).submit(cluster).build_tree()
+        run = Single(datalake=str(tmp_path)).runner(cluster).build_tree()
         env = _env_(kubectl.created[0])
         assert env['DBX_KUBE_COMMAND'] == 'dbx.pprint --capture-output "$DBX_SUBMIT_EXPRESSION"'
         assert env['DBX_JOURNAL_SESSION'] == run.record['run_session'] != env['DBX_PARENT_SESSION']
@@ -554,10 +541,10 @@ class TestWatching:
 
     def test_the_runs_of_a_block_come_back_from_its_journal(self, cluster, kubectl, tmp_path):
         p = Single(datalake=str(tmp_path))
-        first = p.submit(cluster).build_tree()
+        first = p.runner(cluster).build_tree()
         kubectl.conditions = ['Complete']
         first.wait(poll=0)
-        second = p.submit(cluster).build_tree()
+        second = p.runner(cluster).build_tree()
         runs = dbx.cluster.runs(p)
         assert [r.id for r in runs] == [first.id, second.id] and type(runs[0]) is kube.KubeRun
         assert runs[0]._closed_ and not runs[1]._closed_
@@ -567,14 +554,14 @@ class TestWatching:
 
     def test_a_runs_target_comes_back_from_its_record_not_by_its_name(self, cluster, kubectl, entry_points, tmp_path):
         p = Single(datalake=str(tmp_path))
-        p.submit(cluster).build_tree()
+        p.runner(cluster).build_tree()
         assert kube.clusters() == {}            # nothing to look 'testc' up in
         (run,) = dbx.cluster.runs(p)
         assert run.target == cluster and run.target is not cluster
 
     def test_a_name_submits_to_the_entry_points_target(self, cluster, kubectl, entry_points, tmp_path):
         entry_points.append({'testc': cluster})
-        run = Single(datalake=str(tmp_path)).submit('testc').build_tree()
+        run = Single(datalake=str(tmp_path)).runner('testc').build_tree()
         assert run.record['target_spec']['fields']['queue'] == 'gpu-q' and kubectl.created
 
     def test_a_pending_job_says_why(self, cluster, kubectl):
@@ -760,7 +747,7 @@ class TestClusterDryRun:
     def test_it_ships_a_small_run_that_verifies_the_entry_and_records_the_call(self, cluster, kubectl, tmp_path):
         p = Single(spec={'n': 2}, datalake=str(tmp_path), n_gpus=8)
         p.entry.build()
-        run = p.submit(cluster, dry_run='cluster').build_tree()
+        run = p.runner(cluster, dry_run='cluster').build_tree()
         m = kubectl.created[0]
         assert run.id is not None and m['metadata']['name'].startswith('me-single-build-tree-check-')
         assert _env_(m)['DBX_SUBMIT_EXPRESSION'] == f"dbx.cluster.verify(dbx.eval({p.quote()!r}).entry, {p.entry.hash!r})"

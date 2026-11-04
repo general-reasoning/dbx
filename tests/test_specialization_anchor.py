@@ -3,7 +3,7 @@ A Specialization may look for the narrower block under another anchor.
 
 A block's journal is under its anchor, and a class's anchor defaults to its
 fqcn -- so renaming a class leaves everything it built in a journal the renamed
-class never reads. ``anchor=`` points a specialization at that journal. The
+class never reads. `anchor=` points a specialization at that journal. The
 identity is unaffected: it names no class, so the old block's hash is
 reconstructed exactly as it would be under the old name.
 """

@@ -50,8 +50,8 @@ class DummySampleTablet(Datatablet):
 class DummySampleTable(Datatable):
     TABLET = DummySampleTablet
 
-    #: This table roots its tablets inside itself -- see __tablet__ -- so it declares
-    #: the directory to root them in. The base no longer does.
+    # This table roots its tablets inside itself -- see __tablet__ -- so it declares
+    # the directory to root them in. The base no longer does.
     TOPICS = {'tabs': DATADIR, **Datatable.TOPICS}
 
     @dataclass
@@ -451,9 +451,9 @@ class UnevenSampleTable(DummySampleTable):
 
 
 def test_feature_stats_probe_over_tablets_of_different_sizes(tmp_path):
-    """``tablet_norm`` is one value per ROW, so uneven tablets do not stack.
+    """`tablet_norm` is one value per ROW, so uneven tablets do not stack.
 
-    The build died on exactly that -- ``np.stack`` over per-tablet norms of 3 and
+    The build died on exactly that -- `np.stack` over per-tablet norms of 3 and
     7 -- after every tablet's stats and the whole-table ones had been computed. A
     table whose tablets all have one size, as the fixtures above do, never
     reaches it.

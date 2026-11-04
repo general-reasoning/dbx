@@ -1,15 +1,15 @@
 """
-Filtering a journal by ``date=`` or ``datetime=``.
+Filtering a journal by `date=` or `datetime=`.
 
-dbx writes a timestamp as ``isoformat()`` with ``' '`` and ``':'`` replaced by
-``'-'`` (`JOURNAL_DATETIME_FORMAT`), so that it can also be a path component.
-pandas cannot parse that unaided: dateutil reads the ``-`` between the hour and
+dbx writes a timestamp as `isoformat()` with `' '` and `':'` replaced by
+`'-'` (`JOURNAL_DATETIME_FORMAT`), so that it can also be a path component.
+pandas cannot parse that unaided: dateutil reads the `-` between the hour and
 the minute as a date separator and raises.
 
 A build journal is parsed on the way into `BuildJournalFrame`, so it reached the
 filter already holding datetimes and these filters worked. The exec journal is
-not, so it reached the same filter holding the raw strings, where ``date=``
-raised ``DateParseError`` and ``datetime=`` compared a string column against a
+not, so it reached the same filter holding the raw strings, where `date=`
+raised `DateParseError` and `datetime=` compared a string column against a
 parsed value and silently matched nothing.
 """
 
@@ -118,7 +118,7 @@ def test_an_unreadable_timestamp_matches_no_date_rather_than_raising():
 
 def test_exec_journal_is_filterable_by_date(tmp_path, monkeypatch):
     """What dbx.journal(date=...) does on a real exec journal."""
-    monkeypatch.setenv('DBX_ROOT', str(tmp_path / 'root'))
+    monkeypatch.setenv('DBX_DATALAKE', str(tmp_path / 'root'))
     write_exec_journal("1 + 1  # a comment naming this row")
 
     today = datetime.date.today().isoformat()
@@ -126,16 +126,3 @@ def test_exec_journal_is_filterable_by_date(tmp_path, monkeypatch):
     assert len(dbx.journal(date='2000-01-01')) == 0
     assert dbx.journal(date=today).iloc[0]['comment'] == 'a comment naming this row'
 
-
-def test_exec_journal_reads_dbx_root_ahead_of_dbx_url(tmp_path, monkeypatch):
-    """The exec journal resolves its lake as a block does: DBX_ROOT, then DBX_URL."""
-    from dbx.databits import read_exec_journal
-    monkeypatch.setenv('DBX_ROOT', str(tmp_path / 'root'))
-    monkeypatch.setenv('DBX_URL', str(tmp_path / 'alias'))
-    write_exec_journal("1 + 1")
-    assert len(read_exec_journal(datalake=str(tmp_path / 'root'))) == 1
-    assert len(read_exec_journal(datalake=str(tmp_path / 'alias'))) == 0
-
-    monkeypatch.delenv('DBX_ROOT')
-    write_exec_journal("2 + 2")
-    assert len(read_exec_journal(datalake=str(tmp_path / 'alias'))) == 1

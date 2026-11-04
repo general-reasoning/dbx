@@ -1,6 +1,6 @@
 ---
 name: python-style
-description: The Python style rules in this repo that are not about class layout - a Datablock instance is named dblk or datablock, never block; imports go at module level, except to break a circular import or to defer a heavy or questionable dependency like torch or ray; strings are formatted with f-strings, not % or .format(), except for a named template filled elsewhere; a section of computation is bracketed in log lines with Datalog.section(), not hand-written BEGIN/END lines; dbx commands are run through dbx.exec or dbx.pprint, even from Python, so that the exec journal records them; and docstrings and comments carry no reStructuredText or Sphinx markup - no :meth:/:func: roles, no double backticks, no :: before an example, no #: comments. Load when writing or reviewing any Python in dbx or hyp, writing a docstring or comment, adding an import, formatting a string, logging the start and end of a step, or running a dbx command. For member order and private naming, load class-layout.
+description: The Python style rules in this repo that are not about class layout - a Datablock instance is named dblk or datablock, never block; imports go at module level, except to break a circular import or to defer a heavy or questionable dependency like torch or ray; strings are formatted with f-strings, not % or .format(), except for a named template filled elsewhere; a section of computation is bracketed in log lines with Datalog.section(), not hand-written BEGIN/END lines; dbx commands are run through dbx.exec or dbx.pprint, even from Python, so that the exec journal records them; and docstrings and comments carry no reStructuredText or Sphinx markup - no :meth:/:func:/:class: roles (name it in single backticks), no double backticks, no :: before an example, no #: comments; a string meant to hold backticks, as a Markdown fence, is not a docstring and stays. Load when writing or reviewing any Python in dbx or hyp, writing a docstring or comment, adding an import, formatting a string, logging the start and end of a step, or running a dbx command. For member order and private naming, load class-layout.
 ---
 
 # Python style
@@ -146,8 +146,9 @@ in the source. None of it:
 
 - **No `#:` comments.** A comment above an attribute is a plain `#` comment.
 
-All of these were converted in one pass on 2026-10-22, so any you find came
-back in a later edit. Fix it when you see it. The numpydoc headings
+All of these were converted in passes on 2026-10-22 and 2026-11-04 -- the second
+with the tokenizer, touching docstrings and comments only -- so any you find came
+back in a later edit. Fix it when you see it, and never write one: `:meth:` included. The numpydoc headings
 (`Parameters`, `Returns` or `Example` underlined with `-------`) are still in
 about 68 docstrings, and were left for a separate pass.
 

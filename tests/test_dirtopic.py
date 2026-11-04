@@ -1,8 +1,8 @@
 """
-``DIRTOPIC`` — the self-documenting spelling of a directory topic in dict-TOPICS.
+`DIRTOPIC` — the self-documenting spelling of a directory topic in dict-TOPICS.
 
-``DIRTOPIC`` *is* ``None``, so this is a naming change and nothing else: a block
-written with ``DIRTOPIC`` and one written with a bare ``None`` must be
+`DIRTOPIC` *is* `None`, so this is a naming change and nothing else: a block
+written with `DIRTOPIC` and one written with a bare `None` must be
 indistinguishable, down to the hash.  These tests pin that equivalence so the
 constant cannot quietly drift into a distinct sentinel, which would split every
 existing directory topic off its stored artifacts.

@@ -19,8 +19,8 @@ from another -- silently, because both are valid blocks.
 
 `Featuretable.validate_tablet` checks the signature at build time. These tests
 pin the rest of the chain, because signature parity does not imply identity
-parity: ``type()`` adds the version and the topic list, and ``hash`` is
-``sha256(type())``. Two tablets can agree on their spec and still address
+parity: `type()` adds the version and the topic list, and `hash` is
+`sha256(type())`. Two tablets can agree on their spec and still address
 different storage.
 """
 import pytest
@@ -38,8 +38,8 @@ from dbx import (
 from dbx.datatables import Datacollator
 
 
-#: A source path assembled at read time from the environment -- the shape the
-#: real pipelines use, and the reason these tests exist.
+# A source path assembled at read time from the environment -- the shape the
+# real pipelines use, and the reason these tests exist.
 def tablet_specline(idx):
     return f"$os.path.join(dbx.getenv('COMMUTATIVITY_LAKE'), 'tab{idx}.tfrecords')"
 
@@ -54,10 +54,10 @@ class DummySampleTablet(Datatablet):
     @dataclass
     class VAR(Datatablet.VAR):
         n_samples: int = 10
-        #: Carries a SPECLINE in the real pipelines -- a source path built from
-        #: the environment. var.source is the resolved value and spec['source']
-        #: the unexpanded text, so a route that rebuilds from one rather than
-        #: the other changes the block's identity without changing the block.
+        # Carries a SPECLINE in the real pipelines -- a source path built from
+        # the environment. var.source is the resolved value and spec['source']
+        # the unexpanded text, so a route that rebuilds from one rather than
+        # the other changes the block's identity without changing the block.
         source: str = None
 
     def __build__(self):
@@ -87,7 +87,7 @@ class DummySampleTable(Datatable):
         # The tablets differ in SPEC, not only in tag. A tag is not part of the
         # signature, so tablets differing only by tag share one hash -- and a
         # crossed index would then go unnoticed by a parity test.
-        return self.TABLET(datalake=self.url,
+        return self.TABLET(datalake=self.datalake,
                         spec=dict(n_samples=self.var.samples_per_tablet + idx,
                                   source=tablet_specline(idx)),
                         tag=f"tab_{idx}")
@@ -191,7 +191,7 @@ class TestTreeIsNotIdentity:
 class TestSpeclinesCommute:
     """The case most likely to break: a spec value that is not its own value.
 
-    ``var.source`` is the RESOLVED path and ``spec['source']`` the unexpanded
+    `var.source` is the RESOLVED path and `spec['source']` the unexpanded
     text. A route that rebuilds a tab from the resolved value rather than the
     specline produces a block that is configured identically and identified
     differently -- and every check that compares configuration would pass.
@@ -228,7 +228,7 @@ class TestSpeclinesCommute:
         block, none of this could detect a route that resolved too early.
         """
         via_table, _ = _both_ways(featuretable)
-        resolved = DummySampleTablet(url=str(tmp_path),
+        resolved = DummySampleTablet(datalake=str(tmp_path),
                                   spec=dict(n_samples=via_table.var.n_samples,
                                             source='/lake/tab0.tfrecords'),
                                   tag='tab_0')

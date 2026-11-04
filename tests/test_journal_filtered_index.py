@@ -1,18 +1,18 @@
 """A filtered BuildJournalFrame must be renumbered 0..N-1, not keep its old labels.
 
-``Datablock.BuildJournal`` sorts the concatenated journal newest-first and resets the
-index, so a label is also a position. But ``BuildJournalFrame.__init__`` applied its
-``filter_kwargs`` *after* that reset without renumbering, so a filtered journal
-kept the labels its rows had in the full journal -- while ``loc=`` and
-:meth:`BuildJournalFrame.get` still index by label.
+`Datablock.BuildJournal` sorts the concatenated journal newest-first and resets the
+index, so a label is also a position. But `BuildJournalFrame.__init__` applied its
+`filter_kwargs` *after* that reset without renumbering, so a filtered journal
+kept the labels its rows had in the full journal -- while `loc=` and
+`BuildJournalFrame.get` still index by label.
 
-The result: ``lastbuilt()`` (``journal(event='build:end').get(0)``) raised
-``KeyError: 0`` for any block whose newest journal entry was some *other* event.
+The result: `lastbuilt()` (`journal(event='build:end').get(0)`) raised
+`KeyError: 0` for any block whose newest journal entry was some *other* event.
 That is the normal state for a block whose artifact was copied in rather than
-built -- its newest entry is an ``UNSAFE_copy_from:END``.
+built -- its newest entry is an `UNSAFE_copy_from:END`.
 
 The failure was always loud (label 0 is label 0, so no wrong row was ever
-returned silently) but it made ``lastbuilt()`` unusable exactly when it matters.
+returned silently) but it made `lastbuilt()` unusable exactly when it matters.
 """
 import pytest
 from dataclasses import dataclass
@@ -100,7 +100,7 @@ class TestLastbuilt:
 
 
 class TestLocSelectorWithFilters:
-    """``journal(event=..., loc=0)`` was broken the same way ``lastbuilt`` was."""
+    """`journal(event=..., loc=0)` was broken the same way `lastbuilt` was."""
 
     def test_loc_zero_selects_the_first_filtered_row(self, newest_is_another_event):
         entry = newest_is_another_event.buildjournal(event='build:end', loc=0)
@@ -116,7 +116,7 @@ class TestLocSelectorWithFilters:
 class TestUserSlicingKeepsPandasSemantics:
     """The renumbering is guarded on filter_kwargs, so it must not leak.
 
-    ``running()`` slices with boolean masks and then indexes with ``.iloc``; if
+    `running()` slices with boolean masks and then indexes with `.iloc`; if
     renumbering fired on every construction, a caller relating a slice back to
     the full journal by label would silently get the wrong row.
     """

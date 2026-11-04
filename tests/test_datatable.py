@@ -1,9 +1,9 @@
-"""Tests for the :class:`~dbx.datatables.Datatablet` / :class:`~dbx.datatables.Datatable`
+"""Tests for the `dbx.datatables.Datatablet` / `dbx.datatables.Datatable`
 scaffolding.
 
 Covers TOPICS synthesis from SLICETOPIC entries, where a tablet's shards land relative to
 its table, the all-or-nothing validity rule, the merged per-slice index and its
-ordering, and the two ways a built table reads back (``data`` and ``dataset``).
+ordering, and the two ways a built table reads back (`data` and `dataset`).
 """
 import json
 import os
@@ -41,7 +41,7 @@ def setup_env(monkeypatch):
 # ---------------------------------------------------------------------------
 
 class LetterTablet(Datatablet):
-    """Writes ``n`` items into two lockstep slices, plus a non-slice topic."""
+    """Writes `n` items into two lockstep slices, plus a non-slice topic."""
 
     VERSION = 1
     TOPICS = {'numbers': SLICETOPIC, 'letters': SLICETOPIC, 'note': 'note.txt'}
@@ -237,7 +237,7 @@ class TestBuild:
         assert before == after
 
     def test_staged_build_lands_the_same_data(self, tmp_path):
-        """``stage=True`` is the remote-storage path; on local storage it must
+        """`stage=True` is the remote-storage path; on local storage it must
         produce the same results as writing in place."""
         direct = LetterTable(datalake=str(tmp_path / 'direct'), spec=dict(n_tablets_=1))
         staged = LetterTable(datalake=str(tmp_path / 'staged'), spec=dict(n_tablets_=1))
@@ -283,7 +283,7 @@ class TestBuild:
         assert tablet.validtopic('numbers') is False
 
     def test_an_empty_slice_is_valid(self, tmp_path):
-        """``MDSWriter.finish()`` writes an index.json even when nothing was
+        """`MDSWriter.finish()` writes an index.json even when nothing was
         written through it; presence of index.json counts as built and valid."""
         empty = LetterTable(datalake=str(tmp_path), spec=dict(n_tablets_=1, per_tablet=0))
         tablet = empty.tablet(0)

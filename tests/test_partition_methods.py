@@ -43,7 +43,7 @@ class Slide(Datatablet):
                                        'info': {'cohort': cohort, 'patient': patient}})
 
 
-#: (patient, cohort, rows): 3 cohorts, some patients with two slides, sizes varying 100x.
+# (patient, cohort, rows): 3 cohorts, some patients with two slides, sizes varying 100x.
 SLIDES = [('p1', 'LUAD', 1000), ('p1', 'LUAD', 800), ('p2', 'LUAD', 50), ('p3', 'LUAD', 60),
           ('p4', 'BRCA', 5000), ('p4', 'BRCA', 4000), ('p5', 'BRCA', 70), ('p8', 'BRCA', 90),
           ('p6', 'OV', 40), ('p7', 'OV', 30), ('p7', 'OV', 6000), ('p9', 'OV', 20)]
@@ -238,7 +238,7 @@ class Bag(Datatablet):
 
 COHORTS = ['A', 'B']
 
-#: Six bags: some of one patient, most of several; p2 in two bags; one row of no patient.
+# Six bags: some of one patient, most of several; p2 in two bags; one row of no patient.
 BAGS = [[('p1', 'A'), ('p1', 'A'), ('p2', 'A')],
         [('p3', 'B'), ('p3', 'B')],
         [('p2', 'A'), ('p4', 'B'), ('p4', 'B'), (None, 'B')],

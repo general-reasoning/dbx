@@ -682,10 +682,10 @@ def _unbuilt_without_git(tmp_path, monkeypatch):
 class TestANullColumnReadsAsNone:
     """A column recorded null must read back as None, not as a missing field.
 
-    An entry is a Series built with ``dropna`` (`Datablock.BuildJournal`), so a
+    An entry is a Series built with `dropna` (`Datablock.BuildJournal`), so a
     column whose value was null loses its LABEL -- and attribute access, which
     a Series answers out of its index, raises AttributeError where every
-    reader expects None. ``revision`` and ``gitrepo`` are null on every block
+    reader expects None. `revision` and `gitrepo` are null on every block
     journaled with no git repo configured, which is how `inst()` -- whose
     default is to take the revision the entry recorded -- came to fail on
     exactly the entries that recorded none.
@@ -713,7 +713,7 @@ class TestANullColumnReadsAsNone:
         assert entry.pretty.gitrepo is None
 
     def test_inst_falls_back_to_the_current_environment(self, tmp_path, monkeypatch):
-        """``inst()`` takes the entry's revision, and 'none recorded' is an answer.
+        """`inst()` takes the entry's revision, and 'none recorded' is an answer.
 
         None means the current environment -- what `instantiate()` already
         means by its own default -- not an entry that cannot be instantiated.

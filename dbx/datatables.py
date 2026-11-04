@@ -1376,7 +1376,7 @@ class Datatable(_Database_, Datastack):
         return self.TABLET(
             # The table's own url, RAW -- the specline it was given, not what
             # that resolved to -- so a relocatable table stays relocatable tablet
-            # by tablet. Without it a tablet fell back to DBX_ROOT, and a table built
+            # by tablet. Without it a tablet fell back to DBX_DATALAKE, and a table built
             # anywhere else (a test's tmp_path, a second lake) wrote its tablets to
             # an unrelated root, where they were then looked for in vain.
             datalake=self._datalake_,

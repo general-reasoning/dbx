@@ -68,7 +68,7 @@ class SimpleStack(Datastack):
 
     def __block__(self, idx):
         return CounterBlock(
-            datalake=self.url,
+            datalake=self.datalake,
             spec=dict(idx=idx),
         )
 
@@ -110,7 +110,7 @@ class TestDatastackIsDatablock(unittest.TestCase):
 
     def setUp(self):
         self.tmpdir = tempfile.mkdtemp()
-        os.environ.setdefault('DBX_ROOT', self.tmpdir)
+        os.environ.setdefault('DBX_DATALAKE', self.tmpdir)
         os.environ.setdefault('DBX_DIRTY_REPO_OK', '1')
 
     def test_isinstance(self):
@@ -162,7 +162,7 @@ class TestDatastackBuild(unittest.TestCase):
 
     def setUp(self):
         self.tmpdir = tempfile.mkdtemp()
-        os.environ.setdefault('DBX_ROOT', self.tmpdir)
+        os.environ.setdefault('DBX_DATALAKE', self.tmpdir)
         os.environ.setdefault('DBX_DIRTY_REPO_OK', '1')
 
     def test_inline_build(self):
@@ -265,7 +265,7 @@ class TestDatastackClearBlocks(unittest.TestCase):
 
     def setUp(self):
         self.tmpdir = tempfile.mkdtemp()
-        os.environ.setdefault('DBX_ROOT', self.tmpdir)
+        os.environ.setdefault('DBX_DATALAKE', self.tmpdir)
         os.environ.setdefault('DBX_DIRTY_REPO_OK', '1')
 
     def _build_stack(self, **kwargs):
@@ -447,7 +447,7 @@ class TestDatastackPreStack(unittest.TestCase):
 
     def setUp(self):
         self.tmpdir = tempfile.mkdtemp()
-        os.environ.setdefault('DBX_ROOT', self.tmpdir)
+        os.environ.setdefault('DBX_DATALAKE', self.tmpdir)
         os.environ.setdefault('DBX_DIRTY_REPO_OK', '1')
 
     def test_pre_stack_called_during_build(self):
@@ -468,7 +468,7 @@ class TestDatastackPreStack(unittest.TestCase):
                 return math.ceil(self.var.total_items / self.var.shard_size)
 
             def __block__(self, idx):
-                return CounterBlock(datalake=self.url, spec=dict(idx=idx))
+                return CounterBlock(datalake=self.datalake, spec=dict(idx=idx))
 
             def blocks(self):
                 return [self.__block__(i) for i in range(self.n_blocks)]
@@ -517,7 +517,7 @@ class TestDatastackPreStack(unittest.TestCase):
                 return self.var.n
 
             def __block__(self, idx):
-                return OrderedBlock(datalake=self.url, spec=dict(idx=idx))
+                return OrderedBlock(datalake=self.datalake, spec=dict(idx=idx))
 
             def blocks(self):
                 return [self.__block__(i) for i in range(self.n_blocks)]
@@ -553,7 +553,7 @@ class TestDatastackPreStack(unittest.TestCase):
 class TestValidateAndCustomCallable(unittest.TestCase):
     def setUp(self):
         self.tmpdir = tempfile.mkdtemp()
-        os.environ.setdefault('DBX_ROOT', self.tmpdir)
+        os.environ.setdefault('DBX_DATALAKE', self.tmpdir)
         os.environ.setdefault('DBX_DIRTY_REPO_OK', '1')
 
     def test_validate_default_calls_valid(self):
@@ -600,7 +600,7 @@ class TestValidateAndCustomCallable(unittest.TestCase):
 class TestValidAndRedirectedBlocks(unittest.TestCase):
     def setUp(self):
         self.tmpdir = tempfile.mkdtemp()
-        os.environ.setdefault('DBX_ROOT', self.tmpdir)
+        os.environ.setdefault('DBX_DATALAKE', self.tmpdir)
         os.environ.setdefault('DBX_DIRTY_REPO_OK', '1')
 
     def test_valid_blocks(self):
@@ -696,7 +696,7 @@ class TestValidAndRedirectedBlocks(unittest.TestCase):
                 return 4
 
             def __block__(self, idx):
-                return CustomValidateBlock(datalake=self.url, spec=dict(idx=idx))
+                return CustomValidateBlock(datalake=self.datalake, spec=dict(idx=idx))
 
         stack = CustomValidateStack(
             datalake=os.path.join(self.tmpdir, 'validate_stack'),
@@ -804,7 +804,7 @@ class TestBLOCK:
                 return 1
 
             def __block__(self, idx):
-                return made(datalake=self.url, spec=dict(idx=idx))
+                return made(datalake=self.datalake, spec=dict(idx=idx))
         return S
 
     def test_a_block_of_the_declared_class(self, tmp_path):
@@ -902,7 +902,7 @@ class TestAnchorOnTheClass:
                 return 2
 
             def __block__(self, idx):
-                return CounterBlock(datalake=self.url, spec=dict(idx=idx))
+                return CounterBlock(datalake=self.datalake, spec=dict(idx=idx))
 
         for i in range(2):
             CounterBlock(datalake=str(tmp_path), spec=dict(idx=i)).build()

@@ -1,10 +1,10 @@
 """
-``leave_breadcrumbs_at_path(path, crumbs=None)`` takes a DIRECTORY path.
+`leave_breadcrumbs_at_path(path, crumbs=None)` takes a DIRECTORY path.
 
-It used to be handed ``path(topic)``, which for a directory topic IS the
+It used to be handed `path(topic)`, which for a directory topic IS the
 directory -- so opening it for writing raised IsADirectoryError and
-``leave_breadcrumbs()`` was unusable on any block with one.  Now the caller
-passes ``dirpath(topic)`` and says what to write inside it:
+`leave_breadcrumbs()` was unusable on any block with one.  Now the caller
+passes `dirpath(topic)` and says what to write inside it:
 
     crumbs='data.txt'  ->  {dirpath}/data.txt   (a file topic's own file)
     crumbs=None        ->  {dirpath}.crumbs     (a directory topic's marker)

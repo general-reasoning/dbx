@@ -1,11 +1,11 @@
-"""A redirected block reads somewhere else, through its own ``path()``.
+"""A redirected block reads somewhere else, through its own `path()`.
 
-``UNSAFE_redirect()`` records, in the journal and nowhere else, where this
-block's topics live instead: a ``filter`` selecting a journal entry whose paths
-become this block's (optionally re-keyed by a ``topic_map``), or ``paths``
-naming them outright. :attr:`Datablock.path` then answers with those, so
-everything that resolves through it — ``read``, ``valid``, ``ls``, ``list``,
-``size`` — describes the data actually being read, with no knowledge of
+`UNSAFE_redirect()` records, in the journal and nowhere else, where this
+block's topics live instead: a `filter` selecting a journal entry whose paths
+become this block's (optionally re-keyed by a `topic_map`), or `paths`
+naming them outright. `Datablock.path` then answers with those, so
+everything that resolves through it — `read`, `valid`, `ls`, `list`,
+`size` — describes the data actually being read, with no knowledge of
 redirection anywhere in the way.
 """
 import os
@@ -280,7 +280,7 @@ class TestReadingFollows:
 
 
 class TestTopicMap:
-    """``{'mine': 'theirs'}``: my topic is that entry's."""
+    """`{'mine': 'theirs'}`: my topic is that entry's."""
 
     @pytest.fixture
     def renamed_source(self, tmp_path):
@@ -615,7 +615,7 @@ class TestTheRedirectParameter:
 
 
 class TestDeprecatedValidAliases:
-    """``valid_paths`` and friends; the old spellings still answer."""
+    """`valid_paths` and friends; the old spellings still answer."""
 
     def test_valid_topics(self, tmp_path):
         b = block(tmp_path)

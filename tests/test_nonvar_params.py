@@ -63,7 +63,7 @@ class CustomParamStack(Datastack):
         return self.var.count
 
     def __block__(self, idx):
-        return CustomParamBlock(datalake=self.url, spec=dict(val=idx))
+        return CustomParamBlock(datalake=self.datalake, spec=dict(val=idx))
 
     def __init__(self, *args, devices: list | None = None, device_batch_size: int = 32, **kwargs):
         super().__init__(

@@ -1,13 +1,13 @@
 """A block reads a narrower, already-built block's data instead of rebuilding it.
 
 A class grows a VAR field and a topic. Every block of it re-keys, and the topics
-that did not change are rebuilt for nothing. A :class:`Datablock.Specialization`
+that did not change are rebuilt for nothing. A `Datablock.Specialization`
 says that at a given value of the new field, the topics it names ARE the topics
 of the block this class used to be -- whose identity is this one's with that
 field dropped and those topics alone, and whose hash is therefore reconstructible
 from here. The build is found in the journal by that hash and read in place.
 
-The evolution is modelled as two classes sharing one ``anchor``, because a test
+The evolution is modelled as two classes sharing one `anchor`, because a test
 cannot redefine a class in the middle of itself. A real class keeps its anchor
 by keeping its name, which is the same thing.
 """
@@ -73,7 +73,7 @@ class V3(V2):
 
     `spectra` did not, and neither did the computation behind it -- which is a
     claim only a specialization that names the OLDER version can make. V1
-    declared no VERSION at all, so the value to name is ``None``, which is why
+    declared no VERSION at all, so the value to name is `None`, which is why
     the field's "inherit" default has to be a sentinel rather than None.
     """
 

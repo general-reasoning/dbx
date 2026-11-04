@@ -306,7 +306,7 @@ Don't write job scripts or YAML for a pipeline. A pipeline runs itself:
 there and journals the submission on the pipeline, in the PipeJournal (`CLUSTERS.md`); the same
 `Runner` lists (`runs`, `rundash`) and cancels (`cancel`) its runs, and
 `dbx.runner(<Datablock class or anchor>)` those of every datablock of a class.
-`p.submit('<target>')` is the older spelling. In a one-liner, wait and check:
+In a one-liner, wait and check:
 
 ```bash
 dbx.pprint "(p := <pipeline>).runner('<target>', ...).build_tree().wait() and p.entry.valid()"

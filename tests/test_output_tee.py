@@ -1,11 +1,11 @@
 """
-``OutputTee`` tees fd 1 and 2 to a log file — it does not swallow them.
+`OutputTee` tees fd 1 and 2 to a log file — it does not swallow them.
 
-Two properties matter, and they are the two a ``sys.stdout``-replacing tee
+Two properties matter, and they are the two a `sys.stdout`-replacing tee
 could not deliver together:
 
 1. **Pass-through.** Everything still reaches the real terminal.  Turning on
-   ``capture_output`` must not make a long build go silent.
+   `capture_output` must not make a long build go silent.
 2. **Completeness.** Because the capture is at the file-descriptor level,
    writes from C extensions and subprocesses land in the log too.  A
    Python-level tee sees only what goes through the Python stream object.

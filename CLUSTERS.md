@@ -27,12 +27,6 @@ Contents:
 `datalake=`. It is a local path or an fsspec URL: `/data/lake`,
 `gs://bucket/lake`, `abfss://...`, `ssh://host/path/to/lake`.
 
-`DBX_ROOT` and `DBX_URL` are its names from before the rename. They are
-deprecated but still read, and only when `DBX_DATALAKE` is unset. A plain local
-path left in `DBX_ROOT` therefore does not matter while `DBX_DATALAKE` is set.
-If `DBX_DATALAKE` is unset, that path is read as a local directory on this
-machine.
-
 `DBX_STORAGE_OPTIONS` is passed to fsspec with every datalake path, as
 `key=val;key=val`. It holds what the URL cannot say, such as credentials or an
 ssh config file. If it holds a `protocol`, that protocol overrides the path's.
@@ -40,7 +34,7 @@ ssh config file. If it holds a `protocol`, that protocol overrides the path's.
 To see what a shell will use:
 
 ```bash
-echo "$DBX_DATALAKE | $DBX_ROOT | $DBX_URL | $DBX_STORAGE_OPTIONS"
+echo "$DBX_DATALAKE | $DBX_STORAGE_OPTIONS"
 ```
 
 A journal entry records the environment it was built in, `env`, with the
@@ -385,9 +379,6 @@ returns a `Run` (section 5).
   misspelling fails before anything is sent. `n_gpus` defaults to the pipeline's `n_gpus`, or 0.
 - **A shell command:** `dbx.kube.submit(command, LAMBDA, **options)`, the same Job without a
   pipeline; journaled only when given `block=`.
-- **`Pipeline.submit(target, ...)`** is the older spelling, kept for the commands that use it: any
-  method of the entrypoint called on it is shipped -- `p.submit(t).build_tree()`,
-  `p.submit(t).entry.build()` -- and `runs`, `cancel`, `rundash` are the Runner's.
 
 #### Kube options (`dbx.kube.job`)
 
@@ -559,7 +550,7 @@ the journal, `wait`, `runs`, `command` -- the same for every kind.
 
 ### 8. Not done
 
-- Slurm as a kind (`SlurmCluster`, `SlurmSubmit`, `SlurmRun`), reusing `SlurmRayCluster`.
+- Slurm as a kind (`SlurmCluster`, `SlurmRunner`, `SlurmRun`), reusing `SlurmRayCluster`.
 - Resources declared by the blocks (`EXECUTORS.md` section 3): today `n_gpus` comes from the pipeline's `n_gpus`.
 - Fan-out: one run per tree.
 - `UNSAFE_copy_from` given the source's storage options, rather than `fsspec_defaults`.

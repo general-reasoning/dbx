@@ -2,7 +2,7 @@
 
 A pin leaves a field out of the past rendering only at the value it names. A
 field holding a block that varies with the rest of the VAR -- a mapped feature
-table's ``upstream``, its source's upstream pulled back along its map -- has no
+table's `upstream`, its source's upstream pulled back along its map -- has no
 one value to name. `determined` says which fields fix it, and leaves it out.
 """
 from dataclasses import dataclass
@@ -26,7 +26,7 @@ class Seed(Datablock):
 
 
 class Narrow(Datablock):
-    """The block as it was: an ``x`` alone."""
+    """The block as it was: an `x` alone."""
     TOPICS = {'out': DATAFILE('out.txt')}
 
     @dataclass
@@ -39,7 +39,7 @@ class Narrow(Datablock):
 
 
 class Wide(Datablock):
-    """The block as it is: ``x``, and a block ``derived`` from it -- left out of the past, whatever it holds."""
+    """The block as it is: `x`, and a block `derived` from it -- left out of the past, whatever it holds."""
     TOPICS = {'out': DATAFILE('out.txt')}
     SPECIALIZATIONS = [Datablock.Specialization(
         spec={}, topics={'out': DATAFILE('out.txt')}, anchor=f'{__name__}.Narrow',

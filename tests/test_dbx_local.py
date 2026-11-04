@@ -2,7 +2,7 @@
 Tests for the DBX_LOCAL / local= resolution invariant on Datablock.
 
 Verifies that DBX_LOCAL (and the local= constructor kwarg) is only ever
-consulted when DBX_ROOT/DBX_URL (i.e. datalake=) points at a non-local
+consulted when DBX_DATALAKE (i.e. datalake=) points at a non-local
 filesystem. When datalake= is already local, local=True must be a no-op:
 localfs/localroot alias fs/root regardless of DBX_LOCAL or local=.
 """

@@ -20,7 +20,7 @@ from dbx.journals import BuildJournalFrame, ExecJournalEntry, ExecJournalFrame
 @pytest.fixture(autouse=True)
 def lake(tmp_path, monkeypatch):
     monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
-    monkeypatch.setenv('DBX_ROOT', str(tmp_path))
+    monkeypatch.setenv('DBX_DATALAKE', str(tmp_path))
 
 
 class Built(Datablock):

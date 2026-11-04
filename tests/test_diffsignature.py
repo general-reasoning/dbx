@@ -1,8 +1,8 @@
 """
 Tests for Datablock.diffnorm(other_norm=None, *, journal=None).
 
-The ``journal`` selector dict must carry exactly one of ``id``,
-``iloc``, or ``loc``; the matching journal entry supplies the "other" norm.
+The `journal` selector dict must carry exactly one of `id`,
+`iloc`, or `loc`; the matching journal entry supplies the "other" norm.
 
 Verifies:
 1. A raw other_norm still diffs key-by-key (no journal).
@@ -12,10 +12,10 @@ Verifies:
 5. Comparing a block to its own just-built entry yields no diff.
 6. Supplying none / more than one selector raises ValueError.
 
-``NormBlock`` does not set ``LEGACY_NORM``, so its int spec value renders as
-``{'x': 2}`` -- repr'd once. A ``LEGACY_NORM = True`` block would render the
-same value ``{'x': '2'}``, repr'd twice, which is indistinguishable from the
-string ``'2'``. See :attr:`Datablock.LEGACY_NORM`.
+`NormBlock` does not set `LEGACY_NORM`, so its int spec value renders as
+`{'x': 2}` -- repr'd once. A `LEGACY_NORM = True` block would render the
+same value `{'x': '2'}`, repr'd twice, which is indistinguishable from the
+string `'2'`. See `Datablock.LEGACY_NORM`.
 """
 import pytest
 from dataclasses import dataclass
@@ -42,7 +42,7 @@ class NormBlock(Datablock):
 
 
 def _built_pair(tmp_path):
-    """Build ``a`` (x=1) which writes the journal; return (a, b) where ``b``
+    """Build `a` (x=1) which writes the journal; return (a, b) where `b`
     (x=2) shares the anchor's journal but is not built."""
     a = NormBlock(datalake=str(tmp_path), spec={'x': 1})
     a.build()

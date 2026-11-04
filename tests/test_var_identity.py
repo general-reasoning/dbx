@@ -2,11 +2,11 @@
 
 A block's hash is sha256 of its type string, and the type string renders every
 VAR leaf: a Datablock as its own spec, a specline as the line, and anything
-else through ``repr()``.  For an object with no content-bearing ``__repr__``
-that is ``<C object at 0x...>`` -- a memory address, in the hash.
+else through `repr()`.  For an object with no content-bearing `__repr__`
+that is `<C object at 0x...>` -- a memory address, in the hash.
 
 Which makes the block's identity a function of where it happened to be
-allocated.  ``set()`` is a deepcopy and reconstruct, and `Datastack.block()`
+allocated.  `set()` is a deepcopy and reconstruct, and `Datastack.block()`
 reaches every child through it, so the address moved on every call: the stack
 wrote its children under one key and looked them up under another, found
 nothing, and rebuilt over what it had already written.  Two directories, one
@@ -14,7 +14,7 @@ logical block, no error anywhere.
 
 The check is at `Datablock.VAR.LazyLoader`, the one funnel every VAR value
 passes through before the identity can reach it, and it is structural.  A
-``__repr__`` added to quiet the symptom would leave the hole open: two values
+`__repr__` added to quiet the symptom would leave the hole open: two values
 with different content and one repr collide onto a single hash, and nothing in
 dbx could tell.
 """
@@ -86,7 +86,7 @@ class TestAHashIsAFunctionOfConfigurationAlone:
         assert len(set(hashes)) == 1
 
     def test_a_datablock_held_in_var_does_not_move_it(self, tmp_path):
-        b = block(Held, tmp_path, thing=Upstream(url=str(tmp_path)))
+        b = block(Held, tmp_path, thing=Upstream(datalake=str(tmp_path)))
         assert b.set().set().hash == b.hash
 
     def test_different_configurations_stay_different(self, tmp_path):

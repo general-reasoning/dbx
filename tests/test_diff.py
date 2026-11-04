@@ -1,11 +1,11 @@
-"""``diff()`` — the three components a signature is made of.
+"""`diff()` — the three components a signature is made of.
 
-A ``signature`` is a norm, a version and the topics, joined; a hash is that
-string. So ``diffnorm()``, ``diffversion()`` and ``difftopics()`` between them
-account for every way two blocks can hash differently, and ``diff()`` returns
+A `signature` is a norm, a version and the topics, joined; a hash is that
+string. So `diffnorm()`, `diffversion()` and `difftopics()` between them
+account for every way two blocks can hash differently, and `diff()` returns
 all three at once.
 
-``difftopics()`` compares ``_topics_signature_()`` — the very segments the
+`difftopics()` compares `_topics_signature_()` — the very segments the
 signature is built from — so the two cannot drift: a topic difference the
 signature sees is one the diff reports, and vice versa. The tests here assert
 that equivalence directly, over a spread of TOPICS shapes, rather than trusting
@@ -26,7 +26,7 @@ from dbx.datablocks import (
 @pytest.fixture(autouse=True)
 def setup_env(monkeypatch, tmp_path):
     monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
-    monkeypatch.setenv('DBX_ROOT', str(tmp_path))
+    monkeypatch.setenv('DBX_DATALAKE', str(tmp_path))
 
 
 class Block(Datablock):

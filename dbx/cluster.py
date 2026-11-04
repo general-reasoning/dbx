@@ -17,7 +17,7 @@ looks it up, each time, among the clusters the installed packages name as entry 
 kind -- `target.RUNNER`, e.g. `dbx.kube.KubeRunner` -- whose `build_tree()` (or `ship('<method>',
 ...)`) runs there: `dbx.eval('<the pipeline's quote>').entry.<method>(...)`, under `dbx.pprint`,
 with the entry's datalake as `DBX_DATALAKE`. It returns a `Run`: `status`, `wait`, `logs`,
-`cancel`. (`Pipeline.submit` is the older spelling.)
+`cancel`.
 
 The run is journaled on the pipeline, in the `PipeJournal` of the submitting datalake, each entry
 with the pipeline's `entrypath` and the run's `cluster` and `run` (its id):
@@ -70,7 +70,7 @@ from .databits import default_datalake
 from .journals import BuildJournal, PipeJournal, execjournal
 
 
-__all__ = ['Target', 'Run', 'Runner', 'Submit', 'GROUP', 'cluster', 'clusters', 'runner', 'runs', 'rundash', 'verify']
+__all__ = ['Target', 'Run', 'Runner', 'GROUP', 'cluster', 'clusters', 'runner', 'runs', 'rundash', 'verify']
 
 
 # The entry-point group naming the installed packages' clusters.
@@ -500,32 +500,6 @@ class Runner:
 
     def _create_(self, record: dict) -> None:
         raise NotImplementedError
-
-
-class Submit:
-    """What `Pipeline.submit` hands out, kept for the code and commands that call it: a `Runner` on which any method of the entry is shipped.
-
-    `p.submit(t).build_tree()` and `p.submit(t).entry.build()` are `p.runner(t).ship(...)`; `runs`,
-    `cancel`, `rundash` and `ship` are the Runner's. New code calls `Pipeline.runner`.
-    """
-
-    def __init__(self, runner: Runner):
-        self._runner_ = runner
-
-    def __repr__(self):
-        return f"{type(self).__name__}({self._runner_!r})"
-
-    def __getattr__(self, method: str):
-        if method.startswith('_'):
-            raise AttributeError(method)
-        if method in ('entry', 'entrypoint'):
-            return self
-        if method in ('ship', 'runs', 'cancel', 'rundash', 'pipeline', 'target'):
-            return getattr(self._runner_, method)
-        entry = self._runner_.pipeline.entry
-        if not callable(getattr(type(entry), method, None)):
-            raise AttributeError(f"{type(entry).__name__} has no method {method!r} to submit")
-        return functools.partial(self._runner_.ship, method)
 
 
 def clusters(mode: str | None = None) -> dict:

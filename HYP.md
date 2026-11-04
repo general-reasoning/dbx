@@ -44,8 +44,8 @@ DBX_DATALAKE=ssh://host/path/to/datalake hyp --journal     # or: --journal pipel
 ```
 
 runs `HypDbxJournal`, the specialization of the app over a datalake's
-pipelines. The datalake is dbx's own -- `DBX_DATALAKE`, then the deprecated
-`DBX_ROOT` and `DBX_URL` -- as every block resolves it; hyp names none. Its corpus --
+pipelines. The datalake is dbx's own -- `DBX_DATALAKE` -- as every block
+resolves it; hyp names none. Its corpus --
 embeddings, layout, points -- is kept in the datalake, under
 `{DBX_DATALAKE}/.hyp`, and `--reset` clears it there. `dbx.pipejournal()` reads the pipeline journal and aggregates it --
 one row per pipeline, every run of it, with every entrypoint it was created
@@ -133,7 +133,7 @@ When the corpus cannot be opened, hyp says which one, and where its path came
 from, and stops:
 
 ```
-hyp: cannot open the corpus /home/t-9dkarp/datalake/.hyp (from DBX_ROOT, deprecated: set DBX_DATALAKE instead; read as a local path):
+hyp: cannot open the corpus /home/t-9dkarp/datalake/.hyp (from DBX_DATALAKE; read as a local path):
      OSError: [Errno 45] Operation not supported: '/home/t-9dkarp'
 ```
 

@@ -7,8 +7,8 @@ Hierarchical TOPICS: a dict value may itself be a dict of topics.
     }
 
 Every topic-addressing method takes one name per level -- ``path('data',
-'frames')``, ``read('data', 'annotations')``, ``validtopic('data')``.  A GROUP
-is addressable too: it has a directory, its ``path()`` is the dict of its
+'frames')`, `read('data', 'annotations')`, `validtopic('data')``.  A GROUP
+is addressable too: it has a directory, its `path()` is the dict of its
 members' paths, and its validity is the conjunction of theirs.
 
 The hard constraint is backward compatibility: a flat TOPICS must produce a
@@ -181,7 +181,7 @@ class TestValidity:
 
     def test_valid_covers_the_whole_tree(self, block, built):
         assert built.valid()
-        assert not block.__class__(datalake=block.url + '/elsewhere').valid()
+        assert not block.__class__(datalake=block.datalake + '/elsewhere').valid()
 
 
 class TestReadAndListing:

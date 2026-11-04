@@ -1,7 +1,7 @@
 """MosaicML streaming's shared memory is named per process, in EVERY module that names it.
 
 Each of `prefix`, `util`, `shared` and `dataset` imported `_get_path` by name; patched in
-two of them, a StreamingDataset in every process named its arrays ``000000_*`` -- one
+two of them, a StreamingDataset in every process named its arrays `000000_*` -- one
 segment shared by all, mapped at the wrong size by all but its creator.
 """
 import os

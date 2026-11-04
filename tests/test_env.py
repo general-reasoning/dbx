@@ -20,7 +20,7 @@ from dbx.datablocks import Datablock
 
 @pytest.fixture(autouse=True)
 def setup_env(monkeypatch):
-    monkeypatch.setenv('DBX_ROOT', '/tmp/dbx_test_env')
+    monkeypatch.setenv('DBX_DATALAKE', '/tmp/dbx_test_env')
     monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
     monkeypatch.setenv('TEST_ROOT', '/tmp/test_root_value')
 

@@ -1,19 +1,19 @@
 """
 Backward compatibility for the CONFIG -> VAR rename.
 
-``Datablock.CONFIG`` used to be the name of the spec dataclass and ``.cfg`` /
-``.config`` the name of the instantiated-and-resolved property.  They are now
-``Datablock.VAR`` and ``.var``.  A subclass written against the old names must
+`Datablock.CONFIG` used to be the name of the spec dataclass and `.cfg` /
+`.config` the name of the instantiated-and-resolved property.  They are now
+`Datablock.VAR` and `.var`.  A subclass written against the old names must
 keep working unchanged:
 
-    * ``class CONFIG(Datablock.CONFIG)`` still resolves, and ``__setstate__``
-      binds it to ``self.VAR`` so the rest of the machinery sees it;
-    * ``.cfg`` and ``.config`` remain aliases of ``.var``;
+    * `class CONFIG(Datablock.CONFIG)` still resolves, and `__setstate__`
+      binds it to `self.VAR` so the rest of the machinery sees it;
+    * `.cfg` and `.config` remain aliases of `.var`;
     * neither alias changes the block's identity (spec/hash/key).
 
-The ``validate_cfg`` -> ``validate_vars`` rename keeps no alias, but state
-serialized under the old key is still read.  ``VALIDATE_CFG_EXEMPTIONS`` is
-retired outright in favour of ``TREE_SKIP_VALIDATION``: silently ignoring it
+The `validate_cfg` -> `validate_vars` rename keeps no alias, but state
+serialized under the old key is still read.  `VALIDATE_CFG_EXEMPTIONS` is
+retired outright in favour of `TREE_SKIP_VALIDATION`: silently ignoring it
 would re-enable the very validation it was suppressing, so it raises.
 """
 import copy

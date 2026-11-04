@@ -2,8 +2,8 @@
 
 The training-loop tests really do train: a 72-parameter linear model over a
 synthetic dataset for two epochs, which is fast and is the only way to pin what
-``__build__`` actually leaves behind (checkpoints at both cadences, the
-``done`` topic, a resumable latest).
+`__build__` actually leaves behind (checkpoints at both cadences, the
+`done` topic, a resumable latest).
 """
 import inspect
 import os
@@ -130,8 +130,8 @@ class ToyStill(Still):
     VERSION = 1
 
 
-#: What ToyModelBuilder / ToyLightningBuilder take, as opposed to what the
-#: still itself takes. make_still() routes each kwarg to whichever owns it.
+# What ToyModelBuilder / ToyLightningBuilder take, as opposed to what the
+# still itself takes. make_still() routes each kwarg to whichever owns it.
 MODEL_KNOBS = ('width', 'depth', 'init_ckpt')
 LIGHTNING_KNOBS = ('learning_rate',)
 
@@ -334,12 +334,12 @@ class TestDataloaders:
 
 
 class TestLoaderHardening:
-    """Every loader a still builds must carry its ``dataloader_worker_init_fn``.
+    """Every loader a still builds must carry its `dataloader_worker_init_fn`.
 
     A loader that omits it has no symptom until a forked worker deadlocks on a
     lock copied while held -- possibly hours in. Previously asserted by
-    counting ``DataLoader(`` against ``worker_init_fn=`` in the source of each
-    Still's ``dataloaders``; now structural, since every loader is constructed
+    counting `DataLoader(` against `worker_init_fn=` in the source of each
+    Still's `dataloaders`; now structural, since every loader is constructed
     in one place.
     """
 
@@ -429,12 +429,12 @@ class TestBuild:
 
 
 class TestWarmStart:
-    """``VAR.ckpt`` holding another *block*: its weights, not its run.
+    """`VAR.ckpt` holding another *block*: its weights, not its run.
 
     The failure this prevents is quiet. A full Lightning resume restores the
-    epoch counter too, so a source that already reached its own ``max_epochs``
-    leaves the new run with nothing to do: ``fit()`` returns at once, the
-    ``done`` topic is written, and an untrained model sits at a key that
+    epoch counter too, so a source that already reached its own `max_epochs`
+    leaves the new run with nothing to do: `fit()` returns at once, the
+    `done` topic is written, and an untrained model sits at a key that
     claims to be trained.
     """
 
@@ -529,9 +529,9 @@ class TestWarmStart:
 
 
 class TestLoadWeightsOnly:
-    """The load itself -- what ``strict=False`` will and will not catch.
+    """The load itself -- what `strict=False` will and will not catch.
 
-    Every still here asks for the lenient load explicitly: ``strict_loading``
+    Every still here asks for the lenient load explicitly: `strict_loading`
     defaults to True now, and under it a mismatch raises long before reaching
     the checks these tests are about.
     """
@@ -563,8 +563,8 @@ class TestLoadWeightsOnly:
                                                        monkeypatch):
         """Staged on the host, whatever device saved it.
 
-        A Trainer that fitted on ``cuda:0`` saves CUDA tensors. Honouring that
-        makes the checkpoint unloadable anywhere else -- ``torch.load`` raises
+        A Trainer that fitted on `cuda:0` saves CUDA tensors. Honouring that
+        makes the checkpoint unloadable anywhere else -- `torch.load` raises
         on a CPU-only box, and raises an invalid-device error on a machine with
         fewer GPUs -- and where it does work it holds a second, GPU-resident
         copy of the whole state dict while the model that is about to train
@@ -780,8 +780,8 @@ class TestWeights:
 class TestCheckpointPath:
     """A checkpoint addressed as a file, for when its Still can no longer be built.
 
-    ``ckpt_builder=<Still>`` needs that Still reconstructed, which stops being
-    possible after a ``VERSION`` bump or a module move -- while the checkpoint
+    `ckpt_builder=<Still>` needs that Still reconstructed, which stops being
+    possible after a `VERSION` bump or a module move -- while the checkpoint
     itself is still sitting there and still holds the weights. This names it.
     """
 
@@ -899,7 +899,7 @@ def _trainer_kwargs(root, **kw):
 
 
 class TestDevices:
-    """``devices`` names the devices; ``n_devices`` only ever counted them."""
+    """`devices` names the devices; `n_devices` only ever counted them."""
 
     @pytest.mark.parametrize('spec, accelerator, devices', [
         (['cuda'],            'cuda', 1),
@@ -998,7 +998,7 @@ class TestCheckRun:
 
 
 class TestStrictLoading:
-    """``strict_loading`` on a weights-only load: does this checkpoint fit?"""
+    """`strict_loading` on a weights-only load: does this checkpoint fit?"""
 
     @pytest.fixture(scope='class')
     def ckpt(self, tmp_path_factory):
@@ -1211,7 +1211,7 @@ class TestCheckpointIsWrittenOnceUnderDDP:
         # ckpt_every_n_epochs is a VAR field, so it goes in the spec -- as a
         # constructor kwarg it lands in `parameters` and the default (5) still
         # applies, and on_train_epoch_end returns before saving anything.
-        still = ToyStill(url=str(tmp_path), tag='toy', num_workers=0,
+        still = ToyStill(datalake=str(tmp_path), tag='toy', num_workers=0,
                          spec=dict(toy_builders(tmp_path), ckpt_every_n_epochs=1))
         cb, effects = self._save_fn(still, tmp_path, monkeypatch)
 
@@ -1594,7 +1594,7 @@ class TestTheBuildSyncsOnce:
 
     @pytest.mark.pinned
     def test_a_successful_build_pushes_each_topic_once(self, tmp_path, monkeypatch):
-        still = ToyStill(url=str(tmp_path), tag='toy', num_workers=0,
+        still = ToyStill(datalake=str(tmp_path), tag='toy', num_workers=0,
                          spec=dict(toy_builders(tmp_path), max_epochs=1))
         calls = self._synced(still, monkeypatch)
         assert calls.count('ckpts') == 1, calls
@@ -1708,7 +1708,7 @@ class TestClearingLeavesNothingBehind:
     def _built(self, tmp_path):
         """A still whose staging is a DIFFERENT directory from its storage.
 
-        `Datablock.__init__` sets `self.local = self.url` whenever storage is
+        `Datablock.__init__` sets `self.local = self.datalake` whenever storage is
         already local, so staging IS storage there and the base clear takes
         both -- which is why a toy built the obvious way reported everything
         fine, and why this one needs a non-local protocol to be a test of
@@ -1756,7 +1756,7 @@ class TestClearingLeavesNothingBehind:
 
 
 def test_a_runs_logs_are_linked_by_anchor_and_key(tmp_path):
-    """TensorBoard sees ``<root>/<anchor>/<key>``: the class's name, not ``version=N/<hash>`` alone."""
+    """TensorBoard sees `<root>/<anchor>/<key>`: the class's name, not `version=N/<hash>` alone."""
     base = make_still(tmp_path)
     still = ToyStill(datalake=str(tmp_path), tag='toy', spec=base.spec, num_workers=0,
                      tensorlogs_root=str(tmp_path / 'tb'))

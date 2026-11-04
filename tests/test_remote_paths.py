@@ -1,8 +1,8 @@
 """
-Tests for remote-storage path correctness using the ``memory://`` filesystem.
+Tests for remote-storage path correctness using the `memory://` filesystem.
 
 Verifies that Datablock path methods, journal writing, and validation all work
-correctly when the URL uses a non-local fsspec protocol.  The ``memory://``
+correctly when the URL uses a non-local fsspec protocol.  The `memory://`
 filesystem is used as an in-process mock — no actual remote infrastructure
 is needed.
 
@@ -217,12 +217,12 @@ class TestJournalOnMemory:
         assert isinstance(j, BuildJournalFrame)
         assert len(j) >= 1
 
-    def test_journal_entry_has_correct_url(self, mem_url):
+    def test_journal_entry_has_correct_datalake(self, mem_url):
         block = MemSingleTopic(datalake=mem_url)
         block.build()
         j = block.buildjournal()
         entry = j.get(0)
-        assert entry.pretty.url == mem_url
+        assert entry.pretty.datalake == mem_url
 
     def test_journal_entry_has_correct_hash(self, mem_url):
         block = MemSingleTopic(datalake=mem_url)
@@ -310,7 +310,7 @@ class TestBuildJournalEntryPaths:
         j = block.buildjournal()
         entry = j.get(0)
         # Entry should have url, not root
-        assert entry.pretty.url == mem_url
+        assert entry.pretty.datalake == mem_url
         assert entry.get('root') is None
         # anchorkeypath should start with protocol
         akp = entry.pretty.anchorkeypath

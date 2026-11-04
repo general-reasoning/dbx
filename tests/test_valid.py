@@ -118,7 +118,7 @@ class TestValidCLI:
         b.build()
 
         anchor_str = b.anchor
-        monkeypatch.setattr(sys, 'argv', ['dbx.valid', anchor_str, '--url', str(tmp_path)])
+        monkeypatch.setattr(sys, 'argv', ['dbx.valid', anchor_str, '--datalake', str(tmp_path)])
         res = valid()
         assert res == {anchor_str: True}
         captured = capsys.readouterr()
@@ -131,7 +131,7 @@ class TestValidCLI:
         b.build()
 
         anchor_str = b.anchor
-        monkeypatch.setattr(sys, 'argv', ['dbx.valid', anchor_str, '--summary', '--url', str(tmp_path)])
+        monkeypatch.setattr(sys, 'argv', ['dbx.valid', anchor_str, '--summary', '--datalake', str(tmp_path)])
         res = valid()
         assert res is True
         captured = capsys.readouterr()
@@ -143,7 +143,7 @@ class TestValidCLI:
         b.build()
 
         anchor_str = b.anchor
-        monkeypatch.setattr(sys, 'argv', ['dbx.valid', anchor_str, '--events', 'build:end', 'nonexistent:event', '--url', str(tmp_path)])
+        monkeypatch.setattr(sys, 'argv', ['dbx.valid', anchor_str, '--events', 'build:end', 'nonexistent:event', '--datalake', str(tmp_path)])
         res = valid()
         assert res == {anchor_str: {'build:end': True, 'nonexistent:event': False}}
         captured = capsys.readouterr()

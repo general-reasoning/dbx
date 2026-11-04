@@ -1,4 +1,4 @@
-"""A journal entry records what can be read from its block: ``slices``, its own and upstream, with their columns."""
+"""A journal entry records what can be read from its block: `slices`, its own and upstream, with their columns."""
 import ast
 
 import pytest

@@ -1,8 +1,8 @@
 """
-``(slice, column, key)``: one entry of a column that holds a dict.
+`(slice, column, key)`: one entry of a column that holds a dict.
 
 A slice may carry a column whose value is a dict -- an annotation record, say
--- when what a caller wants is one entry of it. ``dataset()`` and ``data()``
+-- when what a caller wants is one entry of it. `dataset()` and `data()`
 take the triple and pass on only that entry (or, for a list of keys, a dict of
 just those), and a `Datacollator` pair may be the same triple.
 """

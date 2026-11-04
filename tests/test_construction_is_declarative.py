@@ -2,7 +2,7 @@
 Constructing a block writes nothing; only build() alters the datalake.
 
 A specialization used to be installed -- redirected, and recorded in a
-``.redirection`` marker and a journal entry -- as a block was CONSTRUCTED. So
+`.redirection` marker and a journal entry -- as a block was CONSTRUCTED. So
 merely forming a block, or asking whether it was valid, wrote to the lake, and
 paid a journal read for it. Construction is declarative now: resolving and
 installing are build()'s, which the caller sanctions by calling it.

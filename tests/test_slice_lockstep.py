@@ -2,7 +2,7 @@
 
 A tablet's slices are read back by index: sample *i* of one is taken to describe
 what sample *i* of another does.  A tablet that writes one slice and skips another
-for some item -- an early ``continue``, a per-item exception swallowed, a branch
+for some item -- an early `continue`, a per-item exception swallowed, a branch
 that writes two of three -- shifts one slice against the rest from that item on.
 
 Nothing downstream can see it.  A map-mode zip pairs index *i* with index *i*
@@ -11,9 +11,9 @@ another's, no read raises, and the artifacts look exactly like correct ones.
 The training signal is wrong and everything reports success.
 
 So the count is taken on every build.  It used to be installed only when
-`slice_writers` was given ``flush_every``, which made the guarantee a side
+`slice_writers` was given `flush_every`, which made the guarantee a side
 effect of wanting row-sized shards -- a coupling nothing stated and nobody
-would guess, and one a single-slice table or a table not read in ``mode='iter'``
+would guess, and one a single-slice table or a table not read in `mode='iter'`
 had no reason to ask for.
 """
 import shutil
@@ -32,7 +32,7 @@ def setup_env(monkeypatch):
 
 
 class TwoSlices(Datatablet):
-    """Writes ``n`` items into two slices, optionally skipping one item of 'b'."""
+    """Writes `n` items into two slices, optionally skipping one item of 'b'."""
 
     VERSION = 1
     TOPICS = {'a': SLICETOPIC, 'b': SLICETOPIC}

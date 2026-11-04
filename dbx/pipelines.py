@@ -12,8 +12,7 @@ its root -- an entrypoint function -- its arguments the pipeline's VAR: a
 `PipelineFromEntrypointFn`.
 
 `Pipeline.runner` runs a call on the pipeline's entrypoint elsewhere -- a Kueue Job (`dbx.kube`) --
-journals it, and lists, watches and cancels its runs: a `dbx.cluster.Runner`. `Pipeline.submit` is
-the older spelling.
+journals it, and lists, watches and cancels its runs: a `dbx.cluster.Runner`.
 """
 import dataclasses
 import functools
@@ -25,7 +24,7 @@ from .databits import default_datalake
 from .datablocks import SYNTHETIC, Datablock
 from .journals import PipeJournal
 from . import cluster as _cluster_
-from .cluster import Runner, Submit
+from .cluster import Runner
 
 
 __all__ = ['Pipeline', 'PipelineFromEntrypointFn', 'pipeline', 'entrypoint_tag']
@@ -142,14 +141,6 @@ class Pipeline(Datablock):
         """
         return _cluster_.runner(self, target, mode=mode, force=force, **options)
 
-    def submit(self, target, *, mode: str | None = None, force: bool = False, **options) -> 'Submit':
-        """`runner(target, ...)`, as the older spelling had it: a `dbx.cluster.Submit`, any method of the entry shipped when called on it.
-
-            p.submit(LAMBDA).build_tree()            # = p.runner(LAMBDA).build_tree()
-            p.submit(LAMBDA).entry.build()           # = p.runner(LAMBDA).build()
-        """
-        return Submit(self.runner(target, mode=mode, force=force, **options))
-
 
 class PipelineFromEntrypointFn(Pipeline):
     """A Pipeline whose tree -- its entrypoint the root -- an entrypoint function arranges; see `pipeline`."""
@@ -199,21 +190,21 @@ def _camel_(name: str) -> str:
 
 
 def entrypoint_tag(fn, name: str) -> str:
-    """The tag of the root block an entrypoint *fn* builds for *name*: ``module.qualname:name``.
+    """The tag of the root block an entrypoint *fn* builds for *name*: `module.qualname:name`.
 
     *name* selects the preset; the function's qualified name tells apart the pipelines that select by
     the same one. A label to filter journals by -- since dbx keys blocks by 'version_shorthash', not a
     location, so tagging a block that is already built does not move it.
 
     `pipeline` gives the PIPELINE this same tag when its first argument is *name*; the pipeline does
-    not construct the tree, the entrypoint does, so the root's tag is still the entrypoint's to set::
+    not construct the tree, the entrypoint does, so the root's tag is still the entrypoint's to set:
 
         @pipeline(journal=True)
         def my_clip(name, *, datalake=None):
             return MyClip(tag=entrypoint_tag(my_clip, name), datalake=datalake, spec=...)
 
-    An entrypoint must NOT declare a ``tag`` parameter of its own: `pipeline` already passes its tag
-    to the pipeline class, and a second one arrives in ``**ops`` -- two values for one keyword.
+    An entrypoint must NOT declare a `tag` parameter of its own: `pipeline` already passes its tag
+    to the pipeline class, and a second one arrives in `**ops` -- two values for one keyword.
     """
     return f"{fn.__module__}.{fn.__qualname__}:{name}"
 
@@ -252,7 +243,7 @@ def pipeline(fn=None, *, tag: str | None = None, journal: bool = False):
     journaled. Leave it off for the minor pipelines -- collators, factories -- others nest.
 
     This tag is the PIPELINE's. The root block the function returns is tagged by the function, with
-    `entrypoint_tag` -- the same string -- so an entrypoint takes no ``tag`` parameter of its own,
+    `entrypoint_tag` -- the same string -- so an entrypoint takes no `tag` parameter of its own,
     which would reach the pipeline class twice.
 
     A call is cached by ALL its arguments, as `functools.cache` would cache it, for the life of the

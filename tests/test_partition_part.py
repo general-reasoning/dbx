@@ -50,7 +50,7 @@ class DummyTable(Datatable):
     def __tablet__(self, idx):
         offset = sum(self.var.tablet_sizes[:idx])
         # Through super(), so the tablet inherits the table's url. Constructing
-        # self.TABLET directly leaves url unset, and the tablet lands under DBX_ROOT
+        # self.TABLET directly leaves url unset, and the tablet lands under DBX_DATALAKE
         # instead of under the table it belongs to.
         return super().__tablet__(
             idx,

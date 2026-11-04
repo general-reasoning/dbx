@@ -66,7 +66,7 @@ class DummySampleTable(Datatable):
 
     def __tablet__(self, idx: int) -> DummySampleTablet:
         return self.TABLET(
-            datalake=self.url,
+            datalake=self.datalake,
             spec=dict(n_samples=self.var.samples_per_tablet, index=idx),
             tag=f"tab_{idx}",
         )
@@ -423,7 +423,7 @@ def test_datacollator():
 
 
 def test_datacollator_without_labels():
-    """No ``labels`` role, or one that is None: a collator of signals alone reads no label slice."""
+    """No `labels` role, or one that is None: a collator of signals alone reads no label slice."""
     from dbx.datatables import Datacollator
 
     rows = [{"samples": {"samples": np.ones((5, 4), dtype=np.float32) * i}} for i in range(2)]
@@ -598,7 +598,7 @@ def test_a_collator_quotes_as_a_block_not_as_a_function():
     """`dbx.quote(collator)` asked callable() first, and a Datacollator is callable.
 
     It then tried to render the INSTANCE as a function, by a __qualname__ it
-    does not have -- which is how a pipeline passing ``collator=dbx.quote(c)``
+    does not have -- which is how a pipeline passing `collator=dbx.quote(c)`
     died before building anything.
     """
     import dbx

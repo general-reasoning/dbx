@@ -198,8 +198,8 @@ def test_a_tag_is_a_label_not_a_location(lake, tmp_path):
     """`keyby='version_shorthash'` is the default, so tagging a block does not move it
     -- which is what makes it safe to tag blocks that are already built. A Datatablet
     keeps 'tag_version_shorthash' and is deliberately not covered here."""
-    untagged = Leaf(url=str(tmp_path), spec={'n': 1})
-    tagged = Leaf(url=str(tmp_path), spec={'n': 1}, tag='pkg.fn:preset')
+    untagged = Leaf(datalake=str(tmp_path), spec={'n': 1})
+    tagged = Leaf(datalake=str(tmp_path), spec={'n': 1}, tag='pkg.fn:preset')
     assert untagged.hash == tagged.hash
     assert untagged.key == tagged.key
     assert untagged.anchorkeypath == tagged.anchorkeypath

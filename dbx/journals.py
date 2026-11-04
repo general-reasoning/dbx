@@ -1900,6 +1900,18 @@ class Pretty:
 
     # 2. Declared API ------------------------------------------------------
 
+    @classmethod
+    def of(cls, block) -> 'Pretty':
+        """*block* as an entry written for it now would read: `Datablock.pretty`.
+
+        Over what `BuildJournal.write` records of a block (`_block_record_`),
+        held in memory and written nowhere, so `block.pretty.quote()` is the
+        `quote()` of the entry its next build writes.
+        """
+        record = BuildJournal._block_record_(block)
+        return cls(BuildJournalEntry(pd.Series(record, dtype=object),
+                                     storage_options=getattr(block, 'storage_options', None)))
+
     def signaturestr(self, *, deslash: bool = False, **kwargs):
         """The recorded signature TEXT.
 
@@ -1978,26 +1990,32 @@ class Pretty:
         """
         return list(self._dict_column_(self._entry, 'topics', parse=datablocks.literal_topics))
 
-    def quote(self, *, pretty: bool = True, deslash: bool | None = None):
+    def quote(self, *, pretty: bool = True, deslash: bool | None = None, specline: bool = True):
         """The recorded `Datablock.quote`, laid out to be read as a cite is, or None.
 
         *pretty* lays it out as `Datablock.cite` does (`cite_specline`): a
         keyword a line, every nested block an indented block of its own,
         nothing left escaped. `pretty=False` is the TEXT as recorded -- the
         evaluable specline. *deslash* strips backslashes: by default when
-        *pretty*, as `cite` does, and not otherwise. The row's `quote` column
-        holds the path to the file it was written to.
+        *pretty*, as `cite` does, and not otherwise. `specline=False` drops
+        the leading specline anchor -- `$`, `@` or `#` -- leaving the call.
         """
         text = self._recorded_text_('quote', False)
         if text is None:
             return None
         if pretty:
-            return cite_specline(text, deslash=True if deslash is None else deslash)
-        return text.replace('\\', '') if deslash else text
+            text = cite_specline(text, deslash=True if deslash is None else deslash)
+        elif deslash:
+            text = text.replace('\\', '')
+        return text if specline else self._unanchored_(text)
 
-    def cite(self, *, deslash: bool = False):
-        """The recorded `Datablock.cite` TEXT, or None. The path is the row's `cite` column."""
-        return self._recorded_text_('cite', deslash)
+    def cite(self, *, deslash: bool = False, specline: bool = True):
+        """The recorded `Datablock.cite` TEXT, or None.
+
+        `specline=False` drops the leading specline anchor -- `$`, `@` or `#` -- leaving the call.
+        """
+        text = self._recorded_text_('cite', deslash)
+        return text if specline or text is None else self._unanchored_(text)
 
     def repr(self, *, deslash: bool = False):
         """The recorded `Datablock.repr` TEXT -- every kwarg the block had -- or None.
@@ -2349,6 +2367,12 @@ class Pretty:
             parts.append(hash[:8] if (keyby == 'tag_version_shorthash' or parts) else hash)
             return '/'.join(parts)
         return hash  # fallback
+
+    @staticmethod
+    def _unanchored_(text):
+        """*text* without its leading specline anchor -- `$`, `@` or `#` -- if it has one."""
+        stripped = text.lstrip()
+        return stripped[1:] if stripped[:1] in ('$', '@', '#') else text
 
     def _recorded_text_(self, column, deslash):
         """The text of the side file *column* names, or None when the row has none."""
@@ -3350,16 +3374,7 @@ class BuildJournal:
         # does no capturing of its own. Its path is recorded before it exists:
         # a capture is uploaded when it closes, after the build that wrote here.
         capture = OutputCapture.current()
-        #
-        _TOPICS = getattr(block, 'TOPICS', None)
-        topics_dict = ({name: copy.deepcopy(node) for name, node in _TOPICS.items()}
-                       if isinstance(_TOPICS, dict)
-                       else {topic: datablocks.DIRTOPIC for topic in block.topics()})
-        paths_dict = block.paths()
-        # What can be read from it, which a table's TOPICS do not say: its tablets' slices, and upstream's.
-        readable = getattr(block, 'readable_slices', None)
-        slices_dict = readable() if readable is not None else None
-        #
+        record = cls._block_record_(block)
         # A file per entry, named by it: no entry overwrites another, whatever instance writes it.
         journal_dir = cls.dirpath(block, 'journal')
         cls._lake_(block)[0].makedirs(journal_dir, exist_ok=True)
@@ -3368,33 +3383,17 @@ class BuildJournal:
         df = pd.DataFrame.from_records([{'datetime': dt,
                                          'build:start:datetime': block._build_start_dt,
                                          'build:end:datetime': block._build_end_dt,
-                                         'version': block.version,
-                                         'dbx_version': block.dbx_version,
-                                         'revision': block.revision, 
-                                         'datalake': block.datalake,
-                                         'anchor': block.anchor,
-                                         'hash': block.hash,
-                                         'keyby': block.keyby,
-                                         'key': block.key,
-                                         'anchorkeypath': block.anchorkeypath,
-                                         'code': block.code,
-                                         'tree': block.tree,
+                                         **{k: record[k] for k in ('version', 'dbx_version', 'revision', 'datalake',
+                                                              'anchor', 'hash', 'keyby', 'key', 'anchorkeypath',
+                                                              'code', 'tree')},
                                          'session': dj.session,
                                          'id': entry_id,
-                                         'tag': block.tag,
-                                         'topics': str(topics_dict),
-                                         'paths': str(paths_dict),
-                                         'slices': str(slices_dict) if slices_dict is not None else None,
+                                         **{k: record[k] for k in ('tag', 'topics', 'paths', 'slices')},
                                          'log': capture.path if capture is not None else None,
                                          'event': event,
                                          'redirection': redirection_value,
-                                         'spec': _yaml_text_(block.spec),
-                                         'kwargs': _yaml_text_(block.kwargs),
-                                         'quote': block.quote(),
-                                         'cite': block.cite(),
-                                         'signature': block.signaturestr(),
-                                         'type': block.typestr(),
-                                         'repr': block.repr(),
+                                         **{k: record[k] for k in ('spec', 'kwargs', 'quote', 'cite', 'signature',
+                                                              'type', 'repr')},
                                          'env': _yaml_text_(recorded_env()),
                                          'note': note_val,
                                          'gitrepo': databits.DBX_GIT_REPO,
@@ -3508,6 +3507,44 @@ class BuildJournal:
         return self._session
 
     # 4. Helpers -----------------------------------------------------------
+
+    @staticmethod
+    def _block_record_(block) -> dict:
+        """What an entry records of *block* itself, column by column, as `write` records it.
+
+        The block's half of an entry: not the moment (`datetime`, `event`,
+        `session`, `id`), nor the process (`env`, `log`, `host`). A live
+        block's `pretty` is a `Pretty` over this, so it reads as an entry
+        written for it now would.
+        """
+        TOPICS = getattr(block, 'TOPICS', None)
+        topics = ({name: copy.deepcopy(node) for name, node in TOPICS.items()} if isinstance(TOPICS, dict)
+                  else {topic: datablocks.DIRTOPIC for topic in block.topics()})
+        # What can be read from it, which a table's TOPICS do not say: its tablets' slices, and upstream's.
+        readable = getattr(block, 'readable_slices', None)
+        slices = readable() if readable is not None else None
+        return {'version': block.version,
+                'dbx_version': block.dbx_version,
+                'revision': block.revision,
+                'datalake': block.datalake,
+                'anchor': block.anchor,
+                'hash': block.hash,
+                'keyby': block.keyby,
+                'key': block.key,
+                'anchorkeypath': block.anchorkeypath,
+                'code': block.code,
+                'tree': block.tree,
+                'tag': block.tag,
+                'topics': str(topics),
+                'paths': str(block.paths()),
+                'slices': str(slices) if slices is not None else None,
+                'spec': _yaml_text_(block.spec),
+                'kwargs': _yaml_text_(block.kwargs),
+                'quote': block.quote(),
+                'cite': block.cite(),
+                'signature': block.signaturestr(),
+                'type': block.typestr(),
+                'repr': block.repr()}
 
     @classmethod
     def _read_block_(cls, ref, anchor, *, storage_options, log, n_workers):

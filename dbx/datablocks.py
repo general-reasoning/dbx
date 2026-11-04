@@ -5444,6 +5444,18 @@ class Datablock:
     # 3. Accessors ---------------------------------------------------------
 
     @property
+    def pretty(self) -> 'Pretty':
+        """This block as its journal entry reads it: the `Pretty` an entry written for it now would have.
+
+        `blk.pretty.quote()` is `entry.pretty.quote()` of the entry its next
+        build writes -- laid out as a cite is -- and so for `cite`, `repr`,
+        `paths()`, `signature()` and the rest. Made afresh at every access,
+        from the block as it is then; nothing is read from the journal or
+        written to it.
+        """
+        return Pretty.of(self)
+
+    @property
     def url(self) -> str:
         """The name `datalake` had first."""
         return self.datalake

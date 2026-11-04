@@ -51,9 +51,12 @@ import datetime
 import functools
 import importlib
 import json
+import os
 import time
 import uuid
 from importlib import metadata
+
+from .journals import BuildJournal, execjournal
 
 
 __all__ = ['Target', 'Run', 'Submit', 'target', 'targets', 'runs', 'verify']
@@ -65,57 +68,6 @@ class Target:
     MODE: str = None
     SUBMIT: type = None
     name: str
-
-
-def _flatten_(obj) -> list:
-    """The Targets in an entry point's object: a Target, or a dict or iterable of them."""
-    if isinstance(obj, Target):
-        return [obj]
-    return [t for t in (obj.values() if isinstance(obj, dict) else obj) if isinstance(t, Target)]
-
-
-def targets(mode: str | None = None) -> dict:
-    """The targets the installed packages name as `dbx.targets` entry points, by name -- of kind *mode* only, when given."""
-    found = [t for ep in metadata.entry_points(group='dbx.targets') for t in _flatten_(ep.load())]
-    return {t.name: t for t in found if mode is None or t.MODE == mode}
-
-
-def target(t: 'str | Target', mode: str | None = None) -> Target:
-    """*t* when a Target, else the one of that name among `targets()`; of kind *mode* when given."""
-    if isinstance(t, str):
-        named = targets()
-        if t not in named:
-            raise KeyError(f"No target {t!r} among the 'dbx.targets' entry points' {sorted(named)}: pass the "
-                           f"target itself (e.g. a dbx.kube.Cluster), or name it in a package's 'dbx.targets' "
-                           f"entry point")
-        t = named[t]
-    if mode is not None and t.MODE != mode:
-        raise ValueError(f"Target {t.name!r} is {t.MODE!r}, not {mode!r}")
-    return t
-
-
-_target_of_ = target  # For Submit, whose argument is named target.
-
-
-def _spec_(t: Target) -> dict | None:
-    """*t* as JSON -- its class and its fields -- when a dataclass; what `_rebuild_` makes it again from."""
-    if not dataclasses.is_dataclass(t):
-        return None
-    return {'class': f"{type(t).__module__}:{type(t).__qualname__}",
-            'fields': {f.name: getattr(t, f.name) for f in dataclasses.fields(t) if f.init}}
-
-
-def _rebuild_(record: dict) -> Target:
-    """The target a journaled record ran on: from its `target_spec`, else (an older record) by its name."""
-    spec = record.get('target_spec')
-    if not spec:
-        return target(record['target'])
-    module, qualname = spec['class'].split(':')
-    cls = functools.reduce(getattr, qualname.split('.'), importlib.import_module(module))
-    fields = {f.name: f for f in dataclasses.fields(cls)}
-    kw = {k: tuple(v) if isinstance(v, list) and isinstance(fields[k].default, tuple) else v
-          for k, v in spec['fields'].items() if k in fields}
-    return cls(**kw)
 
 
 class Run:
@@ -173,7 +125,6 @@ class Run:
 
         `.output()` on it prints what the run printed. The row is written when the run ends.
         """
-        from .journals import execjournal
         session = self.record.get('run_session')
         if not session:
             raise LookupError(f"{self!r} was not given a session of its own to run under: no row to find")
@@ -311,16 +262,24 @@ class Submit:
         raise NotImplementedError
 
 
-def verify(block, hash: str) -> dict:
-    """What a `dry_run='cluster'` run reports: *block*, evaluated there, has *hash*; where it is, and whether it is valid there.
+def targets(mode: str | None = None) -> dict:
+    """The targets the installed packages name as `dbx.targets` entry points, by name -- of kind *mode* only, when given."""
+    found = [t for ep in metadata.entry_points(group='dbx.targets') for t in _flatten_(ep.load())]
+    return {t.name: t for t in found if mode is None or t.MODE == mode}
 
-    Raises ValueError when the hash differs -- code or configuration there that is not here.
-    """
-    import dbx
-    if block.hash != hash:
-        raise ValueError(f"{type(block).__name__} evaluates to hash {block.hash} here, not {hash} as where it "
-                         f"was submitted from: the code or its configuration differs")
-    return dict(hash=block.hash, anchorkeypath=block.anchorkeypath, valid=block.valid(), dbx=dbx.__file__)
+
+def target(t: 'str | Target', mode: str | None = None) -> Target:
+    """*t* when a Target, else the one of that name among `targets()`; of kind *mode* when given."""
+    if isinstance(t, str):
+        named = targets()
+        if t not in named:
+            raise KeyError(f"No target {t!r} among the 'dbx.targets' entry points' {sorted(named)}: pass the "
+                           f"target itself (e.g. a dbx.kube.Cluster), or name it in a package's 'dbx.targets' "
+                           f"entry point")
+        t = named[t]
+    if mode is not None and t.MODE != mode:
+        raise ValueError(f"Target {t.name!r} is {t.MODE!r}, not {mode!r}")
+    return t
 
 
 def runs(block) -> list:
@@ -329,7 +288,7 @@ def runs(block) -> list:
     A run whose `submit:END`, `submit:ERROR` or `submit:CANCEL` is journaled is closed: its `wait`
     journals nothing more. Its target is rebuilt from the record.
     """
-    from .pipelines import Pipeline
+    from .pipelines import Pipeline  # pipelines imports this module
     if isinstance(block, Pipeline):
         block = block.entry
     try:
@@ -351,6 +310,52 @@ def runs(block) -> list:
     return out
 
 
+def verify(block, hash: str) -> dict:
+    """What a `dry_run='cluster'` run reports: *block*, evaluated there, has *hash*; where it is, and whether it is valid there.
+
+    Raises ValueError when the hash differs -- code or configuration there that is not here.
+    """
+    if block.hash != hash:
+        raise ValueError(f"{type(block).__name__} evaluates to hash {block.hash} here, not {hash} as where it "
+                         f"was submitted from: the code or its configuration differs")
+    return dict(hash=block.hash, anchorkeypath=block.anchorkeypath, valid=block.valid(), dbx=os.path.dirname(os.path.abspath(__file__)))
+
+
+# Helpers ------------------------------------------------------------------------------------------- #
+
+def _target_of_(t, mode=None) -> Target:
+    # For Submit, whose argument named target shadows the function.
+    return target(t, mode)
+
+
+def _flatten_(obj) -> list:
+    """The Targets in an entry point's object: a Target, or a dict or iterable of them."""
+    if isinstance(obj, Target):
+        return [obj]
+    return [t for t in (obj.values() if isinstance(obj, dict) else obj) if isinstance(t, Target)]
+
+
+def _spec_(t: Target) -> dict | None:
+    """*t* as JSON -- its class and its fields -- when a dataclass; what `_rebuild_` makes it again from."""
+    if not dataclasses.is_dataclass(t):
+        return None
+    return {'class': f"{type(t).__module__}:{type(t).__qualname__}",
+            'fields': {f.name: getattr(t, f.name) for f in dataclasses.fields(t) if f.init}}
+
+
+def _rebuild_(record: dict) -> Target:
+    """The target a journaled record ran on: from its `target_spec`, else (an older record) by its name."""
+    spec = record.get('target_spec')
+    if not spec:
+        return target(record['target'])
+    module, qualname = spec['class'].split(':')
+    cls = functools.reduce(getattr, qualname.split('.'), importlib.import_module(module))
+    fields = {f.name: f for f in dataclasses.fields(cls)}
+    kw = {k: tuple(v) if isinstance(v, list) and isinstance(fields[k].default, tuple) else v
+          for k, v in spec['fields'].items() if k in fields}
+    return cls(**kw)
+
+
 def _literal_(value) -> bool:
     """Whether *value* survives `repr` and `ast.literal_eval`: what a shipped call's arguments must."""
     try:
@@ -360,5 +365,4 @@ def _literal_(value) -> bool:
 
 
 def _session_() -> str:
-    from .journals import BuildJournal
     return str(BuildJournal.current().session)

@@ -193,6 +193,29 @@ class TestWorkdirs:
         cluster.storage = {}
         assert cluster.url('/mnt/team/a') == '/mnt/team/a'
 
+    def test_storage_options_are_a_dict_or_a_function_named_as_data(self, cluster):
+        cluster.storage_options = {'username': 'u'}
+        assert cluster.fsspec_options() == {'username': 'u'}
+        cluster.storage_options = 'tests.test_kube:_sftp_options_'
+        assert cluster.fsspec_options() == {'username': 'from-a-function'}
+        assert dbxcluster._rebuild_({'target_spec': dbxcluster._spec_(cluster)}) == cluster
+
+    def test_fsspec_defaults_hold_only_while_inside(self, cluster):
+        import fsspec
+        cluster.storage, cluster.storage_options = {'/mnt/team': 'sftp://host/data'}, {'username': 'u'}
+        before = fsspec.config.conf.get('sftp')
+        with cluster.fsspec_defaults():
+            assert fsspec.config.conf['sftp'] == {'username': 'u'}
+        assert fsspec.config.conf.get('sftp') == before
+
+    def test_a_synced_workdir_is_opened_with_the_clusters_options(self, cluster, kubectl, monkeypatch, tmp_path):
+        seen = []
+        monkeypatch.setattr(kube, 'sync', lambda src, url, *, storage_options: seen.append((url, storage_options)) or
+                            dict(files=0, bytes=0, skipped=0))
+        cluster.storage, cluster.storage_options = {'/mnt/team': 'sftp://host/data'}, {'username': 'u'}
+        kube.submit('true', cluster, workdirs={str(tmp_path): '/mnt/team/code'})
+        assert seen == [('sftp://host/data/code', {'username': 'u'})]
+
     def test_sync_copies_what_changed_keeps_modes_and_links(self, tmp_path):
         src, dst = tmp_path / 'src', tmp_path / 'dst'
         (src / 'bin').mkdir(parents=True)
@@ -509,3 +532,7 @@ class TestKubedash:
     def test_the_console_script_prints_the_table(self, queues, capsys):
         assert kube.kubedash_main(['b', '-q', 'team']) is None
         assert 'team-q' in capsys.readouterr().out
+
+
+def _sftp_options_():
+    return {'username': 'from-a-function'}

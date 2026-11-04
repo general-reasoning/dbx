@@ -21,7 +21,6 @@ This is the fan-out within one process's work -- a block's build across a node's
 import contextlib
 import os
 import sys
-import warnings
 
 from . import anyscale
 
@@ -30,18 +29,9 @@ __all__ = ['run']
 
 
 def run(fn, calls: list[dict], *, log_dir: str, n_gpus: float = 1, n_cpus: float = 4,
-        env: dict | None = None, working_dir: str | None = None, address: str | None = 'auto',
-        num_gpus: float | None = None, num_cpus: float | None = None) -> list:
-    """Call *fn* once per kwargs in *calls*, each as a Ray task with *n_gpus* and *n_cpus*; their results, in order.
-
-    *num_gpus* and *num_cpus* are those two's names before 2026-11-04 (Ray's), still taken with a warning.
-    """
+        env: dict | None = None, working_dir: str | None = None, address: str | None = 'auto') -> list:
+    """Call *fn* once per kwargs in *calls*, each as a Ray task with *n_gpus* and *n_cpus*; their results, in order."""
     import ray  # Heavy, and only this path needs it.
-    if num_gpus is not None or num_cpus is not None:
-        warnings.warn("dbx.gpu.run: num_gpus= and num_cpus= are now n_gpus= and n_cpus=", DeprecationWarning,
-                      stacklevel=2)
-        n_gpus = n_gpus if num_gpus is None else num_gpus
-        n_cpus = n_cpus if num_cpus is None else num_cpus
     runtime_env = {'py_executable': sys.executable, 'env_vars': dict(env or {})}
     working_dir = working_dir or (anyscale.working_dir() if anyscale.present() else None)
     if working_dir:

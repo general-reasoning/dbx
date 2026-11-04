@@ -13,8 +13,6 @@ looks it up, each time, among the clusters the installed packages name as entry 
     [project.entry-points."dbx.clusters"]
     myproject = "myproject.clusters:CLUSTERS"
 
-(The group was `dbx.targets` until 2026-11-04; it is still read, with a DeprecationWarning.)
-
 `Pipeline.runner(target, **options)` hands out the pipeline's runs as a `Runner` of the target's
 kind -- `target.RUNNER`, e.g. `dbx.kube.KubeRunner` -- whose `build_tree()` (or `ship('<method>',
 ...)`) runs there: `dbx.eval('<the pipeline's quote>').entry.<method>(...)`, under `dbx.pprint`,
@@ -63,7 +61,6 @@ import re
 import sys
 import time
 import uuid
-import warnings
 from importlib import metadata
 
 import pandas as pd
@@ -73,16 +70,11 @@ from .databits import default_datalake
 from .journals import BuildJournal, PipeJournal, execjournal
 
 
-__all__ = ['Target', 'Run', 'Runner', 'Submit', 'GROUP', 'RENAMED_OPTIONS', 'cluster', 'clusters', 'renamed_options',
-           'runner', 'runs', 'rundash', 'verify']
+__all__ = ['Target', 'Run', 'Runner', 'Submit', 'GROUP', 'cluster', 'clusters', 'runner', 'runs', 'rundash', 'verify']
 
 
-# A run's resource options as they were named before 2026-11-04 (skill naming-counts): still taken, with a warning.
-RENAMED_OPTIONS = {'gpus': 'n_gpus', 'cpus': 'n_cpus', 'gib': 'mem_gib'}
-
-# The entry-point group naming the installed packages' clusters, and its name before 2026-11-04.
+# The entry-point group naming the installed packages' clusters.
 GROUP = 'dbx.clusters'
-_OLD_GROUP_ = 'dbx.targets'
 
 
 class Target:
@@ -259,7 +251,6 @@ class Runner:
         self._dblk_ = what.entry if self._pipeline_ is not None else (
             what if what is not None and not isinstance(what, (str, type)) else None)
         self._datalake_ = datalake or getattr(self._dblk_, 'datalake', None)
-        options = renamed_options(options)
         if self._target_ is not None:
             self._check_(options)
         self._options_ = options
@@ -538,18 +529,8 @@ class Submit:
 
 
 def clusters(mode: str | None = None) -> dict:
-    """The clusters the installed packages name as `dbx.clusters` entry points, by name -- of kind *mode* only, when given.
-
-    Entry points of the group's old name, `dbx.targets`, count too, with a DeprecationWarning; a name
-    in both is `dbx.clusters`'.
-    """
-    old = metadata.entry_points(group=_OLD_GROUP_)
-    if old:
-        warnings.warn(f"entry points of group {_OLD_GROUP_!r} ({', '.join(sorted(ep.name for ep in old))}): rename "
-                      f"the group {GROUP!r} in the package's pyproject.toml, and reinstall it", DeprecationWarning,
-                      stacklevel=2)
-    found = [t for group in (_OLD_GROUP_, GROUP) for ep in metadata.entry_points(group=group)
-             for t in _flatten_(ep.load())]
+    """The clusters the installed packages name as `dbx.clusters` entry points, by name -- of kind *mode* only, when given."""
+    found = [t for ep in metadata.entry_points(group=GROUP) for t in _flatten_(ep.load())]
     return {t.name: t for t in found if mode is None or t.MODE == mode}
 
 
@@ -564,19 +545,6 @@ def cluster(t: 'str | Target', mode: str | None = None) -> Target:
     if mode is not None and t.MODE != mode:
         raise ValueError(f"Target {t.name!r} is {t.MODE!r}, not {mode!r}")
     return t
-
-
-def renamed_options(options: dict) -> dict:
-    """*options* with each `RENAMED_OPTIONS` old name as its new one, warning that it was used; both given is an error."""
-    old = [k for k in options if k in RENAMED_OPTIONS]
-    if not old:
-        return options
-    both = [k for k in old if RENAMED_OPTIONS[k] in options]
-    if both:
-        raise TypeError(f"options {', '.join(f'{k}= and {RENAMED_OPTIONS[k]}=' for k in both)}: give the second only")
-    warnings.warn(f"options {', '.join(f'{k}=' for k in old)} are now "
-                  f"{', '.join(f'{RENAMED_OPTIONS[k]}=' for k in old)}", DeprecationWarning, stacklevel=3)
-    return {RENAMED_OPTIONS.get(k, k): v for k, v in options.items()}
 
 
 def runner(what, target: 'str | Target | None' = None, *, mode: str | None = None, force: bool = False,
@@ -725,10 +693,8 @@ def _rebuild_(record: dict) -> Target:
     module, qualname = spec['class'].split(':')
     cls = functools.reduce(getattr, qualname.split('.'), importlib.import_module(module))
     fields = {f.name: f for f in dataclasses.fields(cls)}
-    renamed = getattr(cls, 'RENAMED_FIELDS', {})       # a record written before a field was renamed
-    given = {renamed.get(k, k): v for k, v in spec['fields'].items()}
     kw = {k: tuple(v) if isinstance(v, list) and isinstance(fields[k].default, tuple) else v
-          for k, v in given.items() if k in fields}
+          for k, v in spec['fields'].items() if k in fields}
     return cls(**kw)
 
 

@@ -38,7 +38,6 @@ import weakref
 import types
 from typing import Union, Optional, Sequence, Callable
 import uuid
-import warnings as _warnings_
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import numpy as np
@@ -3363,8 +3362,7 @@ class SlurmRayCluster:
     """
 
     def __init__(self, n_gpus=0, mem='8G', n_cpus=1, partition=None, n_nodes=1, nodelist=None, time='01:00:00',
-                 log=_datalog_(), **renamed):
-        n_gpus, n_cpus, n_nodes = _slurm_renamed_(renamed, n_gpus=n_gpus, n_cpus=n_cpus, n_nodes=n_nodes)
+                 log=_datalog_()):
         self.log = log
         self.job_id = None
         self.ray_address = None
@@ -4160,14 +4158,10 @@ def remote(*, revision=None, slurm=None, conda=None, address=None, shared_repo=N
     return Remote(revision=worker_revision, slurm=slurm)
 
 def slurm_remote(*, revision=None, conda=None, n_gpus=0, mem='8G', n_cpus=1, partition=None, n_nodes=1, nodelist=None,
-                 time='01:00:00', log: 'Datalog' = _datalog_(), **renamed):
+                 time='01:00:00', log: 'Datalog' = _datalog_()):
     """
     Start a Slurm job with a Ray cluster and return a Remote handle to it.
-
-    *gpus*, *cpus* and *nodes*, the names of *n_gpus*, *n_cpus* and *n_nodes* before 2026-11-04, are still
-    taken, with a warning.
     """
-    n_gpus, n_cpus, n_nodes = _slurm_renamed_(renamed, n_gpus=n_gpus, n_cpus=n_cpus, n_nodes=n_nodes)
     cluster = SlurmRayCluster(n_gpus=n_gpus, mem=mem, n_cpus=n_cpus, partition=partition, n_nodes=n_nodes,
                               nodelist=nodelist, time=time, log=log)
     return remote(revision=revision, slurm=cluster, conda=conda, log=log)
@@ -4192,9 +4186,6 @@ def slurm_exec(s=None, *, revision=None, conda=None, n_gpus=0, mem='8G', n_cpus=
         'revision': revision, 'conda': conda, 'n_gpus': n_gpus, 'mem': mem,
         'n_cpus': n_cpus, 'partition': partition, 'n_nodes': n_nodes, 'nodelist': nodelist, 'time': time, 'log': log
     }
-    renamed = {k: kwargs.pop(k) for k in list(kwargs) if k in _SLURM_RENAMED_}
-    slurm_params.update(zip(('n_gpus', 'n_cpus', 'n_nodes'),
-                            _slurm_renamed_(renamed, **{k: slurm_params[k] for k in ('n_gpus', 'n_cpus', 'n_nodes')})))
     for k in slurm_params:
         if k in kwargs:
             slurm_params[k] = kwargs.pop(k)
@@ -4216,22 +4207,6 @@ def slurm_pprint(s=None, *, revision=None, conda=None, n_gpus=0, mem='8G', n_cpu
     _pprint_.pprint(slurm_exec(s, revision=revision, conda=conda, n_gpus=n_gpus, mem=mem, n_cpus=n_cpus,
                                partition=partition, n_nodes=n_nodes, nodelist=nodelist, time=time, log=log, **kwargs))
 
-
-# The Slurm resources' names before 2026-11-04 (skill naming-counts), still taken with a warning.
-_SLURM_RENAMED_ = {'gpus': 'n_gpus', 'cpus': 'n_cpus', 'nodes': 'n_nodes'}
-
-
-def _slurm_renamed_(renamed: dict, **current) -> tuple:
-    """*current*'s n_gpus, n_cpus, n_nodes, with any old name in *renamed* put in its place, warning; anything else in *renamed* is an error."""
-    bad = sorted(set(renamed) - set(_SLURM_RENAMED_))
-    if bad:
-        raise TypeError(f"unexpected keyword arguments {', '.join(bad)}")
-    if renamed:
-        _warnings_.warn(f"{', '.join(f'{k}=' for k in renamed)} are now "
-                      f"{', '.join(f'{_SLURM_RENAMED_[k]}=' for k in renamed)}", DeprecationWarning, stacklevel=3)
-        for k, v in renamed.items():
-            current[_SLURM_RENAMED_[k]] = v
-    return current['n_gpus'], current['n_cpus'], current['n_nodes']
 
 
 # Names that moved to `dbx.journals`, still found here -- by an import, a

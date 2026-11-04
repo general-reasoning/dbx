@@ -339,8 +339,7 @@ my_pipeline('preset').runner(LAMBDA).build_tree()
 ```
 
 **Names**, for where a value cannot be passed -- a `dbx.pprint` one-liner, `dbx.kubejobs`, a new
-shell. The project names its clusters as an **entry point** of group `dbx.clusters` in its packaging
-(`dbx.targets` until 2026-11-04, still read with a DeprecationWarning):
+shell. The project names its clusters as an **entry point** of group `dbx.clusters` in its packaging:
 an object that is a Target, or a dict or list of them.
 
 ```toml
@@ -384,7 +383,6 @@ returns a `Run` (section 5).
 - **`mode`** ('kube'), when given, must be the target's kind: a check, not a choice.
 - **Options** are the kind's, and are refused at `runner(...)` when it does not take them -- a
   misspelling fails before anything is sent. `n_gpus` defaults to the pipeline's `n_gpus`, or 0.
-  The names before 2026-11-04 -- `gpus`, `cpus`, `gib` -- are still taken, with a warning.
 - **A shell command:** `dbx.kube.submit(command, LAMBDA, **options)`, the same Job without a
   pipeline; journaled only when given `block=`.
 - **`Pipeline.submit(target, ...)`** is the older spelling, kept for the commands that use it: any

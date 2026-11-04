@@ -447,28 +447,6 @@ class TestSubmit:
         entry_points.clear()
         assert kube.clusters() == {}
 
-    def test_the_old_group_name_still_counts_with_a_warning(self, monkeypatch):
-        old, new = kube.Cluster('old', image='i'), kube.Cluster('both', image='i')
-        groups = {'dbx.targets': [_EP_({'old': old, 'both': kube.Cluster('both', image='stale')}, 'legacy')],
-                  'dbx.clusters': [_EP_({'both': new}, 'current')]}
-        monkeypatch.setattr(dbxcluster.metadata, 'entry_points', lambda group: groups.get(group, []))
-        with pytest.warns(DeprecationWarning, match="'dbx.targets'.*legacy"):
-            named = kube.clusters()
-        assert named == {'old': old, 'both': new}
-
-    def test_old_resource_names_still_work_with_a_warning(self, kubectl, tmp_path):
-        with pytest.warns(DeprecationWarning, match='n_cpus_per_gpu'):
-            old = kube.Cluster('c', image='i', cpu_per_gpu=12, gib_per_gpu=90)
-        assert (old.n_cpus_per_gpu, old.mem_gib_per_gpu) == (12, 90)
-        assert dbxcluster._rebuild_({'target_spec': {'class': 'dbx.kube:Cluster', 'fields': {
-            'name': 'c', 'image': 'i', 'cpu_per_gpu': 12, 'gib_per_gpu': 90}}}) == old
-        with pytest.warns(DeprecationWarning, match='n_gpus=, n_cpus=, mem_gib='):
-            m = kube.job('true', old, gpus=1, cpus=3, gib=7)
-        assert _container_(m)['resources']['requests'] == {'cpu': '3', 'memory': '7Gi', 'ephemeral-storage': '100Gi',
-                                                            'nvidia.com/gpu': '1'}
-        with pytest.raises(TypeError, match='give the second only'):
-            kube.job('true', old, cpus=3, n_cpus=4)
-
     def test_an_entry_point_may_name_one_target_or_a_list(self, entry_points):
         entry_points.extend([kube.Cluster('one', image='i'), [kube.Cluster('two', image='i'), 'not a target']])
         assert sorted(kube.clusters()) == ['one', 'two']

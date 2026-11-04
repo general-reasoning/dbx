@@ -39,26 +39,23 @@ def run(fn, calls, *, n_gpus=1, n_cpus=4): ...
 
 ## Renaming one
 
-- **A parameter or operational kwarg** is outside a datablock's identity: rename
-  it and accept the old name for a while with a `DeprecationWarning` naming the
-  new one, then remove it. Update every example, docstring and doc in the same
-  commit (`complete every instruction`: grep for the old name before calling it
-  done).
+- **A parameter, operational kwarg, job option or CLI flag** is outside a
+  datablock's identity: rename it everywhere in one commit -- code, tests,
+  examples, docstrings and docs -- and keep no alias, shim or deprecation warning
+  for the old name: they only clog the code. Grep for the old name before calling
+  it done (`complete every instruction`). A run record or config written before
+  keeps the old name; whatever reads one ignores what it no longer knows.
 - **A VAR field** is IN the identity: a rename moves the hash. Declare it with
   `redirect_vars` in a `Specialization` so the builds under the old name are
   adopted (see defining-pipelines).
-- **A job option** (`dbx.kube.job`'s) is recorded in each run's record: rename it
-  and keep reading the old name in records written before.
 
-## Renamed so far (2026-11-04)
-
-Each old name is still taken, with a `DeprecationWarning`:
+## Renamed (2026-11-04)
 
 - dbx: the runner's and `dbx.kube.job`'s `gpus`, `cpus`, `gib` → `n_gpus`, `n_cpus`,
   `mem_gib`; `kube.Cluster`'s `cpu_per_gpu`, `gib_per_gpu` → `n_cpus_per_gpu`,
-  `mem_gib_per_gpu` (and in old run records); `dbx.gpu.run`'s `num_gpus`, `num_cpus`
-  → `n_gpus`, `n_cpus`; `dbx.slurm`'s `gpus`, `cpus`, `nodes` → `n_gpus`, `n_cpus`,
-  `n_nodes` (`mem` stays: its value is Slurm's string, unit included).
+  `mem_gib_per_gpu`; `dbx.gpu.run`'s `num_gpus`, `num_cpus` → `n_gpus`, `n_cpus`;
+  `dbx.slurm`'s `gpus`, `cpus`, `nodes` → `n_gpus`, `n_cpus`, `n_nodes` (`mem` stays:
+  its value is Slurm's string, unit included).
 - sctx: the operational `cpus_per_gpu`, `loader_workers` → `n_cpus_per_gpu`,
   `n_loader_workers`; `num_shards`, `workers` and `gpus` parameters and CLI flags →
   `n_shards`, `n_workers`, `n_gpus`.

@@ -65,7 +65,6 @@ import sys
 import tarfile
 import tempfile
 import uuid
-import warnings
 
 import fsspec
 import fsspec.implementations.local
@@ -109,22 +108,10 @@ class Cluster(Target):
     storage_options: 'dict | str' = dataclasses.field(default_factory=dict)
     user: str | None = None                     # prefixes Job names; $USER by default
     options: dict = dataclasses.field(default_factory=dict)
-    # The per-GPU shares' names before 2026-11-04, still taken with a warning.
-    cpu_per_gpu: dataclasses.InitVar[int | None] = None
-    gib_per_gpu: dataclasses.InitVar[int | None] = None
-
-    # A record's field name before it was renamed -> its name now (`dbx.cluster._rebuild_`).
-    RENAMED_FIELDS = {'cpu_per_gpu': 'n_cpus_per_gpu', 'gib_per_gpu': 'mem_gib_per_gpu'}
-
     # 1. Protocol ---------------------------------------------------------------------------- #
 
-    def __post_init__(self, cpu_per_gpu=None, gib_per_gpu=None):
+    def __post_init__(self):
         self.context = self.context or self.name
-        if cpu_per_gpu is not None or gib_per_gpu is not None:
-            warnings.warn("Cluster: cpu_per_gpu= and gib_per_gpu= are now n_cpus_per_gpu= and mem_gib_per_gpu=",
-                          DeprecationWarning, stacklevel=3)
-            self.n_cpus_per_gpu = self.n_cpus_per_gpu if cpu_per_gpu is None else cpu_per_gpu
-            self.mem_gib_per_gpu = self.mem_gib_per_gpu if gib_per_gpu is None else gib_per_gpu
 
     # 2. Declared API ------------------------------------------------------------------------ #
 
@@ -285,11 +272,10 @@ def job(command: str, c: 'str | Cluster', **options) -> dict:
     and `setup` add to the cluster's.
     """
     c = cluster(c)
-    options, cluster_options = _cluster_.renamed_options(options), _cluster_.renamed_options(c.options)
-    merged = {**cluster_options, **options}
+    merged = {**c.options, **options}
     for k in ('env', 'setup'):
-        if k in cluster_options and k in options:
-            merged[k] = ({**cluster_options[k], **options[k]} if k == 'env' else [*cluster_options[k], *options[k]])
+        if k in c.options and k in options:
+            merged[k] = ({**c.options[k], **options[k]} if k == 'env' else [*c.options[k], *options[k]])
     return _manifest_(command, c, **merged)
 
 

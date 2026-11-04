@@ -128,16 +128,19 @@ class Pipeline(Datablock):
 
             r = p.runner(LAMBDA, n_gpus=8)
             r.build_tree()                           # a Run -- here a dbx.kube.KubeRun
-            r.ship('try_specialize_tree', ...)
+            r.launch('try_specialize_tree', ...)
             r.runs(), r.rundash(), r.cancel()        # its runs on LAMBDA
             p.runner().rundash()                     # its runs on every target
 
         *target* is where (`dbx.cluster`): a value, e.g. a `dbx.kube.Cluster`, or the name a
         `dbx.clusters` entry point gives one; with none, the Runner lists runs and launches nothing.
         *mode*, when given, is the kind it must be ('kube'). *options* are the kind's --
-        `dbx.kube.job`'s for 'kube' -- refused here when it does not take them; `n_gpus` is by default
-        the pipeline's `n_gpus`, or 0. *force* launches `build`/`build_tree` of an entrypoint that is
-        valid here.
+        `dbx.kube.job`'s for 'kube' -- refused here when it does not take them: among them the pod's
+        `n_gpus` (by default the pipeline's `n_gpus`, or 0), `n_cpus` and `mem_gib`; `venv`;
+        `workdirs={src: target}` (sent, or packed, before the Job); and `env={name: value}`, the
+        Job's environment: over the runner's own `DBX_*` (the datalake, the session, the call),
+        which are over the cluster's own `env`. *force* launches `build`/`build_tree` of an entrypoint
+        that is valid here.
         """
         return _cluster_.runner(self, target, mode=mode, force=force, **options)
 

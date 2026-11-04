@@ -193,9 +193,8 @@ writes its index marker, so the command's rows list it however it got there:
   `torch_multiprocessing`, `ray`): the executor sends the command's session
   out with the work, and brings the written paths back with the results.
 - **A process started while the command runs** (a subprocess, a Slurm job):
-  `dbx.exec` exports the session in `DBX_JOURNAL_SESSION` and
-  `DBX_JOURNAL_DATALAKE`, and a process that starts with them set writes under
-  it. A `dbx.exec` in that process joins the session, so its rows and the
+  `dbx.exec` exports the session in `DBX_SESSION`, and a process that starts
+  with it set writes under it, in its own `DBX_DATALAKE`. A `dbx.exec` in that process joins the session, so its rows and the
   parent's share their entries.
 - **A worker that dies before returning:** its entries are listed anyway,
   because it wrote their markers itself.

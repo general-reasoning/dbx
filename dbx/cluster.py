@@ -14,35 +14,45 @@ looks it up, each time, among the clusters the installed packages name as entry 
     myproject = "myproject.clusters:CLUSTERS"
 
 `Pipeline.runner(target, **options)` hands out the pipeline's runs as a `Runner` of the target's
-kind -- `target.RUNNER`, e.g. `dbx.kube.KubeRunner` -- whose `build_tree()` (or `ship('<method>',
+kind -- `target.RUNNER`, e.g. `dbx.kube.KubeRunner` -- whose `build_tree()` (or `launch('<method>',
 ...)`) runs there: `dbx.eval('<the pipeline's quote>').entry.<method>(...)`, under `dbx.pprint`,
 with the entry's datalake as `DBX_DATALAKE`. It returns a `Run`: `status`, `wait`, `logs`,
 `cancel`.
 
-The run is journaled on the pipeline, in the `PipeJournal` of the submitting datalake, each entry
-with the pipeline's `entrypath` and the run's `cluster` and `run` (its id):
+A run is journaled by both sides, each in its own journal, on the pipeline, each entry with the
+pipeline's `entrypath` and the run's `cluster` and `run` (its id). The submitter, in the PipeJournal
+of the datalake it submitted from:
 
-    submit:BEGIN    before it is launched; its note (a file) the whole record, as JSON: the kind and
-                    the target itself (`target_spec`), the run's id, the command and expression, the
-                    submitting session, and what the kind adds -- a Kube Job's manifest, image,
-                    revision, synced workdirs
-    submit:END      when `Run.wait` sees it complete
-    submit:ERROR    when launching it fails, or `Run.wait` sees it fail (with its log tail)
-    submit:CANCEL   `Run.cancel`
+    job:submit      before it is launched; its note (a file) the whole record, as JSON: the kind and
+                    the target itself (`target_spec`), the run's id, the method, the command and
+                    expression, the submitting session, and what the kind adds -- a Kube Job's
+                    manifest, image, revision, synced workdirs
+    job:complete    when it sees it complete: `Run.wait`, or a `rundash` that asks the cluster
+    job:fail        when launching it fails, or it sees it fail (with its log tail)
+    job:cancel      `Run.cancel`
 
-A run's Job sets `DBX_CLUSTER` and `DBX_RUN`, so every build-journal entry written in it -- each
-datablock's `build:start`, `build:end` -- names the run as well. A Runner -- `Pipeline.runner`, or
-`runner(what)` of a datablock, a Datablock class or anchor, or a Pipeline class -- reads them back
-(`runs`, `rundash`, `cancel`), each run as its Run, its target rebuilt from the record -- to
-`status`, `logs`, `wait` on or `cancel` from another process, a later session. Runs submitted
-before were journaled on the pipeline's entry, in its own journal, and are read there too.
+and the run itself (`run`, what its Job evaluates), in the PipeJournal of the datalake it runs in:
 
-The run's own record is the target's datalake (the entry's, `DBX_DATALAKE`): the call runs as
-`dbx.pprint --capture-output`, under a session chosen here (`DBX_JOURNAL_SESSION`, recorded as
-`run_session`), so its exec-journal row, every build-journal entry it writes (each with its `log`)
-and its captured stdout and stderr are under that session there. `Run.command()` is that row, an
-`ExecJournalEntry`, read from the record's datalake or the *datalake* given -- here on a cluster that
-mounts it, on the cluster's own machines otherwise, or by URL (`Cluster.url`) -- and
+    job:start       before the call
+    job:end         after it: 'ok', or what it raised
+
+The two journals are one where the cluster mounts the submitter's datalake, and two otherwise (a
+cluster with a filesystem of its own): a `rundash` reads the run's from there, by URL. They agree
+on `(session, run)`: the run joins the submitting command's session (`DBX_SESSION`), and its Job
+sets `DBX_CLUSTER` and `DBX_RUN`, so every entry it writes -- its own `job:*`, each datablock's
+`build:*`, its exec-journal row -- names the run. A Runner -- `Pipeline.runner`, or `runner(what)`
+of a datablock, a Datablock class or anchor, or a Pipeline class -- reads them back (`runs`,
+`rundash`, `cancel`), each run as its Run, its target rebuilt from the record -- to `status`,
+`logs`, `wait` on or `cancel` from another process, a later session. Runs journaled before
+2026-11-04 were `submit:BEGIN`, `submit:END`, `submit:ERROR`, `submit:CANCEL` -- some on the
+pipeline's entry, in its own journal -- and are read as these.
+
+The run's own record is in the datalake it ran in (`DBX_DATALAKE` there): the call runs as
+`dbx.pprint --capture-output`, under the submitting command's session, so its exec-journal row,
+every build-journal entry it writes (each with its `log`) and its captured stdout and stderr are
+under that session there, its row told from the submitter's by its `run`. `Run.command()` is that
+row, an `ExecJournalEntry`, read from the record's datalake or the *datalake* given -- here on a
+cluster that mounts it, on the cluster's own machines otherwise, or by URL (`Cluster.url`) -- and
 `Run.command().output()` prints the capture: the journal is where the output is, and the one way to it.
 
 `dry_run`, an option of every kind: True prepares the record and launches nothing; a kind may check
@@ -60,21 +70,28 @@ import os
 import re
 import sys
 import time
-import uuid
 from importlib import metadata
 
 import pandas as pd
 
 from . import databits
 from .databits import default_datalake
-from .journals import BuildJournal, PipeJournal, execjournal
+from .journals import SESSION_ENV, BuildJournal, PipeJournal, execjournal
 
 
-__all__ = ['Target', 'Run', 'Runner', 'GROUP', 'cluster', 'clusters', 'runner', 'runs', 'rundash', 'verify']
+__all__ = ['Target', 'Run', 'Runner', 'GROUP', 'cluster', 'clusters', 'run', 'runner', 'runs', 'rundash', 'verify']
 
 
 # The entry-point group naming the installed packages' clusters.
 GROUP = 'dbx.clusters'
+
+# A run's events. The submitter's, in the PipeJournal of the datalake it submitted from:
+SUBMIT, COMPLETE, FAIL, CANCEL = 'job:submit', 'job:complete', 'job:fail', 'job:cancel'
+# ... and the run's own, in the PipeJournal of the datalake it ran in (`run`):
+START, END = 'job:start', 'job:end'
+# The submitter's events as they were named before 2026-11-04, in the journals written then: read as these.
+_JOURNALED_AS_ = {'submit:BEGIN': SUBMIT, 'submit:END': COMPLETE, 'submit:ERROR': FAIL, 'submit:CANCEL': CANCEL}
+_EVENTS_ = '^(job|submit):'
 
 
 class Target:
@@ -88,7 +105,7 @@ class Target:
 class Run:
     """A launched run: its `status`, `wait`, `logs`, `cancel`. `id` is None when nothing was launched (dry run, or `skipped`).
 
-    *on* is what its submission is journaled on: the pipeline that shipped it (in the `PipeJournal`),
+    *on* is what its submission is journaled on: the pipeline that launched it (in the `PipeJournal`),
     or the datablock a bare command was given (`dbx.kube.submit(..., block=)`); None for neither.
 
     A kind implements `_status_` -- 'pending', 'running', 'complete', 'failed' -- `_logs_` and `_cancel_`.
@@ -119,7 +136,7 @@ class Run:
     def wait(self, *, poll: float = 30, timeout: float | None = None, verbose: bool | None = None) -> bool:
         """Block until the run completes (True), or *timeout* passes (False); raise RuntimeError with its log tail if it fails.
 
-        Journals `submit:END` or `submit:ERROR` on what it was submitted on, once. *verbose* (by default
+        Journals `job:complete` or `job:fail` on what it was submitted on, once. *verbose* (by default
         when stderr is a terminal) says on stderr what the run is doing, as it changes: its status with
         the elapsed time, why it is pending (`reason`, where the kind says), and its log's latest line.
         Interrupting the wait leaves the run running: `Runner.runs(open=True)[-1].wait()` takes it up again.
@@ -133,11 +150,11 @@ class Run:
             if verbose:
                 self._say_(s, time.monotonic() - start, said)
             if s == 'complete':
-                self._close_('submit:END', f"{self._where_()} complete")
+                self._close_(COMPLETE, f"{self._where_()} complete")
                 return True
             if s == 'failed':
                 tail = self._logs_(40)
-                self._close_('submit:ERROR', f"{self._where_()} failed\n{tail}")
+                self._close_(FAIL, f"{self._where_()} failed\n{tail}")
                 raise RuntimeError(f"{self._where_()} failed; its log ends:\n{tail}")
             time.sleep(poll)
         return False
@@ -166,21 +183,24 @@ class Run:
                 said['line'] = line
 
     def cancel(self) -> None:
-        """Stop the run; journals `submit:CANCEL`."""
+        """Stop the run; journals `job:cancel`."""
         if self.id is not None:
             self._cancel_()
-            self._close_('submit:CANCEL', f"{self._where_()} cancelled")
+            self._close_(CANCEL, f"{self._where_()} cancelled")
 
     def command(self, *, datalake: str | None = None, storage_options: dict | None = None):
-        """The run's own exec-journal row (an `ExecJournalEntry`), under its `run_session`, in the record's datalake or *datalake*.
+        """The run's own exec-journal row (an `ExecJournalEntry`) -- its session's, and its `run`'s -- in the record's datalake or *datalake*.
 
         `.output()` on it prints what the run printed. The row is written when the run ends.
+        A record from before 2026-11-04 names the run's own session, `run_session`, instead.
         """
-        session = self.record.get('run_session')
+        session = self.record.get('run_session') or self.record.get('session')
         if not session:
-            raise LookupError(f"{self!r} was not given a session of its own to run under: no row to find")
+            raise LookupError(f"{self!r} records no session to find its row by")
         where = dict(datalake=datalake or self.record.get('datalake'), storage_options=storage_options,
                      session=f"^{session}$")
+        if not self.record.get('run_session'):
+            where['run'] = f"^{re.escape(str(self.id))}$"
         if len(execjournal(**where)) == 0:
             raise LookupError(f"No command of session {session} in {where['datalake']}: not over yet (its row is "
                               f"written when it ends), or that is not the datalake it ran in")
@@ -194,6 +214,7 @@ class Run:
             self.on = self._journal_on_()
         if self.on is not None and not self._closed_:
             _journal_(self.on, event, note=note, inline_note=True, cluster=self.target.name, run=self.id)
+            self.closing = (event, datetime.datetime.now().isoformat())
         self._closed_ = True
 
     def _status_(self) -> str:
@@ -214,18 +235,18 @@ class Runner:
 
         r = my_pipeline('preset').runner(LAMBDA, n_gpus=8)
         r.build_tree()                          # a Run, of dbx.eval('<the quote>').entry.build_tree() there
-        r.ship('try_specialize_tree', ...)      # any other method of the entry
+        r.launch('try_specialize_tree', ...)    # any other method of the entry
         r.runs(), r.rundash()                   # its runs on LAMBDA, from the entry's journal
         r.cancel()                              # those still pending or running
 
-    `ship(method, ...)` launches `dbx.eval('<the pipeline's quote>').entry.<method>(...)` under
+    `launch(method, ...)` launches `dbx.eval('<the pipeline's quote>').entry.<method>(...)` under
     `dbx.pprint`, with the entry's datalake as `DBX_DATALAKE`: the quote rebuilds the same pipeline --
     the same hashes, the same operational kwargs -- so the run builds the very datablocks a call
     here would. The arguments must be literals (`ast.literal_eval(repr(x)) == x`): they travel as
     text. `build` and `build_tree` of an entry already valid here launch nothing -- a Run `skipped`
     -- unless `force`. Only a pipeline's Runner with a target launches.
 
-    Which runs `runs`, `rundash` and `cancel` see: a pipeline's are those it shipped (in the
+    Which runs `runs`, `rundash` and `cancel` see: a pipeline's are those it launched (in the
     `PipeJournal`, under its hash); a datablock's those whose Job wrote its build entries, and those
     of the pipelines it is the entry of; a Datablock class's or an anchor's, those of every
     datablock of it, whatever its hash; a Pipeline class's, those of every pipeline of it. With
@@ -262,7 +283,7 @@ class Runner:
 
     # 2. Declared API ------------------------------------------------------------------------ #
 
-    def ship(self, method: str, *args, **kwargs) -> Run:
+    def launch(self, method: str, *args, **kwargs) -> Run:
         """Launch `entry.<method>(*args, **kwargs)` on the target; its Run."""
         if self._pipeline_ is None or self._target_ is None:
             raise TypeError(f"{self!r} launches nothing: only a pipeline's Runner with a target does "
@@ -272,14 +293,14 @@ class Runner:
             raise AttributeError(f"{type(entry).__name__} has no method {method!r} to ship")
         bad = [repr(a) for a in (*args, *kwargs.values()) if not _literal_(a)]
         if bad:
-            raise TypeError(f"{type(self).__name__}.ship({method!r}): {', '.join(bad)} would not survive the trip "
+            raise TypeError(f"{type(self).__name__}.launch({method!r}): {', '.join(bad)} would not survive the trip "
                             f"as text; pass literals (str, numbers, None, and lists, dicts, tuples of them)")
         options = dict(self._options_)
         check = options.get('dry_run') == 'cluster'
         if method in ('build', 'build_tree') and not self._force_ and not check and entry.valid():
             return self.RUN(self._target_, None, {}, on=self._pipeline_, skipped=f"{entry.anchorkeypath} is valid here")
-        call = ', '.join([repr(a) for a in args] + [f"{k}={v!r}" for k, v in kwargs.items()])
-        expression = f"dbx.eval({self._pipeline_.quote()!r}).entry.{method}({call})"
+        call = ''.join([f", {a!r}" for a in args] + [f", {k}={v!r}" for k, v in kwargs.items()])
+        expression = f"dbx.cluster.run(dbx.eval({self._pipeline_.quote()!r}), {method!r}{call})"
         options.setdefault('n_gpus', getattr(self._pipeline_, 'n_gpus', None) or 0)
         options.setdefault('name', f"{type(self._pipeline_).__name__.removesuffix('Pipeline')}-{method}")
         if check:  # The call is recorded, not made: the run evaluates the quote and verifies the entry.
@@ -287,24 +308,25 @@ class Runner:
             options = {**options, **self._check_options_(), 'name': f"{options['name']}-check"}
             options['env'] = {'DBX_SUBMIT_CALL': expression, **options.get('env', {})}
             expression = f"dbx.cluster.verify(dbx.eval({self._pipeline_.quote()!r}).entry, {entry.hash!r})"
+            method = 'verify'
+        # The run joins this command's session, in its own datalake: what it journals is found by (session, run).
         options['env'] = {'DBX_DATALAKE': entry.datalake, 'DBX_SUBMIT_EXPRESSION': expression,
-                          'DBX_PARENT_SESSION': _session_(), 'DBX_JOURNAL_SESSION': str(uuid.uuid4()),
-                          'DBX_JOURNAL_DATALAKE': entry.datalake, **options.get('env', {})}
+                          SESSION_ENV: _session_(), **options.get('env', {})}
         return self._launch_('dbx.pprint --capture-output "$DBX_SUBMIT_EXPRESSION"', on=self._pipeline_,
-                             expression=expression, **options)
+                             expression=expression, method=method, **options)
 
     def build(self, *args, **kwargs) -> Run:
-        """`ship('build', ...)`."""
-        return self.ship('build', *args, **kwargs)
+        """`launch('build', ...)`."""
+        return self.launch('build', *args, **kwargs)
 
     def build_tree(self, *args, **kwargs) -> Run:
-        """`ship('build_tree', ...)`."""
-        return self.ship('build_tree', *args, **kwargs)
+        """`launch('build_tree', ...)`."""
+        return self.launch('build_tree', *args, **kwargs)
 
     def runs(self, *, open: bool | None = None, adopted: bool = False) -> list:
         """The runs in scope (see the class), oldest first, as their Runs, from the journal; only those still open, or only those closed, by *open*.
 
-        A run whose `submit:END`, `submit:ERROR` or `submit:CANCEL` is journaled is closed: its
+        A run whose `job:complete`, `job:fail` or `job:cancel` is journaled is closed: its
         `wait` journals nothing more. Its target is rebuilt from its record.
         """
         out = [run for run, _ in self._journaled_(adopted)]
@@ -313,7 +335,7 @@ class Runner:
     def cancel(self, *, adopted: bool = False) -> list:
         """Cancel the runs in scope still pending or running (asking the cluster); the Runs cancelled.
 
-        Each is journaled `submit:CANCEL`. A run whose Job is over, or gone, is left as it is.
+        Each is journaled `job:cancel`. A run whose Job is over, or gone, is left as it is.
         """
         out = []
         for run in self.runs(open=True, adopted=adopted):
@@ -322,31 +344,47 @@ class Runner:
                 out.append(run)
         return out
 
-    def rundash(self, *, adopted: bool = False, live: bool = True) -> pd.DataFrame:
-        """The runs in scope as a table, newest first.
+    def rundash(self, *, adopted: bool = False, live: bool = True, pod: bool = True) -> pd.DataFrame:
+        """The runs in scope as a table, newest first -- what the submitter saw, and with *pod* what the run itself journaled.
 
-        One row per run: `run, cluster, entry, method, status, submitted, ended, elapsed, event`;
-        `entry` is the key of the pipeline's entry it built.
-        `status` is the journal's for a closed run (`complete`, `failed`, `cancelled`), and with
-        *live* the cluster's for an open one (`pending`, `running`, `complete`, `failed`, or `gone`
-        once the Job is deleted); `event` is the journaled closing event, if any. `elapsed` runs
-        from `submitted` to `ended`, or to now while open.
+        One row per run: `run, cluster, entry, method, status, submitted, started, ended, observed,
+        elapsed, outcome, event`; `entry` is the key of the pipeline's entry it built.
+        - From the submitter's journal: `submitted` (`job:submit`), and for a closed run `event`
+          (`job:complete`, `job:fail`, `job:cancel`) and when it was `observed`. `status` is that
+          event's (`complete`, `failed`, `cancelled`); with *live*, an open run's is asked of its
+          cluster (`pending`, `running`, `complete`, `failed`, `gone` once the Job is deleted), and
+          a run found over is closed then and there: its `job:complete` or `job:fail` journaled.
+        - From the run's own journal, where it ran (*pod*: read there, by URL when the cluster has
+          a filesystem of its own): `started` and `ended` (`job:start`, `job:end`) and `outcome`,
+          'ok' or what it raised. Where the two disagree -- the run ended 'ok', the submitter saw it
+          fail (killed on its way out) -- both are shown.
+        `elapsed` is `ended - started` when the run said both, else from `submitted` to `observed`,
+        or to now while open.
         """
         rows = []
         now = pd.Timestamp.now()
-        for run, row in self._journaled_(adopted):
-            closing = run.closing
-            status = _CLOSED_STATUS_.get(closing[0]) if closing else (_live_status_(run) if live else 'open')
+        journaled = self._journaled_(adopted)
+        ran = _pod_events_([run for run, _ in journaled]) if pod else {}
+        for run, row in journaled:
+            status = _CLOSED_STATUS_.get(run.closing[0]) if run.closing else (_live_status_(run) if live else 'open')
+            if run.closing is None and status in ('complete', 'failed'):    # Over: close it, as wait() would.
+                run._close_(COMPLETE if status == 'complete' else FAIL, f"{run._where_()} {status}, seen by rundash")
             submitted = pd.Timestamp(run.record.get('submitted') or row['datetime'])
-            ended = pd.Timestamp(closing[1]) if closing else None
+            observed = pd.Timestamp(run.closing[1]) if run.closing else None
+            started, ended, outcome = ran.get(run.id, (None, None, None))
+            if started is not None and ended is not None:
+                elapsed = ended - started
+            else:
+                until = observed if observed is not None else (now if status in ('pending', 'running', 'open') else None)
+                elapsed = until - submitted if until is not None else None
             m = re.search(r"\.entry\.(\w+)\(|dbx\.cluster\.(verify)\(", run.record.get('expression') or '')
-            until = ended if ended is not None else (now if status in ('pending', 'running', 'open') else None)
+            method = run.record.get('method') or ((m.group(1) or m.group(2)) if m else None)
             rows.append(dict(run=run.id, cluster=run.target.name, entry=os.path.basename(str(run.entrypath).rstrip('/')),
-                             method=(m.group(1) or m.group(2)) if m else None, status=status,
-                             submitted=submitted, ended=ended,
-                             elapsed=_round_(until - submitted) if until is not None else None,
-                             event=closing[0] if closing else None))
-        cols = ['run', 'cluster', 'entry', 'method', 'status', 'submitted', 'ended', 'elapsed', 'event']
+                             method=method, status=status, submitted=submitted, started=started, ended=ended,
+                             observed=observed, elapsed=_round_(elapsed) if elapsed is not None else None,
+                             outcome=outcome, event=run.closing[0] if run.closing else None))
+        cols = ['run', 'cluster', 'entry', 'method', 'status', 'submitted', 'started', 'ended', 'observed',
+                'elapsed', 'outcome', 'event']
         df = pd.DataFrame(rows, columns=cols)
         return df.sort_values('submitted', ascending=False).reset_index(drop=True)
 
@@ -368,14 +406,15 @@ class Runner:
 
     # 4. Helpers ----------------------------------------------------------------------------- #
 
-    def _launch_(self, command: str, *, on=None, expression: str | None = None, **options) -> Run:
+    def _launch_(self, command: str, *, on=None, expression: str | None = None, method: str | None = None,
+                 **options) -> Run:
         """Launch *command* with *options* (over those given at construction); journaled on *on* -- a pipeline or a datablock -- when given."""
         options = {**self._options_, **options}
         dry_run = options.pop('dry_run', False)
-        dry_run = False if dry_run == 'cluster' else dry_run  # A check is a run: ship made it one.
+        dry_run = False if dry_run == 'cluster' else dry_run  # A check is a run: launch made it one.
         record = dict(executor=self._target_.MODE, target=self._target_.name, target_spec=_spec_(self._target_),
-                      command=command, expression=expression,
-                      run_session=(options.get('env') or {}).get('DBX_JOURNAL_SESSION'),
+                      command=command, expression=expression, method=method, session=_session_(),
+                      pipeline_anchor=getattr(on, 'anchor', None) if _is_pipeline_(on) else None,
                       submitted=datetime.datetime.now().isoformat())
         record.update(self._prepare_(command, **options))
         if dry_run:
@@ -384,23 +423,24 @@ class Runner:
         record.update(self._stage_(record, **options))
         where = dict(cluster=self._target_.name, run=record['id'])
         if on is not None:
-            record['session'] = _session_()
-            _journal_(on, 'submit:BEGIN', note=json.dumps(record, indent=1, default=str), **where)
+            _journal_(on, SUBMIT, note=json.dumps(record, indent=1, default=str), **where)
         try:
             self._create_(record)
         except Exception as e:
             if on is not None:
-                _journal_(on, 'submit:ERROR', inline_note=True,
+                _journal_(on, FAIL, inline_note=True,
                           note=f"{self._target_.MODE}:{self._target_.name} {record.get('id')} not launched: {e}",
                           **where)
             raise
         return self.RUN(self._target_, record['id'], record, on=on)
 
     def _journaled_(self, adopted: bool) -> list:
-        """The runs in scope, oldest first, each as `(Run, its submit:BEGIN row)`; a Run's `closing` is `(event, datetime)` or None.
+        """The runs in scope, oldest first, each as `(Run, its job:submit row)`; a Run's `closing` is `(event, datetime)` or None.
 
-        A run's `submit:*` entries are in the `PipeJournal`, on the pipeline that shipped it; those
-        from before were on its entry, in the entry's own journal, and are read there too. A
+        The submitter's events are in the `PipeJournal`, on the pipeline that launched it; those from
+        before 2026-11-04 were on its entry, in the entry's own journal, and are read there too, as
+        are the `submit:*` names of before 2026-11-04. The run's own `job:start`/`job:end` are not
+        read here: they are where it ran (`_pod_events_`). A
         pipeline's runs are its own; a datablock's are those whose Job wrote its `build:*` entries
         (their `run` column), and those of the pipelines it is the entry of; a class's or an
         anchor's, the same for every datablock of it; a pipeline class's, every pipeline's of it.
@@ -412,8 +452,9 @@ class Runner:
             return []
         if self._target_ is not None:
             rows = rows[rows['cluster'].isna() | (rows['cluster'] == self._target_.name)]
-        rows = rows.sort_values('datetime')
-        begins, closings = rows[rows['event'] == 'submit:BEGIN'], rows[rows['event'] != 'submit:BEGIN']
+        rows = rows.assign(event=rows['event'].replace(_JOURNALED_AS_))
+        rows = rows[rows['event'].isin((SUBMIT, COMPLETE, FAIL, CANCEL))].sort_values('datetime')
+        begins, closings = rows[rows['event'] == SUBMIT], rows[rows['event'] != SUBMIT]
         out = []
         for _, row in begins.drop_duplicates('id').iterrows():
             with open(row['note']) as f:
@@ -440,11 +481,11 @@ class Runner:
         return out
 
     def _submit_rows_(self, adopted: bool) -> pd.DataFrame:
-        """Every `submit:*` row in scope, from the `PipeJournal` (`origin` 'pipe') and from entries' own journals ('entry'), with `entrypath` and `run`."""
+        """Every run event row in scope, from the `PipeJournal` (`origin` 'pipe') and from entries' own journals ('entry'), with `entrypath` and `run`."""
         from .pipelines import Pipeline  # pipelines imports this module
         datalake = self._datalake_ or default_datalake()
         if self._pipeline_ is not None:
-            pipe = _read_(PipeJournal, f"{PipeJournal.ANCHOR}/{self._pipeline_.anchor}", datalake, event='^submit:')
+            pipe = _read_(PipeJournal, f"{PipeJournal.ANCHOR}/{self._pipeline_.anchor}", datalake, event=_EVENTS_)
             pipe = pipe[pipe['hash'] == self._pipeline_.hash] if not pipe.empty else pipe
             dblk = self._dblk_
             anchor = _read_(BuildJournal, dblk.anchor, datalake)
@@ -452,15 +493,15 @@ class Runner:
             if adopted and mine is not None:  # The runs that built what it adopted: their build entries name them.
                 built = anchor[mine & (anchor['hash'] != dblk.hash)]
                 pipe = pd.concat([pipe, _submits_of_runs_(set(built['run'].dropna()), datalake)])
-            entry = anchor[mine & anchor['event'].astype(str).str.startswith('submit:')] if mine is not None else anchor
+            entry = anchor[mine & anchor['event'].astype(str).str.match(_EVENTS_)] if mine is not None else anchor
         elif isinstance(self._what_, type) and issubclass(self._what_, Pipeline):  # Every pipeline of the class.
-            pipe = _read_(PipeJournal, f"{PipeJournal.ANCHOR}/{self._what_.anchor}", datalake, event='^submit:')
+            pipe = _read_(PipeJournal, f"{PipeJournal.ANCHOR}/{self._what_.anchor}", datalake, event=_EVENTS_)
             entry = pd.DataFrame()
         else:  # A datablock, a Datablock class or an anchor.
             anchor = _read_(BuildJournal, self._anchor_(), datalake)
             if not anchor.empty and self._dblk_ is not None:
                 anchor = anchor[_of_dblk_(anchor, self._dblk_, adopted)]
-            entry = anchor[anchor['event'].astype(str).str.startswith('submit:')] if not anchor.empty else anchor
+            entry = anchor[anchor['event'].astype(str).str.match(_EVENTS_)] if not anchor.empty else anchor
             # The pipelines it is the entry of: the datablock's, or for a class any under its anchor.
             entrypaths = ({self._dblk_.anchorkeypath} | (set(anchor['anchorkeypath'].dropna()) if not anchor.empty else set())
                           if self._dblk_ is not None else f"/{self._anchor_()}/")
@@ -548,6 +589,25 @@ def rundash(what, target: 'str | Target | None' = None, *, adopted: bool = False
     return runner(what, target, datalake=datalake).rundash(adopted=adopted, live=live)
 
 
+def run(pipeline, method: str, *args, **kwargs):
+    """What a run evaluates where it runs: *pipeline*'s entry's *method*, between the run's own `job:start` and `job:end`.
+
+    Both are journaled on *pipeline*, in the PipeJournal of this process's datalake -- the
+    submitter's own when the cluster mounts it, another otherwise -- with the run's `cluster` and
+    `run` (`DBX_CLUSTER`, `DBX_RUN`) and under the submitter's session (`DBX_SESSION`). `job:end`'s
+    note is 'ok', or what was raised -- raised again.
+    """
+    where = dict(cluster=os.environ.get('DBX_CLUSTER'), run=os.environ.get('DBX_RUN'))
+    _journal_(pipeline, START, **where)
+    try:
+        result = getattr(pipeline.entry, method)(*args, **kwargs)
+    except BaseException as e:
+        _journal_(pipeline, END, note=f"{type(e).__name__}: {e}", inline_note=True, **where)
+        raise
+    _journal_(pipeline, END, note='ok', inline_note=True, **where)
+    return result
+
+
 def verify(block, hash: str) -> dict:
     """What a `dry_run='cluster'` run reports: *block*, evaluated there, has *hash*; where it is, and whether it is valid there.
 
@@ -561,8 +621,8 @@ def verify(block, hash: str) -> dict:
 
 # Helpers ------------------------------------------------------------------------------------------- #
 
-# A closed run's status, by its closing event.
-_CLOSED_STATUS_ = {'submit:END': 'complete', 'submit:ERROR': 'failed', 'submit:CANCEL': 'cancelled'}
+# A closed run's status, by the submitter's closing event.
+_CLOSED_STATUS_ = {COMPLETE: 'complete', FAIL: 'failed', CANCEL: 'cancelled'}
 
 
 def _target_of_(t, mode=None) -> Target:
@@ -581,6 +641,11 @@ def _of_dblk_(j: pd.DataFrame, dblk, adopted: bool) -> pd.Series:
     sources = {a for a in j['anchorkeypath'].dropna().unique()
                if any(str(p).startswith(f"{a.rstrip('/')}/") for p in paths.values())}
     return mask | j['anchorkeypath'].isin(sources)
+
+
+def _is_pipeline_(obj) -> bool:
+    from .pipelines import Pipeline  # pipelines imports this module
+    return isinstance(obj, Pipeline)
 
 
 def _journal_(on, event: str, **kwargs) -> str:
@@ -602,10 +667,50 @@ def _journal_on_of_(record: dict, origin: str, hash: str):
     return None
 
 
-def _read_(journal, anchor, datalake, **filters) -> pd.DataFrame:
+def _pod_events_(runs: list) -> dict:
+    """Each of *runs*'s own `job:start` / `job:end`, where it ran: `{run id: (started, ended, outcome)}`.
+
+    Read from the PipeJournal of the datalake the run ran in -- its record's `datalake`, by the
+    cluster's URL when the cluster has a filesystem of its own -- once per (datalake, pipeline).
+    A run that journaled nothing there, or whose journal cannot be reached, is left out.
+    """
+    out, read = {}, {}
+    for run in runs:
+        lake, anchor = run.record.get('datalake'), run.record.get('pipeline_anchor')
+        if not lake or not anchor or run.id is None:
+            continue
+        target = run.target
+        url = target.url(lake) if getattr(target, 'storage', None) else lake
+        key = (url, anchor)
+        if key not in read:
+            options = target.fsspec_options() if getattr(target, 'storage', None) else None
+            try:
+                read[key] = _read_(PipeJournal, f"{PipeJournal.ANCHOR}/{anchor}", url, storage_options=options,
+                                   event='^job:(start|end)$')
+            except Exception:  # Unreachable now: say nothing, rather than fail the table.
+                read[key] = pd.DataFrame()
+        j = read[key]
+        if j.empty:
+            continue
+        mine = j[j['run'] == run.id]
+        start, end = mine[mine['event'] == START], mine[mine['event'] == END]
+        out[run.id] = (pd.Timestamp(_dt_(start['datetime'].max())) if len(start) else None,
+                       pd.Timestamp(_dt_(end['datetime'].max())) if len(end) else None,
+                       str(end.sort_values('datetime')['note'].iloc[-1]) if len(end) else None)
+    return out
+
+
+def _dt_(value) -> str:
+    """A journal's `datetime` (`2026-11-04T14-06-47.123`, its colons dashed) as ISO."""
+    value = str(value)
+    date, _, time_ = value.partition('T')
+    return f"{date}T{time_.replace('-', ':', 2)}" if time_ else value
+
+
+def _read_(journal, anchor, datalake, *, storage_options=None, **filters) -> pd.DataFrame:
     """*journal*'s entries under *anchor* in *datalake*, filtered, as a plain frame; empty when there are none."""
     try:
-        j = journal.read(anchor, datalake=datalake, index=None, **filters)
+        j = journal.read(anchor, datalake=datalake, index=None, storage_options=storage_options, **filters)
     except FileNotFoundError:
         return pd.DataFrame()
     j = pd.DataFrame(j) if j is not None else pd.DataFrame()
@@ -616,10 +721,10 @@ def _read_(journal, anchor, datalake, **filters) -> pd.DataFrame:
 
 
 def _submits_of_runs_(runs: set, datalake, *, entrypaths: 'set | str' = frozenset()) -> pd.DataFrame:
-    """The `PipeJournal`'s `submit:*` entries of *runs*, or of pipelines whose entry is one of *entrypaths* -- or, a str, is under that anchor (`/<anchor>/`)."""
+    """The `PipeJournal`'s run events of *runs*, or of pipelines whose entry is one of *entrypaths* -- or, a str, is under that anchor (`/<anchor>/`)."""
     if not runs and not entrypaths:
         return pd.DataFrame()
-    j = _read_(PipeJournal, PipeJournal.ANCHOR, datalake, event='^submit:')
+    j = _read_(PipeJournal, PipeJournal.ANCHOR, datalake, event=_EVENTS_)
     if j.empty:
         return j
     entries = (j['entrypath'].astype(str).str.contains(entrypaths, regex=False) if isinstance(entrypaths, str)
@@ -673,7 +778,7 @@ def _rebuild_(record: dict) -> Target:
 
 
 def _literal_(value) -> bool:
-    """Whether *value* survives `repr` and `ast.literal_eval`: what a shipped call's arguments must."""
+    """Whether *value* survives `repr` and `ast.literal_eval`: what a launched call's arguments must."""
     try:
         return ast.literal_eval(repr(value)) == value
     except (ValueError, SyntaxError):

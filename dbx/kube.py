@@ -37,10 +37,11 @@ executable). Or the code is in the image (`dbx.image`).
 `anyscale=True` adds what an Anyscale image needs (`dbx.anyscale.job_options`): its image, its
 `ray` user, its Ray, its Ray working directory. Off Anyscale, give *image* (or `Cluster.image`).
 
-A pipeline's submission is journaled on the pipeline, in the submitting datalake's PipeJournal (`dbx.cluster`):
-`submit:BEGIN`, its note the whole record -- cluster, Job, expression, image, revision, workdirs,
-session, and the Job's manifest itself; `submit:END` / `submit:ERROR` when `Run.wait` sees it
-finish; `submit:CANCEL`.
+A pipeline's run is journaled on the pipeline (`dbx.cluster`): by the submitter in its datalake's
+PipeJournal -- `job:submit`, its note the whole record (cluster, Job, expression, image, revision,
+workdirs, session, and the Job's manifest itself), then `job:complete` / `job:fail` when it sees it
+finish, `job:cancel` -- and by the run in the PipeJournal of the datalake it runs in: `job:start`,
+`job:end`.
 
 Watching: `Run.status()`, `Run.logs(follow=True)`, `KubeRun.reason()` (why Kueue has not
 admitted it), `Run.wait()`, `Run.cancel()` -- and, from another process, a `Runner`'s `runs`,
@@ -283,8 +284,8 @@ def submit(command: str, c: 'str | Cluster', *, block=None, expression: str | No
     """Create the Job running *command* on cluster *c* (`job` for *options*, and `dry_run`); its `KubeRun`.
 
     *workdirs* are synced first. With *block*, the submission is journaled on it (`dbx.cluster`):
-    `submit:BEGIN` before the Job is created, its note the whole record, the manifest among it, and
-    `submit:ERROR` if creating it fails. *expression* is recorded as what *command* evaluates.
+    `job:submit` before the Job is created, its note the whole record, the manifest among it, and
+    `job:fail` if creating it fails. *expression* is recorded as what *command* evaluates.
     *dry_run*: True submits nothing and contacts nothing; `'server'` has the API server validate the
     Job, and creates nothing. Neither syncs or journals.
     """

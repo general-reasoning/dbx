@@ -513,6 +513,11 @@ def write_exec_journal(s: str, datalake: str | None = None, storage_options: dic
     `datetime` and `exec:start:datetime` -- and *end_dt* when it finished,
     `exec:end:datetime`: `exec` records the row once it is over.
 
+    `cluster` and `run` are the cluster and the run (a Job) the command ran
+    as, from `DBX_CLUSTER` and `DBX_RUN`, which a run's Job sets; None run
+    anywhere else. They tell a run's row from the submitting command's when
+    both are under one session in one datalake.
+
     `success` is whether the command returned rather than raised; for one
     that raised, `exception` is what it raised, as `'<Type>: <message>'`,
     and `traceback` where, as Python prints it. Both are None for a command
@@ -541,6 +546,8 @@ def write_exec_journal(s: str, datalake: str | None = None, storage_options: dic
         'traceback': traceback,
         'id': id,
         'session': session,
+        'cluster': os.environ.get('DBX_CLUSTER'),
+        'run': os.environ.get('DBX_RUN'),
         'buildjournal_entries': list(buildjournal_entries or []),
         'output_captures': list(output_captures or []),
         'comment': comment if comment is not None else exec_comment(s),
@@ -1186,7 +1193,8 @@ def _written_buildjournal_(refs, anchor, loc, iloc, *, storage_options, log, n_w
 # where a glance down the right-hand edge finds them.
 EXEC_JOURNAL_COLUMNS = ['datetime', 'exec', 'exec:start:datetime', 'exec:end:datetime',
                         'exception', 'traceback',
-                        'id', 'session', 'buildjournal_entries', 'output_captures', 'comment', 'success']
+                        'id', 'session', 'cluster', 'run', 'buildjournal_entries', 'output_captures', 'comment',
+                        'success']
 
 # The columns that stay at the right-hand edge, after any the list does not name.
 _EXEC_JOURNAL_TAIL_ = ('comment', 'success')
@@ -2813,12 +2821,11 @@ class BuildJournalFrame(pd.DataFrame):
 _PROCESS_BUILDJOURNALS = []
 
 
-# How a command session reaches a process dbx did not start: `dbx.exec`
-# exports them for as long as the command runs, and a process that finds them
-# set at import makes that session its default -- its blocks, and any
-# `dbx.exec` it runs, are the command's. See `BuildJournal.command_session`.
-JOURNAL_SESSION_ENV = 'DBX_JOURNAL_SESSION'
-JOURNAL_DATALAKE_ENV = 'DBX_JOURNAL_DATALAKE'
+# How a command session reaches a process dbx did not start -- a subprocess, a Slurm job, a cluster's
+# Job: `dbx.exec` exports it for as long as the command runs, and a process that finds it set at import
+# makes that session its default -- its blocks, and any `dbx.exec` it runs, are the command's. Its
+# datalake is the process's own DBX_DATALAKE. See `BuildJournal.command_session`.
+SESSION_ENV = 'DBX_SESSION'
 
 
 _PROCESS_BUILDJOURNALS_LOCK = threading.Lock()
@@ -2952,7 +2959,7 @@ class BuildJournal:
         Joined, not opened, when a session other than an unindexed default is
         current: an exec inside an exec, a command in a worker a dbx executor
         sent it to, or one in a process whose default is a command's (see
-        `JOURNAL_SESSION_ENV`). Either way it is indexed from here on, under
+        `SESSION_ENV`). Either way it is indexed from here on, under
         the datalake the exec journal is written to.
         """
         dj = cls.current()
@@ -2966,22 +2973,18 @@ class BuildJournal:
     def exported(self):
         """While open, this session is the default of every process started from this one.
 
-        Through the environment -- `JOURNAL_SESSION_ENV` and
-        `JOURNAL_DATALAKE_ENV` -- which a subprocess, a Slurm job and a
-        spawned worker inherit. What was set before is restored on exit.
+        Through the environment -- `SESSION_ENV` -- which a subprocess, a Slurm
+        job and a spawned worker inherit. What was set before is restored on exit.
         """
-        saved = {k: os.environ.get(k) for k in (JOURNAL_SESSION_ENV, JOURNAL_DATALAKE_ENV)}
-        os.environ[JOURNAL_SESSION_ENV] = self._session
-        if self._datalake is not None:
-            os.environ[JOURNAL_DATALAKE_ENV] = self._datalake
+        saved = os.environ.get(SESSION_ENV)
+        os.environ[SESSION_ENV] = self._session
         try:
             yield self
         finally:
-            for k, v in saved.items():
-                if v is None:
-                    os.environ.pop(k, None)
-                else:
-                    os.environ[k] = v
+            if saved is None:
+                os.environ.pop(SESSION_ENV, None)
+            else:
+                os.environ[SESSION_ENV] = saved
 
     @classmethod
     def session_entries(cls, session: str, *, datalake: str | None = None,
@@ -3347,7 +3350,7 @@ class BuildJournal:
         *cluster* and *run* say where the entry was written from: the name of the
         cluster and the id of the run on it (a Kube Job's name) -- by default
         `DBX_CLUSTER` and `DBX_RUN`, which a run's Job sets, so every entry its
-        build writes carries them; None when written from no run. `submit:*`
+        build writes carries them; None when written from no run. `job:*`
         entries name the run they are about (`dbx.cluster`).
 
         *columns* are recorded in the entry beside its own -- read back, they
@@ -4064,7 +4067,7 @@ class PipeJournal(BuildJournal):
                 storage_options=None, log=None, n_workers=None, progress=None, **filters) -> BuildJournalFrame:
         """Every pipeline in the journal, one row each, with every entrypath it was created to.
 
-        Only its `create` entries count -- not the `submit:*` entries of its runs (`dbx.cluster`).
+        Only its `create` entries count -- not the `job:*` entries of its runs (`dbx.cluster`).
         The entries are read and *filters* applied as `BuildJournal.read`
         applies them, then grouped by the pipeline they are of -- its
         `anchorkeypath`, with the identity columns that go with it -- and
@@ -4129,7 +4132,7 @@ class PipeJournal(BuildJournal):
 
         Under each pipeline's `.journal/{fqcn}/journal/{hash}/`, the newest
         `create` entry -- by its `datetime` -- of every distinct `entrypath` is
-        kept, and every entry of another event -- a run's `submit:*` -- is kept as it is, with its side files (spec, kwargs, quote, cite, repr,
+        kept, and every entry of another event -- a run's `job:*` -- is kept as it is, with its side files (spec, kwargs, quote, cite, repr,
         signature, type, note), which are named, as it is, by the instance's
         `dt`; every other entry is removed, side files and all. `collect`
         reads the same pipelines, each with the same entrypaths, before and
@@ -4630,10 +4633,10 @@ class JournaledResult:
 # each block's datalake -- unless this process was started while a command
 # ran, and so is part of it.
 DEFAULT_BUILDJOURNAL = BuildJournal()
-if os.environ.get(JOURNAL_SESSION_ENV):
-    # A process started while a command ran: its default is the command's.
-    DEFAULT_BUILDJOURNAL._session = os.environ[JOURNAL_SESSION_ENV]
-    DEFAULT_BUILDJOURNAL._datalake = os.environ.get(JOURNAL_DATALAKE_ENV) or default_datalake() or './dbx'
+if os.environ.get(SESSION_ENV):
+    # A process started while a command ran: its default is the command's, in its own datalake.
+    DEFAULT_BUILDJOURNAL._session = os.environ[SESSION_ENV]
+    DEFAULT_BUILDJOURNAL._datalake = default_datalake() or './dbx'
 
 
 def _expand_levels_(fs, prefix: str, levels: list[str]) -> list[str]:

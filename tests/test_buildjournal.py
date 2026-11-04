@@ -1038,9 +1038,9 @@ class TestSessionIndex:
         assert list(frame['hash']) == [block(tmp_path, x=107).hash] * 2
 
     def test_the_environment_is_restored(self):
-        from dbx.journals import JOURNAL_DATALAKE_ENV, JOURNAL_SESSION_ENV
+        from dbx.journals import SESSION_ENV
         dbx.exec("1 + 1")
-        assert JOURNAL_SESSION_ENV not in os.environ and JOURNAL_DATALAKE_ENV not in os.environ
+        assert SESSION_ENV not in os.environ
 
     def test_a_row_from_before_the_index(self, tmp_path):
         import shutil

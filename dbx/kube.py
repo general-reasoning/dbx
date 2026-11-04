@@ -9,9 +9,9 @@ where it submits:
     run = dbx.kube.submit('python -m my.thing', LAMBDA, gpus=8)
     run.wait()                      # True when the Job completes; raises with its log tail if it fails
 
-A pipeline submits its own calls (`Pipeline.submit`, `dbx.cluster`), as a `KubeSubmit` on a Cluster:
+A pipeline runs its own calls (`Pipeline.runner`, `dbx.cluster`) through a `KubeRunner` on a Cluster:
 
-    my_pipeline('preset').submit(LAMBDA).build_tree()        # a KubeRun
+    my_pipeline('preset').runner(LAMBDA).build_tree()        # a KubeRun
 
 Where a value cannot be passed -- a `dbx.pprint` one-liner, `dbx.kubejobs` -- a cluster's name
 works when a package names it in a `dbx.targets` entry point (`dbx.cluster.target`).
@@ -37,14 +37,15 @@ executable). Or the code is in the image (`dbx.image`).
 `anyscale=True` adds what an Anyscale image needs (`dbx.anyscale.job_options`): its image, its
 `ray` user, its Ray, its Ray working directory. Off Anyscale, give *image* (or `Cluster.image`).
 
-A pipeline's submission is journaled on its entrypoint, in the submitting datalake (`dbx.cluster`):
+A pipeline's submission is journaled on the pipeline, in the submitting datalake's PipeJournal (`dbx.cluster`):
 `submit:BEGIN`, its note the whole record -- cluster, Job, expression, image, revision, workdirs,
 session, and the Job's manifest itself; `submit:END` / `submit:ERROR` when `Run.wait` sees it
 finish; `submit:CANCEL`.
 
 Watching: `Run.status()`, `Run.logs(follow=True)`, `KubeRun.reason()` (why Kueue has not
-admitted it), `Run.wait()`, `Run.cancel()` -- and, from another process, `dbx.cluster.runs(block)`
-for the Runs journaled on a block. `jobs` (console `dbx.kubejobs`) is the Jobs of one or more
+admitted it), `Run.wait()`, `Run.cancel()` -- and, from another process, a `Runner`'s `runs`,
+`rundash` and `cancel` (`Pipeline.runner`, `dbx.runner`) for the Runs journaled on a datablock, or
+on every datablock of a class. `jobs` (console `dbx.kubejobs`) is the Jobs of one or more
 clusters as a table, a pending one with Kueue's reason; `kubedash` (console `dbx.kubedash`) is
 their Kueue queues.
 """
@@ -67,11 +68,11 @@ import pandas as pd
 
 from . import anyscale
 from . import cluster as _cluster_
-from .cluster import Run, Submit, Target
+from .cluster import Run, Runner, Target
 from .databits import dbx_repos, dbx_revisions
 
 
-__all__ = ['Cluster', 'KubeRun', 'KubeSubmit', 'cluster', 'clusters', 'job', 'submit', 'sync', 'jobs',
+__all__ = ['Cluster', 'KubeRun', 'KubeRunner', 'cluster', 'clusters', 'job', 'submit', 'sync', 'jobs',
            'kubedash']
 
 
@@ -194,15 +195,15 @@ class KubeRun(Run):
         return _kubectl_(self.target.context, '-n', self.target.namespace, *args)
 
 
-class KubeSubmit(Submit):
-    """A Submit whose runs are Kueue Jobs on a `Cluster`; its options are `job`'s, and `dry_run`.
+class KubeRunner(Runner):
+    """A Runner whose runs are Kueue Jobs on a `Cluster`; its options are `job`'s, and `dry_run`.
 
     `dry_run=True` contacts nothing; `dry_run='server'` has the API server validate the Job and
     create nothing. *workdirs* are synced in `_stage_`, after a dry run would have stopped.
     """
     RUN = KubeRun
 
-    # 4. Helpers: Submit's hooks ------------------------------------------------------------- #
+    # 4. Helpers: Runner's hooks ------------------------------------------------------------- #
 
     def _check_(self, options: dict) -> None:
         takes = set(inspect.signature(_manifest_).parameters) - {'command', 'c'} | {'dry_run'}
@@ -236,7 +237,7 @@ class KubeSubmit(Submit):
         _kubectl_(self._target_.context, 'create', '-f', '-', '-o', 'name', input=json.dumps(record['manifest']))
 
 
-Cluster.MODE, Cluster.SUBMIT = 'kube', KubeSubmit
+Cluster.MODE, Cluster.RUNNER = 'kube', KubeRunner
 
 
 # --------------------------------------------------------------------------------------------- #
@@ -276,7 +277,7 @@ def submit(command: str, c: 'str | Cluster', *, block=None, expression: str | No
     *dry_run*: True submits nothing and contacts nothing; `'server'` has the API server validate the
     Job, and creates nothing. Neither syncs or journals.
     """
-    return KubeSubmit(None, c, **options)._launch_(command, block=block, expression=expression)
+    return KubeRunner(None, c, **options)._launch_(command, on=block, expression=expression)
 
 
 def sync(src: str, url: str, *, storage_options: dict | None = None) -> dict:
@@ -515,8 +516,10 @@ def _manifest_(command: str, c: Cluster, *, name: str = 'dbx', gpus: int = 0, cp
     volumes.append({'name': 'dshm', 'emptyDir': {'medium': 'Memory', 'sizeLimit': f"{max(1, min(64, mem // 4))}Gi"}})
     container = {
         'name': 'dbx', 'image': image, 'command': ['bash', '-c', '\n'.join(script)],
-        'env': [{'name': 'DBX_KUBE_COMMAND', 'value': command}]
-               + [{'name': k, 'value': str(v)} for k, v in env.items()],
+        # The run, by cluster and Job: what every journal entry written in it records (`BuildJournal.write`).
+        'env': [{'name': 'DBX_KUBE_COMMAND', 'value': command}, {'name': 'DBX_CLUSTER', 'value': c.name},
+                {'name': 'DBX_RUN', 'value': jobname}]
+               + [{'name': k, 'value': str(v)} for k, v in env.items() if k not in ('DBX_CLUSTER', 'DBX_RUN')],
         'resources': {'requests': resources, 'limits': resources},
         'volumeMounts': mounts,
     }

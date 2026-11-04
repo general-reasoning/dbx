@@ -36,8 +36,9 @@ pipelines
     one is recorded in the `PipeJournal`, read with
     `pipejournal`.
 cluster, kube, gpu, image, anyscale
-    `dbx.cluster`: a pipeline's call (`Pipeline.submit`) run on a
-    target, and journaled. `dbx.kube`: the target a Kueue cluster
+    `dbx.cluster`: a pipeline's call (`Pipeline.runner`) run on a
+    target, and journaled; `dbx.runner`, the runs of a pipeline, a
+    datablock or a whole Datablock class. `dbx.kube`: the target a Kueue cluster
     is, `dbx.kube.Cluster`, its Jobs, and `kubedash`, its queues as a
     table. `dbx.gpu`: a function on GPUs through Ray, one task per
     call. `dbx.image`: an image of a venv's code, for a Job.
@@ -84,4 +85,5 @@ if _importlib_util.find_spec('torch') and _importlib_util.find_spec('streaming')
     from .probes import *
 from .pipelines import *
 from . import anyscale, cluster, gpu, image, kube
+from .cluster import runner
 

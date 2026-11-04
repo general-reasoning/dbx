@@ -301,18 +301,26 @@ name. It sets the qualified tag on the pipeline by hand
 
 ## Running a pipeline on a cluster
 
-Don't write job scripts or YAML for a pipeline. A pipeline submits itself:
-`p.submit('<target>').build_tree()` runs `dbx.eval(<p.quote()>).entry.build_tree()`
-there and journals the submission on the entrypoint (`CLUSTERS.md`). That puts
-two requirements on the definition:
+Don't write job scripts or YAML for a pipeline. A pipeline runs itself:
+`p.runner('<target>').build_tree()` runs `dbx.eval(<p.quote()>).entry.build_tree()`
+there and journals the submission on the pipeline, in the PipeJournal (`CLUSTERS.md`); the same
+`Runner` lists (`runs`, `rundash`) and cancels (`cancel`) its runs, and
+`dbx.runner(<Datablock class or anchor>)` those of every datablock of a class.
+`p.submit('<target>')` is the older spelling. In a one-liner, wait and check:
+
+```bash
+dbx.pprint "(p := <pipeline>).runner('<target>', ...).build_tree().wait() and p.entry.valid()"
+```
+
+That puts two requirements on the definition:
 
 - **The quote must rebuild the pipeline there.** Keep everything that decides
   the tree in its VAR and its operational kwargs, and read paths through the
   project's env module (above), not from the submitting shell's state.
-  `submit(..., dry_run='cluster')` checks exactly this: same hash there as here.
+  `runner(..., dry_run='cluster')` checks exactly this: same hash there as here.
 - **The project defines its targets, not the pipeline.** Clusters are values
   (`dbx.kube.Cluster`) in a module of their own, passed at call time
-  (`p.submit(LAMBDA)`); nothing is registered. For names in one-liners, the
+  (`p.runner(LAMBDA)`); nothing is registered. For names in one-liners, the
   module's dict of them is a `dbx.targets` entry point in the project's
   packaging. A pipeline module never defines or names a cluster.
 

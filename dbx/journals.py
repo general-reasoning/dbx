@@ -3326,7 +3326,8 @@ class BuildJournal:
     @classmethod
     def write(cls, block, event: str, *, note: str = None, inline_note: bool = False,
               message: str = None, inline_message: bool = False, journal_prefix: str = '',
-              redirection: 'str | dict | None' = None, columns: dict | None = None):
+              redirection: 'str | dict | None' = None, columns: dict | None = None,
+              cluster: str | None = None, run: str | None = None):
         """Write one journal entry for *event*, under `current`'s session, and return its `id`.
 
         `id` is a fresh uuid per call, and it is the only field that
@@ -3359,6 +3360,12 @@ class BuildJournal:
         entry, in the `redirection` column. A redirection is what `read`
         falls back to when the data it wanted is gone, so it must not itself
         depend on a second file still being there.
+
+        *cluster* and *run* say where the entry was written from: the name of the
+        cluster and the id of the run on it (a Kube Job's name) -- by default
+        `DBX_CLUSTER` and `DBX_RUN`, which a run's Job sets, so every entry its
+        build writes carries them; None when written from no run. `submit:*`
+        entries name the run they are about (`dbx.cluster`).
 
         *columns* are recorded in the entry beside its own -- read back, they
         sit ahead of `event` -- for what a journal of another kind adds to
@@ -3410,6 +3417,8 @@ class BuildJournal:
                                                               'code', 'tree')},
                                          'session': dj.session,
                                          'id': entry_id,
+                                         'cluster': cluster if cluster is not None else os.environ.get('DBX_CLUSTER'),
+                                         'run': run if run is not None else os.environ.get('DBX_RUN'),
                                          **{k: record[k] for k in ('tag', 'topics', 'paths', 'slices')},
                                          'log': capture.path if capture is not None else None,
                                          'event': event,
@@ -4072,6 +4081,7 @@ class PipeJournal(BuildJournal):
                 storage_options=None, log=None, n_workers=None, progress=None, **filters) -> BuildJournalFrame:
         """Every pipeline in the journal, one row each, with every entrypath it was created to.
 
+        Only its `create` entries count -- not the `submit:*` entries of its runs (`dbx.cluster`).
         The entries are read and *filters* applied as `BuildJournal.read`
         applies them, then grouped by the pipeline they are of -- its
         `anchorkeypath`, with the identity columns that go with it -- and
@@ -4105,6 +4115,8 @@ class PipeJournal(BuildJournal):
                                        log=log, n_workers=n_workers, index=None, progress=progress, **filters))
         except FileNotFoundError:
             df = pd.DataFrame()
+        if not df.empty and 'event' in df.columns:  # Creations only: a pipeline's runs are journaled here too.
+            df = df[df['event'] == 'create']
         if df.empty or 'entrypath' not in df.columns:
             return BuildJournalFrame(pd.DataFrame(), storage_options=storage_options, unnormalized=True)
 
@@ -4130,19 +4142,19 @@ class PipeJournal(BuildJournal):
     def UNSAFE_compact(cls, anchors=None, *, unjournaled: bool = False, spare=(), datalake=None, storage_options=None,
                        parallelization='multithreading', n_workers=None, dry_run: bool = False,
                        OVERRIDE: bool = False) -> pd.DataFrame:
-        """Remove the entries `collect` would read only to drop: one per pipeline and entrypath is kept.
+        """Remove the entries `collect` would read only to drop: one `create` per pipeline and entrypath is kept.
 
         Under each pipeline's `.journal/{fqcn}/journal/{hash}/`, the newest
-        entry -- by its `datetime` -- of every distinct `entrypath` is
-        kept, with its side files (spec, kwargs, quote, cite, repr,
+        `create` entry -- by its `datetime` -- of every distinct `entrypath` is
+        kept, and every entry of another event -- a run's `submit:*` -- is kept as it is, with its side files (spec, kwargs, quote, cite, repr,
         signature, type, note), which are named, as it is, by the instance's
         `dt`; every other entry is removed, side files and all. `collect`
         reads the same pipelines, each with the same entrypaths, before and
         after.
 
         *anchors* are pipeline classes' fqcns, every one under `.pipelines`
-        by default. *unjournaled* also removes the whole journal of every
-        pipeline whose class -- imported by its fqcn -- has `Pipeline.JOURNAL`
+        by default. *unjournaled* also removes every `create` entry of every
+        pipeline -- all but its runs' -- whose class -- imported by its fqcn -- has `Pipeline.JOURNAL`
         False, but those named in *spare* (fqcns, or class names); a class
         that no longer imports is compacted as any other. As
         `BuildJournal.UNSAFE_compact`, the anchors go to a *parallelization*
@@ -4176,20 +4188,24 @@ class PipeJournal(BuildJournal):
                 return None
             return getattr(pipeline_cls, 'JOURNAL', None)
 
-        def newest_per_entrypath(files):
-            # The newest entry of each entrypath, by its own datetime: its file, and the side files it names.
+        def newest_per_entrypath(files, creations=True):
+            # The newest create of each entrypath, by its own datetime, and every entry of another event:
+            # their files, and the side files they name.
             def read(file):
                 with fs.open(file, 'rb') as f:
                     df = pd.read_parquet(f, use_threads=False)
                 row = df.iloc[0]
                 sides = {norm(p) for c in cls._SIDE_COLUMNS_ if c in df.columns and (p := side_file(row[c]))}
-                return file, row.get('datetime', ''), row.get('entrypath'), sides
-            newest = {}
+                return file, row.get('datetime', ''), row.get('entrypath'), row.get('event', 'create'), sides
+            newest, others = {}, []
             with ThreadPoolExecutor(max_workers=_threads_(fs, 8)) as ex:
-                for file, dt, entrypath, sides in ex.map(read, files):
-                    if entrypath not in newest or dt > newest[entrypath][0]:
+                for file, dt, entrypath, event, sides in ex.map(read, files):
+                    if event != 'create':
+                        others.append((file, sides))
+                    elif entrypath not in newest or dt > newest[entrypath][0]:
                         newest[entrypath] = (dt, file, sides)
-            kept = {norm(file) for _, file, _ in newest.values()} | {p for *_, sides in newest.values() for p in sides}
+            keep = ([(file, sides) for _, file, sides in newest.values()] if creations else []) + others
+            kept = {norm(file) for file, _ in keep} | {p for _, sides in keep for p in sides}
             # A side file a column names, under every extension it is written in: spec and kwargs
             # are written as YAML -- the one named -- and as parquet.
             return kept | {os.path.splitext(p)[0] for p in kept}
@@ -4199,24 +4215,26 @@ class PipeJournal(BuildJournal):
 
         files = fs.find(anchor_dir) if fs.exists(anchor_dir) else []
         on = journaled(anchor)
-        if unjournaled and on is False and anchor not in spare and anchor.rpartition('.')[2] not in spare:
-            removed, action = files, 'removed: not journaled'
+        # An unjournaled class's creations all go; its runs' entries stay, as every class's do.
+        creations = not (unjournaled and on is False and anchor not in spare and anchor.rpartition('.')[2] not in spare)
+        removed = []
+        for journal_dir in fs.glob(os.path.join(anchor_dir, '*', '.journal', '*', 'journal', '*')):
+            hash = os.path.basename(journal_dir.rstrip('/'))
+            entries = fs.glob(os.path.join(journal_dir, '*.parquet'))
+            # What is kept is what the kept entries name -- themselves and their side files -- not
+            # what their file names have in common with them.
+            kept = newest_per_entrypath(entries, creations)
+            journal_root = os.path.dirname(os.path.dirname(journal_dir.rstrip('/')))
+            for file in fs.glob(os.path.join(journal_root, '*', hash, '*')):
+                if norm(file) not in kept and os.path.splitext(norm(file))[0] not in kept:
+                    removed.append(file)
+        if not creations:
+            action = 'removed: not journaled'
         else:
-            removed = []
-            for journal_dir in fs.glob(os.path.join(anchor_dir, '*', '.journal', '*', 'journal', '*')):
-                hash = os.path.basename(journal_dir.rstrip('/'))
-                entries = fs.glob(os.path.join(journal_dir, '*.parquet'))
-                # What is kept is what the kept entries name -- themselves and their side files -- not
-                # what their file names have in common with them.
-                kept = newest_per_entrypath(entries)
-                journal_root = os.path.dirname(os.path.dirname(journal_dir.rstrip('/')))
-                for file in fs.glob(os.path.join(journal_root, '*', hash, '*')):
-                    if norm(file) not in kept and os.path.splitext(norm(file))[0] not in kept:
-                        removed.append(file)
             action = ('compacted' if on is not None else 'compacted: class no longer imports') \
                 if removed else 'unchanged'
         if removed and not dry_run:
-            if action.startswith('removed'):
+            if {norm(f) for f in removed} >= {norm(f) for f in files}:  # Nothing kept: the directory goes too.
                 fs.rm(anchor_dir, recursive=True)
             else:
                 fs.rm(removed)

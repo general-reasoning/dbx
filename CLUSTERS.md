@@ -299,12 +299,14 @@ plain shell command can be run on another machine: today a Kubernetes cluster wi
 journaled, so a run is found and followed again from any process, any later session.
 
 ```bash
-dbx.pprint "myproject.pipelines.train('preset', n_gpus=8).submit('lambda').build_tree()"
+dbx.pprint "(p := myproject.pipelines.train('preset', n_gpus=8)).runner('lambda').build_tree().wait() and p.entry.valid()"
+dbx.pprint "myproject.pipelines.train('preset').runner().rundash()"   # its runs on every cluster
+dbx.pprint "dbx.runner('myproject.blocks.Train').rundash()"           # the runs of every Train, any hash
 dbx.kubejobs                       # my Jobs on every cluster: status, and why a pending one waits
 dbx.kubedash -q myteam             # the clusters' Kueue queues: quota, use, pending
 ```
 
-Modules: `dbx/cluster.py` (targets, `Submit`, `Run`, the journal), `dbx/kube.py` (Kubernetes),
+Modules: `dbx/cluster.py` (targets, `Runner`, `Run`, the journal), `dbx/kube.py` (Kubernetes),
 `dbx/image.py` (an image of a venv's code), `dbx/gpu.py` (a function on a node's GPUs, through Ray),
 `dbx/anyscale.py` (what a Job or an image needs on Anyscale; also a workspace as a datalake, above). `EXECUTORS.md` is the earlier proposal.
 
@@ -333,7 +335,7 @@ CLUSTERS = {c.name: c for c in (LAMBDA,)}
 ```
 
 ```python
-my_pipeline('preset').submit(LAMBDA).build_tree()
+my_pipeline('preset').runner(LAMBDA).build_tree()
 ```
 
 **Names**, for where a value cannot be passed -- a `dbx.pprint` one-liner, `dbx.kubejobs`, a new
@@ -345,14 +347,14 @@ an object that is a Target, or a dict or list of them.
 myproject = "myproject.clusters:CLUSTERS"
 ```
 
-`dbx.cluster.target('lambda')` -- and so `submit('lambda')`, `dbx.kubejobs`, `dbx.kubedash` --
+`dbx.cluster.target('lambda')` -- and so `runner('lambda')`, `dbx.kubejobs`, `dbx.kubedash` --
 loads every `dbx.targets` entry point and looks the name up in what they name. It does that on
 each call and keeps nothing: what a name means is a function of the installed packages, not of
 what this process happened to import. `dbx.cluster.targets()` lists them. (sctx: `sctx/clusters.py`,
 `LAMBDA` and `CRUSOE`; entry point `sctx = "sctx.clusters:CLUSTERS"`.)
 
 **A journaled run carries its target.** `submit:BEGIN`'s record holds the target itself as
-`target_spec` -- its class and its fields -- so `dbx.cluster.runs(block)` rebuilds each run's target
+`target_spec` -- its class and its fields -- so a `Runner`'s `runs()` rebuilds each run's target
 from its record, with no lookup: a run submitted to a target defined in a notebook is still
 followed from another process, and a later change to a project's `LAMBDA` does not rewrite where an
 earlier run went.
@@ -362,9 +364,10 @@ choice of image and venv.
 
 ### 2. Submitting
 
-`Pipeline.submit(target, *, mode=None, force=False, **options)` hands out the pipeline's entrypoint
-as a `Submit` of the target's kind (`target.SUBMIT`: `dbx.kube.KubeSubmit` for a Cluster). A method
-called on it -- `.build_tree()`, `.entry.build_tree()`, `.try_specialize_tree(...)` -- runs there:
+`Pipeline.runner(target, *, mode=None, force=False, **options)` hands out the pipeline's runs on
+*target*: a `Runner` of the target's kind (`target.RUNNER`: `dbx.kube.KubeRunner` for a Cluster). It
+launches -- `.build_tree()`, `.build()`, `.ship('<method>', ...)` for any other method of the
+entrypoint -- and lists, tables and cancels the runs (section 5). A call runs there as:
 
 ```
 dbx.pprint --capture-output "dbx.eval('<the pipeline's quote>').entry.<method>(<args>)"
@@ -378,10 +381,13 @@ returns a `Run` (section 5).
 - **Already built:** `build` and `build_tree` of an entrypoint valid here launch nothing -- a Run
   `skipped` -- unless `force=True`.
 - **`mode`** ('kube'), when given, must be the target's kind: a check, not a choice.
-- **Options** are the kind's, and are refused at `submit(...)` when it does not take them -- a
+- **Options** are the kind's, and are refused at `runner(...)` when it does not take them -- a
   misspelling fails before anything is sent. `gpus` defaults to the pipeline's `n_gpus`, or 0.
 - **A shell command:** `dbx.kube.submit(command, LAMBDA, **options)`, the same Job without a
   pipeline; journaled only when given `block=`.
+- **`Pipeline.submit(target, ...)`** is the older spelling, kept for the commands that use it: any
+  method of the entrypoint called on it is shipped -- `p.submit(t).build_tree()`,
+  `p.submit(t).entry.build()` -- and `runs`, `cancel`, `rundash` are the Runner's.
 
 #### Kube options (`dbx.kube.job`)
 
@@ -440,7 +446,9 @@ call, each with its own log; on a Kube Job that needs `ray=True`, the Job's own 
 
 ### 5. The journal, the run, and its output
 
-A submission is journaled on the entrypoint, in the **submitting** datalake:
+A submission is journaled on the **pipeline**, in the `PipeJournal` (`{datalake}/.pipelines`) of
+the **submitting** datalake -- the pipeline shipped it: its quote, its operational kwargs, its
+specializations -- each entry with the pipeline's `entrypath`:
 
 | event | note |
 |---|---|
@@ -449,9 +457,36 @@ A submission is journaled on the entrypoint, in the **submitting** datalake:
 | `submit:ERROR` | launching failed, or `Run.wait` saw it fail (with its log tail) |
 | `submit:CANCEL` | `Run.cancel` |
 
-`entry.buildjournal(event='^submit')` lists them. `dbx.cluster.runs(block_or_pipeline)` hands each
-submission back as its `Run`, oldest first -- from another process, a later session -- closed when
-its END, ERROR or CANCEL is journaled.
+Every journal entry -- build and pipeline journals alike -- has two columns for where it was written
+from: `cluster` and `run` (the Job's name). The `submit:*` entries name the run they are about; a
+run's Job sets `DBX_CLUSTER` and `DBX_RUN`, so every entry its build writes -- each datablock's
+`build:start`, `build:end`, ... -- names it too. So no datablock of the tree is special: which run
+built one is in its own build entries. Entries written from no run, and those written before the
+columns existed, have None. Runs submitted before this change (2026-11-04) were journaled on the entrypoint, in its
+own build journal; they are read there too.
+
+`PipeJournal.collect` (`dbx.pipejournal`) reads only `create` entries, and `UNSAFE_compact` keeps
+every `submit:*` entry, an unjournaled class's too. A `Runner` reads the runs for you, from another
+process, a later session:
+
+| | whose runs |
+|---|---|
+| `p.runner(target)`, `p.runner()` | the pipeline's (its hash), on *target* or on every target |
+| `dbx.runner(dblk)` | those whose Job built the datablock (its build entries' `run`), and those of the pipelines it is the entry of |
+| `dbx.runner(DatablockClass)`, `dbx.runner('<anchor>')` | the same, for every datablock of the class, whatever its hash; `datalake=`, or `DBX_DATALAKE` |
+| `dbx.runner(PipelineClass)` | every pipeline's of the class, whatever its hash |
+
+- `runs(open=None, adopted=False)`: each submission as its `Run`, oldest first, closed when its END,
+  ERROR or CANCEL is journaled (`run.closing` is that event and its time). *adopted* adds the runs
+  of the builds the datablock adopted through a specialization: those its redirection reads from.
+- `rundash(adopted=False, live=True)`: one row per run, newest first -- `run, cluster, entry (the
+  entry's key), method, status, submitted, ended, elapsed, event`; an open run's status is asked of its cluster (`gone`
+  once the Job is deleted), a closed one's is its closing event's.
+- `cancel()`: cancels the runs still pending or running, each journaled `submit:CANCEL` where its
+  BEGIN is -- its pipeline, even when found by class (the pipeline's quote in its record is
+  evaluated again for it).
+
+`dbx.cluster.runs(what, target)` and `dbx.cluster.rundash(what, target)` are the same, as functions.
 
 **The run's own record is in the target's datalake** (the entry's `DBX_DATALAKE` there). It runs
 `dbx.pprint --capture-output` under a session chosen at submission (`DBX_JOURNAL_SESSION`,
@@ -502,8 +537,8 @@ kubectl itself, for what these do not cover: `kubectl --context C -n NS describe
 
 A kind subclasses three classes of `dbx.cluster`:
 
-- `Target`, with `MODE` (its name, e.g. 'slurm'), `SUBMIT` (its Submit class) and a `name`;
-- `Submit`, implementing `_prepare_(command, **options)` (the record, its `id` among it),
+- `Target`, with `MODE` (its name, e.g. 'slurm'), `RUNNER` (its Runner class) and a `name`;
+- `Runner`, implementing `_prepare_(command, **options)` (the record, its `id` among it),
   `_create_(record)` (launch it), and as needed `_check_(options)` (refuse options it does not take),
   `_stage_(record, **options)` (get files in place), `_dry_run_(record, dry_run)` and
   `_check_options_()` (the least a `dry_run='cluster'` run takes); `RUN` is its Run class;

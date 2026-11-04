@@ -14,6 +14,7 @@ import pytest
 import dbx
 from dbx import cluster as dbxcluster, kube
 from dbx.datablocks import DATAFILE, Datablock
+from dbx.journals import PipeJournal
 from dbx.pipelines import Pipeline
 
 
@@ -46,9 +47,15 @@ class FakeKubectl:
 
     def __init__(self, conditions=(), fail_create=False):
         self.calls, self.created, self.conditions, self.fail_create = [], [], list(conditions), fail_create
+        self.deleted = set()
 
     def __call__(self, context, *args, input=None):
         self.calls.append((context, args))
+        if 'delete' in args:
+            self.deleted.update(a.removeprefix('job/') for a in args if a.startswith('job/'))
+            return ''
+        if 'get' in args and any(a.removeprefix('job/') in self.deleted for a in args if a.startswith('job/')):
+            raise RuntimeError('Error from server (NotFound): jobs.batch not found')
         if 'create' in args:
             if self.fail_create:
                 raise RuntimeError("kubectl create: forbidden")
@@ -278,9 +285,20 @@ def _printed_(fn) -> str:
     return out.getvalue()
 
 
-def _events_(block):
+def _pipe_events_(pipeline):
+    """*pipeline*'s own `submit:*` events in the `PipeJournal`, oldest first."""
     try:
-        j = block.buildjournal()
+        j = PipeJournal.read(f"{PipeJournal.ANCHOR}/{pipeline.anchor}", datalake=pipeline.datalake, index=None,
+                             hash=pipeline.hash, event='^submit:')
+    except FileNotFoundError:
+        return []
+    return [] if j is None or len(j) == 0 else list(j.sort_values('datetime')['event'])
+
+
+def _events_(dblk):
+    """*dblk*'s own journal events, oldest first -- its anchor's journal is its whole class's."""
+    try:
+        j = dblk.buildjournal(hash=dblk.hash)
     except FileNotFoundError:  # No journal at all: nothing was ever written for it.
         return []
     return [] if j is None or len(j) == 0 else list(j.sort_values('datetime')['event'])
@@ -355,7 +373,7 @@ class TestPipelineSubmit:
         assert _env_(m)['DBX_DATALAKE'] == str(tmp_path) and _env_(m)['DBX_KUBE_COMMAND'] == 'dbx.pprint --capture-output "$DBX_SUBMIT_EXPRESSION"'
         assert _container_(m)['resources']['requests']['nvidia.com/gpu'] == '2'
         assert dbx.eval(p.quote()).entry.hash == p.entry.hash
-        assert _events_(p.entry) == ['submit:BEGIN']
+        assert _pipe_events_(p) == ['submit:BEGIN']
 
     def test_entry_reads_as_the_call_and_arguments_travel_as_literals(self, cluster, kubectl, tmp_path):
         p = Single(datalake=str(tmp_path))
@@ -367,18 +385,36 @@ class TestPipelineSubmit:
             Single(datalake=str(tmp_path)).submit(cluster).build(object())
         assert kubectl.calls == []
 
-    def test_the_submit_is_of_the_targets_kind_and_refuses_options_it_does_not_take(self, cluster, tmp_path):
+    def test_the_runner_is_of_the_targets_kind_and_refuses_options_it_does_not_take(self, cluster, tmp_path):
         p = Single(datalake=str(tmp_path))
-        assert type(p.submit(cluster)) is kube.KubeSubmit
+        assert type(p.runner(cluster)) is kube.KubeRunner
+        with pytest.raises(TypeError, match='no option partition'):
+            p.runner(cluster, partition='gpu')
         with pytest.raises(TypeError, match='no option partition'):
             p.submit(cluster, partition='gpu')
         with pytest.raises(ValueError, match="'kube', not 'slurm'"):
-            p.submit(cluster, mode='slurm')
-        assert type(p.submit(cluster, mode='kube')) is kube.KubeSubmit
+            p.runner(cluster, mode='slurm')
+        assert type(p.runner(cluster, mode='kube')) is kube.KubeRunner
 
     def test_a_method_the_entry_lacks_is_an_attribute_error(self, cluster, tmp_path):
         with pytest.raises(AttributeError, match='no method'):
             Single(datalake=str(tmp_path)).submit(cluster).no_such_method
+        with pytest.raises(AttributeError, match='no method'):
+            Single(datalake=str(tmp_path)).runner(cluster).ship('no_such_method')
+
+    def test_submit_ships_what_runner_ships(self, cluster, kubectl, tmp_path):
+        p = Single(datalake=str(tmp_path))
+        p.submit(cluster).build_tree()
+        p.runner(cluster).build_tree()
+        p.runner(cluster).ship('build', extra=1)
+        exprs = [_env_(m)['DBX_SUBMIT_EXPRESSION'] for m in kubectl.created]
+        assert exprs[0] == exprs[1] and exprs[2].endswith('.entry.build(extra=1)')
+        assert [r.id for r in p.submit(cluster).runs()] == [m['metadata']['name'] for m in kubectl.created]
+
+    def test_a_runner_with_no_target_launches_nothing(self, kubectl, tmp_path):
+        with pytest.raises(TypeError, match='launches nothing'):
+            Single(datalake=str(tmp_path)).runner().build_tree()
+        assert kubectl.calls == []
 
     def test_a_valid_entry_is_not_built_again_unless_forced(self, cluster, kubectl, tmp_path):
         p = Single(datalake=str(tmp_path))
@@ -438,7 +474,7 @@ class TestWatching:
         assert runs[0]._closed_ and not runs[1]._closed_
         assert runs[1].record['manifest'] == kubectl.created[1]
         runs[1].wait(poll=0)
-        assert _events_(p.entry) == ['submit:BEGIN', 'submit:END', 'submit:BEGIN', 'submit:END']
+        assert _pipe_events_(p) == ['submit:BEGIN', 'submit:END', 'submit:BEGIN', 'submit:END']
 
     def test_a_runs_target_comes_back_from_its_record_not_by_its_name(self, cluster, kubectl, entry_points, tmp_path):
         p = Single(datalake=str(tmp_path))
@@ -464,6 +500,171 @@ class TestWatching:
         kube.submit('true', cluster)
         cluster.user = 'someone-else'
         assert len(kube.jobs([cluster])) == 0 and len(kube.jobs([cluster], all_users=True)) == 1
+
+
+class TestRunner:
+    """A Runner's runs: scoped by hash, by target, or (by class or anchor) not at all; listed, tabled and cancelled."""
+
+    @pytest.fixture
+    def other(self, cluster):
+        return kube.Cluster('otherc', context='ctx2', namespace='ns', queue='q', image='img:1', user='me')
+
+    def test_every_submit_entry_names_its_cluster_and_run(self, cluster, kubectl, tmp_path):
+        p = Single(datalake=str(tmp_path))
+        run = p.runner(cluster).build_tree()
+        kubectl.conditions = ['Complete']
+        run.wait(poll=0)
+        j = PipeJournal.read(f"{PipeJournal.ANCHOR}/{p.anchor}", datalake=str(tmp_path), index=None, event='^submit:')
+        assert list(j['event']) != [] and set(j['cluster']) == {'testc'} and set(j['run']) == {run.id}
+        assert set(j['entrypath']) == {p.entry.anchorkeypath}
+        assert _events_(p.entry) == []      # nothing on the entry: the pipeline shipped it
+        env = _env_(kubectl.created[0])
+        assert env['DBX_CLUSTER'] == 'testc' and env['DBX_RUN'] == run.id
+
+    def test_entries_written_in_a_run_name_it_and_others_do_not(self, monkeypatch, tmp_path):
+        dblk = Leaf(datalake=str(tmp_path))
+        dblk.build()
+        monkeypatch.setenv('DBX_CLUSTER', 'testc')
+        monkeypatch.setenv('DBX_RUN', 'me-leaf-abcde')
+        Leaf(spec={'n': 2}, datalake=str(tmp_path)).build()
+        j = Leaf(datalake=str(tmp_path)).buildjournal(event='build:end')
+        by_hash = {h: (c, r) for h, c, r in zip(j['hash'], j['cluster'], j['run'])}
+        assert by_hash[Leaf(spec={'n': 2}, datalake=str(tmp_path)).hash] == ('testc', 'me-leaf-abcde')
+        assert by_hash[dblk.hash] == (None, None)
+
+    def test_runs_are_the_datablocks_own_not_its_classs(self, cluster, kubectl, tmp_path):
+        one, two = Single(spec={'n': 1}, datalake=str(tmp_path)), Single(spec={'n': 2}, datalake=str(tmp_path))
+        r1, r2 = one.runner(cluster).build_tree(), two.runner(cluster).build_tree()
+        assert [r.id for r in one.runner().runs()] == [r1.id]
+        assert [r.id for r in dbx.cluster.runs(two)] == [r2.id]
+        assert [r.id for r in dbx.cluster.runs(two.entry)] == [r2.id]
+        everyone = [r1.id, r2.id]
+        assert [r.id for r in dbx.runner(Leaf, datalake=str(tmp_path)).runs()] == everyone
+        assert [r.id for r in dbx.runner(two.entry.anchor, datalake=str(tmp_path)).runs()] == everyone
+
+    def test_runs_on_a_target_are_those_on_it(self, cluster, other, kubectl, tmp_path):
+        p = Single(datalake=str(tmp_path))
+        here, there = p.runner(cluster).build_tree(), p.runner(other).build_tree()
+        assert [r.id for r in p.runner(cluster).runs()] == [here.id]
+        assert [r.id for r in p.runner(other).runs()] == [there.id]
+        assert [r.id for r in p.runner().runs()] == [here.id, there.id]
+        assert type(p.runner().runs()[1].target) is kube.Cluster and p.runner().runs()[1].target.name == 'otherc'
+
+    def test_open_and_closed(self, cluster, kubectl, tmp_path):
+        p = Single(datalake=str(tmp_path))
+        done = p.runner(cluster).build_tree()
+        kubectl.conditions = ['Complete']
+        done.wait(poll=0)
+        kubectl.conditions = []
+        still = p.runner(cluster).build_tree()
+        r = p.runner(cluster)
+        assert [x.id for x in r.runs(open=True)] == [still.id] and [x.id for x in r.runs(open=False)] == [done.id]
+        assert r.runs(open=False)[0].closing[0] == 'submit:END'
+
+    def test_a_close_journaled_before_entries_named_their_run_is_found_by_its_note(self, cluster, kubectl, tmp_path):
+        p = Single(datalake=str(tmp_path))
+        run = p.runner(cluster).build_tree()
+        other = p.runner(cluster).build_tree()
+        p.entry.write_journal_entry(event='submit:END', note=f"kube:testc job/{run.id} complete", inline_note=True)
+        assert [x.id for x in p.runner().runs(open=True)] == [other.id]
+
+    def test_cancel_cancels_what_is_pending_or_running_and_journals_it(self, cluster, kubectl, tmp_path):
+        one, two = Single(spec={'n': 1}, datalake=str(tmp_path)), Single(spec={'n': 2}, datalake=str(tmp_path))
+        r1, r2 = one.runner(cluster).build_tree(), two.runner(cluster).build_tree()
+        assert [r.id for r in one.runner(cluster).cancel()] == [r1.id]
+        assert kubectl.deleted == {r1.id}
+        assert _pipe_events_(one) == ['submit:BEGIN', 'submit:CANCEL'] and _pipe_events_(two)[-1] == 'submit:BEGIN'
+        assert one.runner(cluster).cancel() == []
+
+    def test_cancel_by_class_journals_on_each_runs_own_datablock(self, cluster, kubectl, tmp_path, monkeypatch):
+        monkeypatch.setenv('DBX_DATALAKE', str(tmp_path))
+        one, two = Single(spec={'n': 1}, datalake=str(tmp_path)), Single(spec={'n': 2}, datalake=str(tmp_path))
+        r1, r2 = one.runner(cluster).build_tree(), two.runner(cluster).build_tree()
+        assert sorted(r.id for r in dbx.runner(Leaf, datalake=str(tmp_path)).cancel()) == sorted([r1.id, r2.id])
+        for p in (one, two):
+            assert _pipe_events_(p) == ['submit:BEGIN', 'submit:CANCEL']
+
+    def test_a_job_that_is_over_or_gone_is_not_cancelled(self, cluster, kubectl, tmp_path):
+        p = Single(datalake=str(tmp_path))
+        run = p.runner(cluster).build_tree()
+        kubectl.deleted.add(run.id)
+        assert p.runner(cluster).cancel() == [] and _pipe_events_(p) == ['submit:BEGIN']
+
+    def test_rundash(self, cluster, kubectl, tmp_path):
+        p = Single(datalake=str(tmp_path))
+        done = p.runner(cluster).build_tree()
+        kubectl.conditions = ['Complete']
+        done.wait(poll=0)
+        kubectl.conditions = []
+        cancelled = p.runner(cluster).build_tree()
+        cancelled.cancel()
+        running = p.runner(cluster).ship('build')
+        df = p.runner(cluster).rundash()
+        assert list(df.columns) == ['run', 'cluster', 'entry', 'method', 'status', 'submitted', 'ended', 'elapsed', 'event']
+        assert list(df['run']) == [running.id, cancelled.id, done.id]
+        assert list(df['status']) == ['running', 'cancelled', 'complete']
+        assert list(df['method']) == ['build', 'build_tree', 'build_tree']
+        assert list(df['event'].fillna('')) == ['', 'submit:CANCEL', 'submit:END']
+        assert set(df['entry']) == {p.entry.key} and set(df['cluster']) == {'testc'}
+        assert df['elapsed'].notna().all() and df['ended'].isna().tolist() == [True, False, False]
+        assert list(p.runner(cluster).rundash(live=False)['status']) == ['open', 'cancelled', 'complete']
+        assert list(dbx.cluster.rundash(Leaf, datalake=str(tmp_path))['run']) == list(df['run'])
+
+    def test_a_datablock_built_in_a_run_finds_the_run_through_its_build_entries(self, cluster, kubectl, tmp_path,
+                                                                                  monkeypatch):
+        p = Single(spec={'n': 1}, datalake=str(tmp_path))
+        run = p.runner(cluster).build_tree()
+        built_there = Leaf(spec={'n': 5}, datalake=str(tmp_path))   # in no pipeline's entry: built inside the Job
+        monkeypatch.setenv('DBX_CLUSTER', 'testc')
+        monkeypatch.setenv('DBX_RUN', run.id)
+        built_there.build()
+        monkeypatch.delenv('DBX_RUN')
+        assert [r.id for r in dbx.runner(built_there).runs()] == [run.id]
+        assert dbx.runner(Leaf(spec={'n': 6}, datalake=str(tmp_path))).runs() == []
+
+    def test_a_pipeline_class_lists_the_runs_of_every_pipeline_of_it(self, cluster, kubectl, tmp_path):
+        one, two = Single(spec={'n': 1}, datalake=str(tmp_path)), Single(spec={'n': 2}, datalake=str(tmp_path))
+        r1, r2 = one.runner(cluster).build_tree(), two.runner(cluster).build_tree()
+        assert [r.id for r in dbx.runner(Single, datalake=str(tmp_path)).runs()] == [r1.id, r2.id]
+
+    def test_runs_journaled_on_the_entry_before_are_still_found(self, cluster, kubectl, tmp_path):
+        p = Single(datalake=str(tmp_path))
+        old = kube.submit('true', cluster, block=p.entry)    # the layout of before: submit:* on the entry
+        new = p.runner(cluster).build_tree()
+        assert [r.id for r in p.runner().runs()] == [old.id, new.id]
+        assert [r.id for r in dbx.runner(Leaf, datalake=str(tmp_path)).runs()] == [old.id, new.id]
+        assert [r.id for r in p.runner().cancel()] == [old.id, new.id]
+        assert _events_(p.entry) == ['submit:BEGIN', 'submit:CANCEL']
+        assert _pipe_events_(p) == ['submit:BEGIN', 'submit:CANCEL']
+
+    def test_the_pipeline_journal_still_reads_and_compacts_as_creations(self, cluster, kubectl, tmp_path,
+                                                                        monkeypatch):
+        monkeypatch.setenv('DBX_DATALAKE', str(tmp_path))
+        monkeypatch.setattr(Single, 'JOURNAL', True)
+        p = Single(datalake=str(tmp_path))
+        p.entry
+        p.runner(cluster).build_tree()
+        Single(datalake=str(tmp_path)).entry                       # a second creation of the same pipeline
+        run = p.runner(cluster).build_tree()
+        (row,) = dbx.pipejournal(datalake=str(tmp_path)).to_dict('records')
+        assert row['event'] == 'create' and row['entrypaths'] == [p.entry.anchorkeypath]
+        PipeJournal.UNSAFE_compact(datalake=str(tmp_path), OVERRIDE=True)
+        assert len(p.runner().runs()) == 2 and p.runner().runs()[-1].id == run.id
+        assert len(dbx.pipejournal(datalake=str(tmp_path))) == 1
+        monkeypatch.setattr(Single, 'JOURNAL', False)
+        PipeJournal.UNSAFE_compact(datalake=str(tmp_path), unjournaled=True, OVERRIDE=True)
+        assert len(dbx.pipejournal(datalake=str(tmp_path))) == 0 and len(p.runner().runs()) == 2
+
+    def test_adopted_runs_are_those_of_the_builds_a_redirection_reads(self, tmp_path):
+        import pandas as pd
+        j = pd.DataFrame({'hash': ['mine', 'theirs', 'others'],
+                          'anchorkeypath': ['/lake/A/mine', '/lake/A/theirs', '/lake/A/others']})
+
+        class Dblk:
+            hash = 'mine'
+            _redirected_paths_ = {'x': '/lake/A/theirs/x.txt'}
+        assert list(dbxcluster._of_dblk_(j, Dblk, adopted=False)) == [True, False, False]
+        assert list(dbxcluster._of_dblk_(j, Dblk, adopted=True)) == [True, True, False]
 
 
 class TestClusterDryRun:

@@ -11,8 +11,9 @@ reads them back, one row per pipeline.
 its root -- an entrypoint function -- its arguments the pipeline's VAR: a
 `PipelineFromEntrypointFn`.
 
-`Pipeline.submit` runs a call on the pipeline's entrypoint elsewhere -- a Kueue Job (`dbx.kube`) -- and
-journals it: a `dbx.cluster.Submit`.
+`Pipeline.runner` runs a call on the pipeline's entrypoint elsewhere -- a Kueue Job (`dbx.kube`) --
+journals it, and lists, watches and cancels its runs: a `dbx.cluster.Runner`. `Pipeline.submit` is
+the older spelling.
 """
 import dataclasses
 import functools
@@ -24,7 +25,7 @@ from .databits import default_datalake
 from .datablocks import SYNTHETIC, Datablock
 from .journals import PipeJournal
 from . import cluster as _cluster_
-from .cluster import Submit
+from .cluster import Runner, Submit
 
 
 __all__ = ['Pipeline', 'PipelineFromEntrypointFn', 'pipeline', 'entrypoint_tag']
@@ -123,19 +124,31 @@ class Pipeline(Datablock):
         explicit = set(self.__explicit_params__())
         return {k: getattr(self, k) for k in self.parameters if k not in explicit and k != 'log'}
 
-    def submit(self, target, *, mode: str | None = None, force: bool = False, **options) -> 'Submit':
-        """This pipeline's entrypoint, its method calls run on *target*: a `Submit` of the target's kind.
+    def runner(self, target=None, *, mode: str | None = None, force: bool = False, **options) -> 'Runner':
+        """This pipeline's runs on *target*: a `dbx.cluster.Runner` of the target's kind, which launches, lists, watches and cancels them.
 
-            p.submit(LAMBDA).build_tree()            # a Run -- here a dbx.kube.KubeRun
-            p.submit(LAMBDA, gpus=8, venv='/v').entry.try_specialize_tree(...)
+            r = p.runner(LAMBDA, gpus=8)
+            r.build_tree()                           # a Run -- here a dbx.kube.KubeRun
+            r.ship('try_specialize_tree', ...)
+            r.runs(), r.rundash(), r.cancel()        # its runs on LAMBDA
+            p.runner().rundash()                     # its runs on every target
 
         *target* is where (`dbx.cluster`): a value, e.g. a `dbx.kube.Cluster`, or the name a
-        `dbx.targets` entry point gives one. *mode*, when given, is the kind it must be ('kube'). *options* are the kind's -- `dbx.kube.job`'s for 'kube' --
-        refused here when it does not take them; `gpus` is by default the pipeline's `n_gpus`, or 0.
-        *force* launches `build`/`build_tree` of an entrypoint that is valid here.
+        `dbx.targets` entry point gives one; with none, the Runner lists runs and launches nothing.
+        *mode*, when given, is the kind it must be ('kube'). *options* are the kind's --
+        `dbx.kube.job`'s for 'kube' -- refused here when it does not take them; `gpus` is by default
+        the pipeline's `n_gpus`, or 0. *force* launches `build`/`build_tree` of an entrypoint that is
+        valid here.
         """
-        t = _cluster_.target(target, mode)
-        return t.SUBMIT(self, t, force=force, **options)
+        return _cluster_.runner(self, target, mode=mode, force=force, **options)
+
+    def submit(self, target, *, mode: str | None = None, force: bool = False, **options) -> 'Submit':
+        """`runner(target, ...)`, as the older spelling had it: a `dbx.cluster.Submit`, any method of the entry shipped when called on it.
+
+            p.submit(LAMBDA).build_tree()            # = p.runner(LAMBDA).build_tree()
+            p.submit(LAMBDA).entry.build()           # = p.runner(LAMBDA).build()
+        """
+        return Submit(self.runner(target, mode=mode, force=force, **options))
 
 
 class PipelineFromEntrypointFn(Pipeline):

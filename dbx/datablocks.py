@@ -5425,11 +5425,13 @@ class Datablock:
 
     def write_journal_entry(self, event: str, *, note: str = None, inline_note: bool = False,
                             message: str = None, inline_message: bool = False, journal_prefix: str = '',
-                            redirection: 'str | dict | None' = None, columns: dict | None = None):
+                            redirection: 'str | dict | None' = None, columns: dict | None = None,
+                            cluster: str | None = None, run: str | None = None):
         """Write one journal entry for *event*, under the current `BuildJournal` session. See `BuildJournal.write`."""
         return BuildJournal.write(self, event, note=note, inline_note=inline_note,
                                  message=message, inline_message=inline_message,
-                                 journal_prefix=journal_prefix, redirection=redirection, columns=columns)
+                                 journal_prefix=journal_prefix, redirection=redirection, columns=columns,
+                                 cluster=cluster, run=run)
 
     @staticmethod
     def BuildJournal(anchor, loc: int = None, *, iloc: int = None, datalake=None, storage_options=None, log=None, n_workers=8, index=None, unnormalized: bool = False, url=None, **filter_kwargs):

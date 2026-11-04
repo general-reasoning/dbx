@@ -1,17 +1,19 @@
 """Running on a cluster: a pipeline's call, or a shell command, run somewhere else, and journaled here.
 
-A *target* is where a run goes: a Kubernetes cluster with Kueue (`dbx.kube.Cluster`), and later a
-Slurm partition. It is a value, passed where it is used -- nothing is registered:
+A *target* is where a run goes: a cluster -- a Kubernetes cluster with Kueue (`dbx.kube.Cluster`),
+and later a Slurm partition of one. It is a value, passed where it is used -- nothing is registered:
 
     LAMBDA = dbx.kube.Cluster('lambda', namespace=..., queue=..., ...)
-    my_pipeline('preset').submit(LAMBDA).build_tree()
+    my_pipeline('preset').runner(LAMBDA).build_tree()
 
-A name works too, for a `dbx.pprint` one-liner, a console script or a new shell: `target('lambda')`
-looks it up, each time, among the targets the installed packages name as entry points of group
-`dbx.targets` -- each a Target, or a dict or list of them -- imported for the lookup and kept nowhere:
+A name works too, for a `dbx.pprint` one-liner, a console script or a new shell: `cluster('lambda')`
+looks it up, each time, among the clusters the installed packages name as entry points of group
+`dbx.clusters` -- each a Target, or a dict or list of them -- imported for the lookup and kept nowhere:
 
-    [project.entry-points."dbx.targets"]
+    [project.entry-points."dbx.clusters"]
     myproject = "myproject.clusters:CLUSTERS"
+
+(The group was `dbx.targets` until 2026-11-04; it is still read, with a DeprecationWarning.)
 
 `Pipeline.runner(target, **options)` hands out the pipeline's runs as a `Runner` of the target's
 kind -- `target.RUNNER`, e.g. `dbx.kube.KubeRunner` -- whose `build_tree()` (or `ship('<method>',
@@ -60,6 +62,7 @@ import os
 import re
 import time
 import uuid
+import warnings
 from importlib import metadata
 
 import pandas as pd
@@ -69,7 +72,12 @@ from .databits import default_datalake
 from .journals import BuildJournal, PipeJournal, execjournal
 
 
-__all__ = ['Target', 'Run', 'Runner', 'Submit', 'target', 'targets', 'runner', 'runs', 'rundash', 'verify']
+__all__ = ['Target', 'Run', 'Runner', 'Submit', 'GROUP', 'cluster', 'clusters', 'runner', 'runs', 'rundash', 'verify']
+
+
+# The entry-point group naming the installed packages' clusters, and its name before 2026-11-04.
+GROUP = 'dbx.clusters'
+_OLD_GROUP_ = 'dbx.targets'
 
 
 class Target:
@@ -494,20 +502,29 @@ class Submit:
         return functools.partial(self._runner_.ship, method)
 
 
-def targets(mode: str | None = None) -> dict:
-    """The targets the installed packages name as `dbx.targets` entry points, by name -- of kind *mode* only, when given."""
-    found = [t for ep in metadata.entry_points(group='dbx.targets') for t in _flatten_(ep.load())]
+def clusters(mode: str | None = None) -> dict:
+    """The clusters the installed packages name as `dbx.clusters` entry points, by name -- of kind *mode* only, when given.
+
+    Entry points of the group's old name, `dbx.targets`, count too, with a DeprecationWarning; a name
+    in both is `dbx.clusters`'.
+    """
+    old = metadata.entry_points(group=_OLD_GROUP_)
+    if old:
+        warnings.warn(f"entry points of group {_OLD_GROUP_!r} ({', '.join(sorted(ep.name for ep in old))}): rename "
+                      f"the group {GROUP!r} in the package's pyproject.toml, and reinstall it", DeprecationWarning,
+                      stacklevel=2)
+    found = [t for group in (_OLD_GROUP_, GROUP) for ep in metadata.entry_points(group=group)
+             for t in _flatten_(ep.load())]
     return {t.name: t for t in found if mode is None or t.MODE == mode}
 
 
-def target(t: 'str | Target', mode: str | None = None) -> Target:
-    """*t* when a Target, else the one of that name among `targets()`; of kind *mode* when given."""
+def cluster(t: 'str | Target', mode: str | None = None) -> Target:
+    """*t* when a Target, else the one of that name among `clusters()`; of kind *mode* when given."""
     if isinstance(t, str):
-        named = targets()
+        named = clusters()
         if t not in named:
-            raise KeyError(f"No target {t!r} among the 'dbx.targets' entry points' {sorted(named)}: pass the "
-                           f"target itself (e.g. a dbx.kube.Cluster), or name it in a package's 'dbx.targets' "
-                           f"entry point")
+            raise KeyError(f"No cluster {t!r} among the {GROUP!r} entry points' {sorted(named)}: pass the cluster "
+                           f"itself (e.g. a dbx.kube.Cluster), or name it in a package's {GROUP!r} entry point")
         t = named[t]
     if mode is not None and t.MODE != mode:
         raise ValueError(f"Target {t.name!r} is {t.MODE!r}, not {mode!r}")
@@ -559,8 +576,8 @@ _CLOSED_STATUS_ = {'submit:END': 'complete', 'submit:ERROR': 'failed', 'submit:C
 
 
 def _target_of_(t, mode=None) -> Target:
-    # For Runner and runner, whose argument named target shadows the function.
-    return target(t, mode)
+    # For Runner and runner, whose argument named target is where the run goes.
+    return cluster(t, mode)
 
 
 def _of_dblk_(j: pd.DataFrame, dblk, adopted: bool) -> pd.Series:
@@ -656,7 +673,7 @@ def _rebuild_(record: dict) -> Target:
     """The target a journaled record ran on: from its `target_spec`, else (an older record) by its name."""
     spec = record.get('target_spec')
     if not spec:
-        return target(record['target'])
+        return cluster(record['target'])
     module, qualname = spec['class'].split(':')
     cls = functools.reduce(getattr, qualname.split('.'), importlib.import_module(module))
     fields = {f.name: f for f in dataclasses.fields(cls)}

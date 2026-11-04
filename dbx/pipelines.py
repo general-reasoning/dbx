@@ -134,7 +134,7 @@ class Pipeline(Datablock):
             p.runner().rundash()                     # its runs on every target
 
         *target* is where (`dbx.cluster`): a value, e.g. a `dbx.kube.Cluster`, or the name a
-        `dbx.targets` entry point gives one; with none, the Runner lists runs and launches nothing.
+        `dbx.clusters` entry point gives one; with none, the Runner lists runs and launches nothing.
         *mode*, when given, is the kind it must be ('kube'). *options* are the kind's --
         `dbx.kube.job`'s for 'kube' -- refused here when it does not take them; `gpus` is by default
         the pipeline's `n_gpus`, or 0. *force* launches `build`/`build_tree` of an entrypoint that is

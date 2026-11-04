@@ -25,20 +25,20 @@ def cluster():
                         readonly=('/mnt/data',), cpu_per_gpu=10, gib_per_gpu=100, image='img:1', user='me')
 
 
+class _EP_:
+    def __init__(self, obj, name='ep'):
+        self.obj, self.name = obj, name
+
+    def load(self):
+        return self.obj
+
+
 @pytest.fixture
 def entry_points(monkeypatch):
-    """The installed `dbx.targets` entry points, as a list to put objects in."""
+    """The installed `dbx.clusters` entry points, as a list to put objects in."""
     eps = []
-
-    class EP:
-        def __init__(self, obj):
-            self.obj = obj
-
-        def load(self):
-            return self.obj
-
     monkeypatch.setattr(dbxcluster.metadata, 'entry_points',
-                        lambda group: [EP(o) for o in eps] if group == 'dbx.targets' else [])
+                        lambda group: [_EP_(o) for o in eps] if group == 'dbx.clusters' else [])
     return eps
 
 
@@ -351,12 +351,21 @@ class TestSubmit:
         assert run.status() == 'complete'
 
     def test_a_name_is_looked_up_among_the_entry_points_each_time(self, entry_points):
-        with pytest.raises(KeyError, match="pass the target itself"):
+        with pytest.raises(KeyError, match="pass the cluster itself"):
             kube.cluster('fromep')
         entry_points.append({'fromep': kube.Cluster('fromep', image='i')})
         assert kube.cluster('fromep').name == 'fromep' and list(kube.clusters()) == ['fromep']
         entry_points.clear()
         assert kube.clusters() == {}
+
+    def test_the_old_group_name_still_counts_with_a_warning(self, monkeypatch):
+        old, new = kube.Cluster('old', image='i'), kube.Cluster('both', image='i')
+        groups = {'dbx.targets': [_EP_({'old': old, 'both': kube.Cluster('both', image='stale')}, 'legacy')],
+                  'dbx.clusters': [_EP_({'both': new}, 'current')]}
+        monkeypatch.setattr(dbxcluster.metadata, 'entry_points', lambda group: groups.get(group, []))
+        with pytest.warns(DeprecationWarning, match="'dbx.targets'.*legacy"):
+            named = kube.clusters()
+        assert named == {'old': old, 'both': new}
 
     def test_an_entry_point_may_name_one_target_or_a_list(self, entry_points):
         entry_points.extend([kube.Cluster('one', image='i'), [kube.Cluster('two', image='i'), 'not a target']])

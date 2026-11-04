@@ -321,7 +321,7 @@ That puts two requirements on the definition:
 - **The project defines its targets, not the pipeline.** Clusters are values
   (`dbx.kube.Cluster`) in a module of their own, passed at call time
   (`p.runner(LAMBDA)`); nothing is registered. For names in one-liners, the
-  module's dict of them is a `dbx.targets` entry point in the project's
+  module's dict of them is a `dbx.clusters` entry point in the project's
   packaging. A pipeline module never defines or names a cluster.
 
 *This skill is meant to grow: record new conventions here as the pipelines

@@ -14,7 +14,7 @@ A pipeline runs its own calls (`Pipeline.runner`, `dbx.cluster`) through a `Kube
     my_pipeline('preset').runner(LAMBDA).build_tree()        # a KubeRun
 
 Where a value cannot be passed -- a `dbx.pprint` one-liner, `dbx.kubejobs` -- a cluster's name
-works when a package names it in a `dbx.targets` entry point (`dbx.cluster.target`).
+works when a package names it in a `dbx.clusters` entry point (`dbx.cluster.cluster`).
 
 The Job is generated here, so a different command is a different call, never a file to edit. It
 runs *command* with bash, after:
@@ -245,13 +245,13 @@ Cluster.MODE, Cluster.RUNNER = 'kube', KubeRunner
 # --------------------------------------------------------------------------------------------- #
 
 def cluster(c: 'str | Cluster') -> Cluster:
-    """*c* itself when a Cluster, else the one of that name among the `dbx.targets` entry points'."""
-    return _cluster_.target(c, 'kube')
+    """*c* itself when a Cluster, else the one of that name among the `dbx.clusters` entry points'."""
+    return _cluster_.cluster(c, 'kube')
 
 
 def clusters() -> dict:
-    """The clusters the `dbx.targets` entry points name, by name."""
-    return _cluster_.targets('kube')
+    """The Kube clusters the `dbx.clusters` entry points name, by name."""
+    return _cluster_.clusters('kube')
 
 
 def job(command: str, c: 'str | Cluster', **options) -> dict:
@@ -337,7 +337,7 @@ def sync(src: str, url: str, *, storage_options: dict | None = None) -> dict:
 
 def jobs(clusters_: list | None = None, *, user: str | None = None, all_users: bool = False,
          status: str | None = None) -> pd.DataFrame:
-    """The Jobs in each cluster's namespace -- of *clusters_* (Clusters, or their names; default every `dbx.targets` one) -- as a table, newest first.
+    """The Jobs in each cluster's namespace -- of *clusters_* (Clusters, or their names; default every `dbx.clusters` one) -- as a table, newest first.
 
     One row per Job: `cluster, job, status, gpus, created, started, ended, command`, and `reason`,
     Kueue's message for a pending one. Only *user*'s (default each cluster's `user`, else $USER),
@@ -376,7 +376,7 @@ def jobs(clusters_: list | None = None, *, user: str | None = None, all_users: b
 def jobs_main(argv: list | None = None) -> None:
     """`dbx.kubejobs [CLUSTER ...] [-s STATUS] [-u USER | -A]`: print `jobs`' table (`jobs` returns it)."""
     p = argparse.ArgumentParser(prog='dbx.kubejobs', description=jobs.__doc__.split('\n')[0])
-    p.add_argument('clusters', nargs='*', help="clusters to list, by name (default: every one the dbx.targets entry points name)")
+    p.add_argument('clusters', nargs='*', help="clusters to list, by name (default: every one the dbx.clusters entry points name)")
     p.add_argument('-s', '--status', choices=['pending', 'running', 'complete', 'failed'])
     p.add_argument('-u', '--user', help="whose Jobs (default: the cluster's user, else $USER)")
     p.add_argument('-A', '--all-users', action='store_true', help="every user's Jobs in the namespace")
@@ -393,7 +393,7 @@ def kubedash(contexts: list | None = None, *, resource: str = 'nvidia.com/gpu', 
 
     One row per queue: `context, queue, cohort, quota, used, free, borrowed, pending, admitted`, the
     quantities *resource*'s summed over the queue's flavors (memory in GiB). *contexts* default to
-    the `dbx.targets` entry points' clusters', else kubectl's, one per cluster. *queues* is a regex
+    the `dbx.clusters` entry points' clusters', else kubectl's, one per cluster. *queues* is a regex
     the queue name must match; queues with no quota, no use and no workloads are left out unless
     *all*. A context that cannot be reached is a row with its error.
     """

@@ -339,18 +339,19 @@ my_pipeline('preset').runner(LAMBDA).build_tree()
 ```
 
 **Names**, for where a value cannot be passed -- a `dbx.pprint` one-liner, `dbx.kubejobs`, a new
-shell. The project names its targets as an **entry point** of group `dbx.targets` in its packaging:
+shell. The project names its clusters as an **entry point** of group `dbx.clusters` in its packaging
+(`dbx.targets` until 2026-11-04, still read with a DeprecationWarning):
 an object that is a Target, or a dict or list of them.
 
 ```toml
-[project.entry-points."dbx.targets"]
+[project.entry-points."dbx.clusters"]
 myproject = "myproject.clusters:CLUSTERS"
 ```
 
-`dbx.cluster.target('lambda')` -- and so `runner('lambda')`, `dbx.kubejobs`, `dbx.kubedash` --
-loads every `dbx.targets` entry point and looks the name up in what they name. It does that on
+`dbx.cluster.cluster('lambda')` -- and so `runner('lambda')`, `dbx.kubejobs`, `dbx.kubedash` --
+loads every `dbx.clusters` entry point and looks the name up in what they name. It does that on
 each call and keeps nothing: what a name means is a function of the installed packages, not of
-what this process happened to import. `dbx.cluster.targets()` lists them. (sctx: `sctx/clusters.py`,
+what this process happened to import. `dbx.cluster.clusters()` lists them. (sctx: `sctx/clusters.py`,
 `LAMBDA` and `CRUSOE`; entry point `sctx = "sctx.clusters:CLUSTERS"`.)
 
 **A journaled run carries its target.** `submit:BEGIN`'s record holds the target itself as
@@ -527,8 +528,8 @@ work serially: one SFTP connection cannot serve several threads at once.
 | `run.cancel()` | deletes the Job and its pod; journals CANCEL |
 | `run.command()` | the run's exec-journal row; `.output()` prints what it printed (section 5) |
 | `dbx.cluster.runs(block)` | the Runs of every submission of a block, from its journal |
-| `dbx.kubejobs [CLUSTER ...] [-s STATUS] [-u USER \| -A]` | my Jobs (`-A`: everyone's) on the `dbx.targets` entry points' clusters (or those named), newest first: status, GPUs, times, the expression, and Kueue's reason for a pending one. `dbx.kube.jobs(...)` returns the DataFrame. |
-| `dbx.kubedash [CONTEXT ...] [-r RESOURCE] [-q REGEX] [-a]` | each cluster's Kueue queues: quota, used, free, borrowed, pending, admitted; `-r cpu` / `-r memory` (GiB). Contexts default to the `dbx.targets` entry points' clusters', else kubectl's, one per cluster. `dbx.kube.kubedash(...)` returns the DataFrame. |
+| `dbx.kubejobs [CLUSTER ...] [-s STATUS] [-u USER \| -A]` | my Jobs (`-A`: everyone's) on the `dbx.clusters` entry points' clusters (or those named), newest first: status, GPUs, times, the expression, and Kueue's reason for a pending one. `dbx.kube.jobs(...)` returns the DataFrame. |
+| `dbx.kubedash [CONTEXT ...] [-r RESOURCE] [-q REGEX] [-a]` | each cluster's Kueue queues: quota, used, free, borrowed, pending, admitted; `-r cpu` / `-r memory` (GiB). Contexts default to the `dbx.clusters` entry points' clusters', else kubectl's, one per cluster. `dbx.kube.kubedash(...)` returns the DataFrame. |
 
 kubectl itself, for what these do not cover: `kubectl --context C -n NS describe job/<id>`,
 `get workload`, `describe workload <name>`, `get events --sort-by=.lastTimestamp`.

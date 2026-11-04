@@ -37,7 +37,7 @@ pipelines
     `pipejournal`.
 kube, anyscale
     `dbx.kube`: a shell command, or a pipeline's call
-    (`Pipeline.submit`), run as a Kueue Job on a registered `Cluster`;
+    (`Pipeline.submit`), run as a Kueue Job on a `dbx.kube.Cluster`;
     `kubedash`, its queues as a table. `dbx.anyscale`: what a Job on an
     Anyscale image needs. Imported as modules, not into `dbx`.
 
@@ -80,5 +80,5 @@ if _importlib_util.find_spec('torch') and _importlib_util.find_spec('streaming')
     from .featuretables import *
     from .probes import *
 from .pipelines import *
-from . import anyscale, kube, submits
+from . import anyscale, cluster, kube
 

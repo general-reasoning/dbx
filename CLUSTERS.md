@@ -11,18 +11,19 @@ dbx.kubejobs                       # my Jobs on every cluster: status, and why a
 dbx.kubedash -q myteam             # the clusters' Kueue queues: quota, use, pending
 ```
 
-Modules: `dbx/submits.py` (targets, `Submit`, `Run`, the journal), `dbx/kube.py` (Kubernetes),
+Modules: `dbx/cluster.py` (targets, `Submit`, `Run`, the journal), `dbx/kube.py` (Kubernetes),
 `dbx/anyscale.py` (what a Job on an Anyscale image needs). `EXECUTORS.md` is the earlier proposal.
 
-## 1. Targets, and where they are registered
+## 1. Targets: values, passed where they are used
 
-A **target** is where a run goes: a `dbx.kube.Cluster`, and later a Slurm one. dbx defines none. A
-project registers its own, by name, in a module of its own:
+A **target** is where a run goes: a `dbx.kube.Cluster`, and later a Slurm one. dbx defines none,
+and keeps none: a target is a value, defined in the project and passed at call time. Nothing is
+registered.
 
 ```python
 # myproject/clusters.py
 from dbx import kube
-kube.register(kube.Cluster(
+LAMBDA = kube.Cluster(
     'lambda',                                   # the target's name; kubectl's context by default
     namespace='kueue-team-x', queue='x-queue', cpu_queue='cpu-only-queue', priority='normal-priority',
     mounts={'/mnt/team-x': 'default-pvc-team-x'},  # path in the Job -> volume claim mounted there
@@ -32,22 +33,34 @@ kube.register(kube.Cluster(
     storage={'/mnt/team-x': 'sftp://host/data'},  # the cluster's own filesystem, by URL (see 3)
     user='me',                                  # prefixes Job names; $USER by default
     options=dict(venv='/mnt/team-x/me/venv', ray=True),  # job options always given here
-))
+)
+CLUSTERS = {c.name: c for c in (LAMBDA,)}
 ```
 
-and names that module as an **entry point** of group `dbx.targets` in its packaging:
+```python
+my_pipeline('preset').submit(LAMBDA).build_tree()
+```
+
+**Names**, for where a value cannot be passed -- a `dbx.pprint` one-liner, `dbx.kubejobs`, a new
+shell. The project names its targets as an **entry point** of group `dbx.targets` in its packaging:
+an object that is a Target, or a dict or list of them.
 
 ```toml
 [project.entry-points."dbx.targets"]
-myproject = "myproject.clusters"
+myproject = "myproject.clusters:CLUSTERS"
 ```
 
-`dbx.submits.target('lambda')` -- and so `submit('lambda')`, `dbx.kubejobs`, `dbx.kubedash` --
-imports every `dbx.targets` entry point the first time a name is not found, so a target is found
-with nothing imported first: from a `dbx.pprint` of any expression, a new shell, a console script.
-Importing the module registers its targets too, so a project that imports it anyway needs no entry
-point; the entry point is what makes a name work everywhere. (sctx: `sctx/kube.py`, entry point
-`sctx = "sctx.kube"`, registers `crusoe` and `lambda`.) `dbx.submits.targets()` lists them.
+`dbx.cluster.target('lambda')` -- and so `submit('lambda')`, `dbx.kubejobs`, `dbx.kubedash` --
+loads every `dbx.targets` entry point and looks the name up in what they name. It does that on
+each call and keeps nothing: what a name means is a function of the installed packages, not of
+what this process happened to import. `dbx.cluster.targets()` lists them. (sctx: `sctx/kube.py`,
+`LAMBDA` and `CRUSOE`; entry point `sctx = "sctx.kube:CLUSTERS"`.)
+
+**A journaled run carries its target.** `submit:BEGIN`'s record holds the target itself as
+`target_spec` -- its class and its fields -- so `dbx.cluster.runs(block)` rebuilds each run's target
+from its record, with no lookup: a run submitted to a target defined in a notebook is still
+followed from another process, and a later change to a project's `LAMBDA` does not rewrite where an
+earlier run went.
 
 The site's facts -- namespace, queues, claims, shares -- live in the project, not in dbx; so does the
 choice of image and venv.
@@ -72,7 +85,7 @@ returns a `Run` (section 5).
 - **`mode`** ('kube'), when given, must be the target's kind: a check, not a choice.
 - **Options** are the kind's, and are refused at `submit(...)` when it does not take them -- a
   misspelling fails before anything is sent. `gpus` defaults to the pipeline's `n_gpus`, or 0.
-- **A shell command:** `dbx.kube.submit(command, 'lambda', **options)`, the same Job without a
+- **A shell command:** `dbx.kube.submit(command, LAMBDA, **options)`, the same Job without a
   pipeline; journaled only when given `block=`.
 
 ### Kube options (`dbx.kube.job`)
@@ -116,7 +129,7 @@ What the run imports and reads must be there, at the paths the expression names:
 |---|---|---|
 | `True` | the record and the Job's manifest are made (`Run.record['manifest']`); nothing is contacted | no |
 | `'server'` | kube: the API server validates the Job (`kubectl create --dry-run=server`), creating nothing | no |
-| `'cluster'` | a small real run on the target (kube: no GPUs, 2 CPUs, 8 GiB, no Ray) that only evaluates the pipeline's quote there and `dbx.submits.verify`s the entry: every import, the venv, the revision, the workdirs, the datalake, and the same hash as here. It builds nothing; the call it stands for is in its env as `DBX_SUBMIT_CALL`. `run.wait(); run.command().output()` shows the entry's anchorkeypath, whether it is valid there, and which dbx it imported. A hash that differs there is a ValueError: the code or its configuration is not the same. | yes |
+| `'cluster'` | a small real run on the target (kube: no GPUs, 2 CPUs, 8 GiB, no Ray) that only evaluates the pipeline's quote there and `dbx.cluster.verify`s the entry: every import, the venv, the revision, the workdirs, the datalake, and the same hash as here. It builds nothing; the call it stands for is in its env as `DBX_SUBMIT_CALL`. `run.wait(); run.command().output()` shows the entry's anchorkeypath, whether it is valid there, and which dbx it imported. A hash that differs there is a ValueError: the code or its configuration is not the same. | yes |
 
 ## 5. The journal, the run, and its output
 
@@ -124,12 +137,12 @@ A submission is journaled on the entrypoint, in the **submitting** datalake:
 
 | event | note |
 |---|---|
-| `submit:BEGIN` | before the run is launched; a file holding the whole record as JSON: `executor`, `target`, `id` (the Job), `command`, `expression`, `session` (the submitting one), `run_session`, `datalake`, `submitted`, and the kind's own -- kube: `cluster`, `context`, `namespace`, `image`, `revision`, `workdirs` (what was synced), `manifest` (the Job itself: `kubectl create -f` it to run the same again) |
+| `submit:BEGIN` | before the run is launched; a file holding the whole record as JSON: `executor`, `target` (its name), `target_spec` (the target itself), `id` (the Job), `command`, `expression`, `session` (the submitting one), `run_session`, `datalake`, `submitted`, and the kind's own -- kube: `cluster`, `context`, `namespace`, `image`, `revision`, `workdirs` (what was synced), `manifest` (the Job itself: `kubectl create -f` it to run the same again) |
 | `submit:END` | `Run.wait` saw it complete |
 | `submit:ERROR` | launching failed, or `Run.wait` saw it fail (with its log tail) |
 | `submit:CANCEL` | `Run.cancel` |
 
-`entry.buildjournal(event='^submit')` lists them. `dbx.submits.runs(block_or_pipeline)` hands each
+`entry.buildjournal(event='^submit')` lists them. `dbx.cluster.runs(block_or_pipeline)` hands each
 submission back as its `Run`, oldest first -- from another process, a later session -- closed when
 its END, ERROR or CANCEL is journaled.
 
@@ -148,7 +161,7 @@ The journal is the one record of the output, and the one way to it: `ExecJournal
 
 ```python
 run.command().output()                                         # a cluster that mounts the datalake
-run.command(datalake=dbx.kube.cluster('lambda').url(run.record['datalake'])).output()   # by URL
+run.command(datalake=LAMBDA.url(run.record['datalake'])).output()   # by URL
 ```
 
 ```bash
@@ -170,16 +183,16 @@ work serially: one SFTP connection cannot serve several threads at once.
 | `run.wait(poll=30, timeout=None)` | until complete (True) or *timeout* (False); raises with the log tail on failure; journals END / ERROR |
 | `run.cancel()` | deletes the Job and its pod; journals CANCEL |
 | `run.command()` | the run's exec-journal row; `.output()` prints what it printed (section 5) |
-| `dbx.submits.runs(block)` | the Runs of every submission of a block, from its journal |
-| `dbx.kubejobs [CLUSTER ...] [-s STATUS] [-u USER \| -A]` | my Jobs (`-A`: everyone's) on the registered clusters, newest first: status, GPUs, times, the expression, and Kueue's reason for a pending one. `dbx.kube.jobs(...)` returns the DataFrame. |
-| `dbx.kubedash [CONTEXT ...] [-r RESOURCE] [-q REGEX] [-a]` | each cluster's Kueue queues: quota, used, free, borrowed, pending, admitted; `-r cpu` / `-r memory` (GiB). Contexts default to the registered clusters', else kubectl's, one per cluster. `dbx.kube.kubedash(...)` returns the DataFrame. |
+| `dbx.cluster.runs(block)` | the Runs of every submission of a block, from its journal |
+| `dbx.kubejobs [CLUSTER ...] [-s STATUS] [-u USER \| -A]` | my Jobs (`-A`: everyone's) on the `dbx.targets` entry points' clusters (or those named), newest first: status, GPUs, times, the expression, and Kueue's reason for a pending one. `dbx.kube.jobs(...)` returns the DataFrame. |
+| `dbx.kubedash [CONTEXT ...] [-r RESOURCE] [-q REGEX] [-a]` | each cluster's Kueue queues: quota, used, free, borrowed, pending, admitted; `-r cpu` / `-r memory` (GiB). Contexts default to the `dbx.targets` entry points' clusters', else kubectl's, one per cluster. `dbx.kube.kubedash(...)` returns the DataFrame. |
 
 kubectl itself, for what these do not cover: `kubectl --context C -n NS describe job/<id>`,
 `get workload`, `describe workload <name>`, `get events --sort-by=.lastTimestamp`.
 
 ## 7. Adding a kind
 
-A kind subclasses three classes of `dbx.submits`:
+A kind subclasses three classes of `dbx.cluster`:
 
 - `Target`, with `MODE` (its name, e.g. 'slurm'), `SUBMIT` (its Submit class) and a `name`;
 - `Submit`, implementing `_prepare_(command, **options)` (the record, its `id` among it),

@@ -1,19 +1,20 @@
 """A shell command, or a pipeline's build, run as a Kueue Job on a Kubernetes cluster.
 
-A project registers its clusters -- what kubectl calls them, their namespace, Kueue queues, volume
-claims and where they mount, and the job options it always wants there -- and submits by name:
+A project defines its clusters -- what kubectl calls them, their namespace, Kueue queues, volume
+claims and where they mount, and the job options it always wants there -- as values, and passes one
+where it submits:
 
-    dbx.kube.register(dbx.kube.Cluster('lambda', namespace='kueue-team-x', queue='x-queue',
-                                       mounts={'/mnt/team-x': 'default-pvc-team-x'}, image=...))
-    run = dbx.kube.submit('python -m my.thing', 'lambda', gpus=8)
+    LAMBDA = dbx.kube.Cluster('lambda', namespace='kueue-team-x', queue='x-queue',
+                              mounts={'/mnt/team-x': 'default-pvc-team-x'}, image=...)
+    run = dbx.kube.submit('python -m my.thing', LAMBDA, gpus=8)
     run.wait()                      # True when the Job completes; raises with its log tail if it fails
 
-A pipeline submits its own calls (`Pipeline.submit`, `dbx.submits`), as a `KubeSubmit` on a Cluster:
+A pipeline submits its own calls (`Pipeline.submit`, `dbx.cluster`), as a `KubeSubmit` on a Cluster:
 
-    my_pipeline('preset').submit('lambda').build_tree()      # a KubeRun
+    my_pipeline('preset').submit(LAMBDA).build_tree()        # a KubeRun
 
-Registering puts a Cluster among `dbx.submits`' targets; the module that does it is best named as a
-`dbx.targets` entry point of its package, so a target is found by name with nothing imported first.
+Where a value cannot be passed -- a `dbx.pprint` one-liner, `dbx.kubejobs` -- a cluster's name
+works when a package names it in a `dbx.targets` entry point (`dbx.cluster.target`).
 
 The Job is generated here, so a different command is a different call, never a file to edit. It
 runs *command* with bash, after:
@@ -34,13 +35,13 @@ those whose size and mtime match, keeping modes (console scripts stay executable
 `anyscale=True` adds what an Anyscale image needs (`dbx.anyscale.job_options`): its image, its
 `ray` user, its Ray, its Ray working directory. Off Anyscale, give *image* (or `Cluster.image`).
 
-A pipeline's submission is journaled on its entrypoint, in the submitting datalake (`dbx.submits`):
+A pipeline's submission is journaled on its entrypoint, in the submitting datalake (`dbx.cluster`):
 `submit:BEGIN`, its note the whole record -- cluster, Job, expression, image, revision, workdirs,
 session, and the Job's manifest itself; `submit:END` / `submit:ERROR` when `Run.wait` sees it
 finish; `submit:CANCEL`.
 
 Watching: `Run.status()`, `Run.logs(follow=True)`, `KubeRun.reason()` (why Kueue has not
-admitted it), `Run.wait()`, `Run.cancel()` -- and, from another process, `dbx.submits.runs(block)`
+admitted it), `Run.wait()`, `Run.cancel()` -- and, from another process, `dbx.cluster.runs(block)`
 for the Runs journaled on a block. `jobs` (console `dbx.kubejobs`) is the Jobs of one or more
 clusters as a table, a pending one with Kueue's reason; `kubedash` (console `dbx.kubedash`) is
 their Kueue queues.
@@ -59,11 +60,11 @@ import uuid
 
 import pandas as pd
 
-from . import submits
-from .submits import Run, Submit, Target
+from . import cluster as _cluster_
+from .cluster import Run, Submit, Target
 
 
-__all__ = ['Cluster', 'KubeRun', 'KubeSubmit', 'register', 'cluster', 'clusters', 'job', 'submit', 'sync', 'jobs',
+__all__ = ['Cluster', 'KubeRun', 'KubeSubmit', 'cluster', 'clusters', 'job', 'submit', 'sync', 'jobs',
            'kubedash']
 
 
@@ -106,19 +107,14 @@ class Cluster(Target):
         raise ValueError(f"{path} is under none of cluster {self.name!r}'s storage: {sorted(self.storage)}")
 
 
-def register(c: Cluster) -> Cluster:
-    """Make *c* a target by its name (`dbx.submits.register`)."""
-    return submits.register(c)
-
-
 def cluster(c: 'str | Cluster') -> Cluster:
-    """The registered cluster named *c*; *c* itself when a Cluster."""
-    return submits.target(c, 'kube')
+    """*c* itself when a Cluster, else the one of that name among the `dbx.targets` entry points'."""
+    return _cluster_.target(c, 'kube')
 
 
 def clusters() -> dict:
-    """The registered clusters, by name."""
-    return submits.targets('kube')
+    """The clusters the `dbx.targets` entry points name, by name."""
+    return _cluster_.targets('kube')
 
 
 # --------------------------------------------------------------------------------------------- #
@@ -435,7 +431,7 @@ Cluster.MODE, Cluster.SUBMIT = 'kube', KubeSubmit
 def submit(command: str, c: 'str | Cluster', *, block=None, expression: str | None = None, **options) -> KubeRun:
     """Create the Job running *command* on cluster *c* (`job` for *options*, and `dry_run`); its `KubeRun`.
 
-    *workdirs* are synced first. With *block*, the submission is journaled on it (`dbx.submits`):
+    *workdirs* are synced first. With *block*, the submission is journaled on it (`dbx.cluster`):
     `submit:BEGIN` before the Job is created, its note the whole record, the manifest among it, and
     `submit:ERROR` if creating it fails. *expression* is recorded as what *command* evaluates.
     *dry_run*: True submits nothing and contacts nothing; `'server'` has the API server validate the
@@ -478,7 +474,7 @@ def _job_status_(j: dict) -> str:
 
 def jobs(clusters_: list | None = None, *, user: str | None = None, all_users: bool = False,
          status: str | None = None) -> pd.DataFrame:
-    """The Jobs in each cluster's namespace -- of *clusters_* (registered names; default all) -- as a table, newest first.
+    """The Jobs in each cluster's namespace -- of *clusters_* (Clusters, or their names; default every `dbx.targets` one) -- as a table, newest first.
 
     One row per Job: `cluster, job, status, gpus, created, started, ended, command`, and `reason`,
     Kueue's message for a pending one. Only *user*'s (default each cluster's `user`, else $USER),
@@ -517,7 +513,7 @@ def jobs(clusters_: list | None = None, *, user: str | None = None, all_users: b
 def jobs_main(argv: list | None = None) -> None:
     """`dbx.kubejobs [CLUSTER ...] [-s STATUS] [-u USER | -A]`: print `jobs`' table (`jobs` returns it)."""
     p = argparse.ArgumentParser(prog='dbx.kubejobs', description=jobs.__doc__.split('\n')[0])
-    p.add_argument('clusters', nargs='*', help="registered clusters to list (default: all)")
+    p.add_argument('clusters', nargs='*', help="clusters to list, by name (default: every one the dbx.targets entry points name)")
     p.add_argument('-s', '--status', choices=['pending', 'running', 'complete', 'failed'])
     p.add_argument('-u', '--user', help="whose Jobs (default: the cluster's user, else $USER)")
     p.add_argument('-A', '--all-users', action='store_true', help="every user's Jobs in the namespace")
@@ -559,7 +555,7 @@ def kubedash(contexts: list | None = None, *, resource: str = 'nvidia.com/gpu', 
 
     One row per queue: `context, queue, cohort, quota, used, free, borrowed, pending, admitted`, the
     quantities *resource*'s summed over the queue's flavors (memory in GiB). *contexts* default to
-    the registered clusters', else kubectl's, one per cluster. *queues* is a regex the queue name must
+    the `dbx.targets` entry points' clusters', else kubectl's, one per cluster. *queues* is a regex the queue name must
     match; queues with no quota, no use and no workloads are left out unless *all*. A context that
     cannot be reached is a row with its error.
     """

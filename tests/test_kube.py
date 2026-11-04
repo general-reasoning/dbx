@@ -12,19 +12,33 @@ from dataclasses import dataclass
 import pytest
 
 import dbx
-from dbx import kube, submits
+from dbx import cluster as dbxcluster, kube
 from dbx.datablocks import DATAFILE, Datablock
 from dbx.pipelines import Pipeline
 
 
 @pytest.fixture
 def cluster():
-    c = kube.register(kube.Cluster('testc', context='ctx', namespace='ns', queue='gpu-q', cpu_queue='cpu-q',
-                                   priority='normal', mounts={'/mnt/team': 'team-pvc', '/mnt/data': 'data-pvc'},
-                                   readonly=('/mnt/data',), cpu_per_gpu=10, gib_per_gpu=100, image='img:1',
-                                   user='me'))
-    yield c
-    submits.TARGETS.pop('testc', None)
+    return kube.Cluster('testc', context='ctx', namespace='ns', queue='gpu-q', cpu_queue='cpu-q',
+                        priority='normal', mounts={'/mnt/team': 'team-pvc', '/mnt/data': 'data-pvc'},
+                        readonly=('/mnt/data',), cpu_per_gpu=10, gib_per_gpu=100, image='img:1', user='me')
+
+
+@pytest.fixture
+def entry_points(monkeypatch):
+    """The installed `dbx.targets` entry points, as a list to put objects in."""
+    eps = []
+
+    class EP:
+        def __init__(self, obj):
+            self.obj = obj
+
+        def load(self):
+            return self.obj
+
+    monkeypatch.setattr(dbxcluster.metadata, 'entry_points',
+                        lambda group: [EP(o) for o in eps] if group == 'dbx.targets' else [])
+    return eps
 
 
 class FakeKubectl:
@@ -78,7 +92,7 @@ def _env_(manifest):
 
 class TestTheJob:
     def test_a_gpu_job_is_sized_by_the_clusters_share_and_queued_suspended(self, cluster):
-        m = kube.job('echo hi', 'testc', gpus=2, name='My Thing')
+        m = kube.job('echo hi', cluster, gpus=2, name='My Thing')
         res = _container_(m)['resources']['requests']
         assert (res['cpu'], res['memory'], res['nvidia.com/gpu']) == ('20', '200Gi', '2')
         assert m['metadata']['labels']['kueue.x-k8s.io/queue-name'] == 'gpu-q'
@@ -88,26 +102,26 @@ class TestTheJob:
         assert _env_(m)['DBX_KUBE_COMMAND'] == 'echo hi' and m['metadata']['annotations']['dbx/command'] == 'echo hi'
 
     def test_a_job_without_gpus_goes_to_the_cpu_queue(self, cluster):
-        m = kube.job('echo hi', 'testc')
+        m = kube.job('echo hi', cluster)
         assert m['metadata']['labels']['kueue.x-k8s.io/queue-name'] == 'cpu-q'
         assert _container_(m)['resources']['requests']['nvidia.com/gpu'] == '0'
 
     def test_the_claims_mount_where_the_cluster_says_read_only_where_it_says(self, cluster):
-        m = kube.job('true', 'testc')
+        m = kube.job('true', cluster)
         mounts = {v['mountPath']: v for v in _container_(m)['volumeMounts']}
         claims = {v['name']: v for v in m['spec']['template']['spec']['volumes']}
         assert claims[mounts['/mnt/team']['name']]['persistentVolumeClaim']['claimName'] == 'team-pvc'
         assert mounts['/mnt/data'].get('readOnly') and not mounts['/mnt/team'].get('readOnly')
 
     def test_off_anyscale_nothing_of_anyscales_is_assumed(self, cluster):
-        m = kube.job('true', 'testc', ray=True)
+        m = kube.job('true', cluster, ray=True)
         script = _container_(m)['command'][2]
         assert 'securityContext' not in m['spec']['template']['spec']
         assert not any(k.startswith('ANYSCALE') for k in _env_(m))
         assert '\nray start --head' in script and '/home/ray' not in script
 
     def test_anyscale_adds_its_user_its_ray_and_its_working_dir(self, cluster):
-        m = kube.job('true', 'testc', anyscale=True, ray=True)
+        m = kube.job('true', cluster, anyscale=True, ray=True)
         script = _container_(m)['command'][2]
         assert m['spec']['template']['spec']['securityContext'] == {'runAsUser': 1000, 'runAsGroup': 100}
         assert _env_(m)['ANYSCALE_WORKING_DIR'] == dbx.anyscale.WORKING_DIR
@@ -116,17 +130,17 @@ class TestTheJob:
     def test_no_image_is_an_error_that_says_where_one_comes_from(self, cluster):
         cluster.image = None
         with pytest.raises(ValueError, match='image='):
-            kube.job('true', 'testc')
+            kube.job('true', cluster)
 
     def test_the_venv_is_activated_and_the_command_runs_last(self, cluster):
-        script = _container_(kube.job('true', 'testc', venv='/mnt/team/venv', setup=['echo setup']))['command'][2]
+        script = _container_(kube.job('true', cluster, venv='/mnt/team/venv', setup=['echo setup']))['command'][2]
         lines = script.splitlines()
         assert lines.index('echo setup') < lines.index('source /mnt/team/venv/bin/activate')
         assert lines[-1] == 'exec bash -c "$DBX_KUBE_COMMAND"'
 
     def test_the_clusters_options_are_defaults_and_its_env_is_added_to(self, cluster):
         cluster.options = {'venv': '/v', 'env': {'A': '1'}, 'gpus': 1}
-        m = kube.job('true', 'testc', env={'B': '2'}, gpus=4)
+        m = kube.job('true', cluster, env={'B': '2'}, gpus=4)
         assert _env_(m)['A'] == '1' and _env_(m)['B'] == '2'
         assert 'source /v/bin/activate' in _container_(m)['command'][2]
         assert _container_(m)['resources']['requests']['nvidia.com/gpu'] == '4'
@@ -150,7 +164,7 @@ class TestRevision:
         return subprocess.run(['git', '-C', repo, 'rev-parse', 'HEAD'], capture_output=True, text=True).stdout.strip()
 
     def test_both_repos_are_cloned_at_their_commits_dbx_first_on_the_path(self, cluster, repos):
-        m = kube.job('true', 'testc', revision='HEAD:HEAD')
+        m = kube.job('true', cluster, revision='HEAD:HEAD')
         script = _container_(m)['command'][2]
         dsha, psha = self._sha_(repos[0]), self._sha_(repos[1])
         assert f"checkout --quiet {dsha}" in script and f"checkout --quiet {psha}" in script
@@ -163,7 +177,7 @@ class TestRevision:
             f.write('x')
         subprocess.run(['git', '-C', repos[1], 'add', 'f'], check=True)
         with pytest.raises(ValueError, match='commit first'):
-            kube.job('true', 'testc', revision=True)
+            kube.job('true', cluster, revision=True)
 
 
 # --------------------------------------------------------------------------------------------- #
@@ -194,15 +208,15 @@ class TestWorkdirs:
         assert kube.sync(str(src), f"file://{dst}")['files'] == 1 and (dst / 'data.txt').read_text() == 'abcd'
 
     def test_a_cluster_that_mounts_our_paths_takes_a_workdir_only_where_it_is(self, cluster, kubectl, tmp_path):
-        kube.submit('true', 'testc', workdirs={str(tmp_path): str(tmp_path)})
+        kube.submit('true', cluster, workdirs={str(tmp_path): str(tmp_path)})
         with pytest.raises(ValueError, match='there already'):
-            kube.submit('true', 'testc', workdirs={str(tmp_path): '/mnt/team/x'})
+            kube.submit('true', cluster, workdirs={str(tmp_path): '/mnt/team/x'})
 
     def test_a_cluster_with_its_own_storage_is_synced_before_the_job(self, cluster, kubectl, tmp_path):
         (tmp_path / 'src').mkdir()
         (tmp_path / 'src' / 'f').write_text('x')
         cluster.storage = {'/mnt/team': f"file://{tmp_path / 'remote'}"}
-        run = kube.submit('true', 'testc', workdirs={str(tmp_path / 'src'): '/mnt/team/code'})
+        run = kube.submit('true', cluster, workdirs={str(tmp_path / 'src'): '/mnt/team/code'})
         assert (tmp_path / 'remote' / 'code' / 'f').read_text() == 'x'
         assert run.record['workdirs'][str(tmp_path / 'src')]['files'] == 1
 
@@ -252,13 +266,13 @@ def _events_(block):
 class TestSubmit:
     def test_a_dry_run_contacts_nothing_and_journals_nothing(self, cluster, kubectl, tmp_path):
         b = Leaf(datalake=str(tmp_path))
-        run = kube.submit('true', 'testc', block=b, dry_run=True)
+        run = kube.submit('true', cluster, block=b, dry_run=True)
         assert kubectl.calls == [] and run.job is None and run.status() == 'dry-run'
         assert _events_(b) == [] and run.record['manifest']['kind'] == 'Job'
 
     def test_a_submission_is_journaled_with_its_whole_record(self, cluster, kubectl, tmp_path):
         b = Leaf(datalake=str(tmp_path))
-        run = kube.submit('echo hi', 'testc', block=b, gpus=1)
+        run = kube.submit('echo hi', cluster, block=b, gpus=1)
         assert kubectl.created[0]['metadata']['name'] == run.job
         j = b.buildjournal()
         [row] = j[j['event'] == 'submit:BEGIN'].to_dict('records')
@@ -269,14 +283,14 @@ class TestSubmit:
 
     def test_wait_journals_the_end_once(self, cluster, kubectl, tmp_path):
         b = Leaf(datalake=str(tmp_path))
-        run = kube.submit('true', 'testc', block=b)
+        run = kube.submit('true', cluster, block=b)
         kubectl.conditions = ['Complete']
         assert run.wait(poll=0) and run.wait(poll=0)
         assert _events_(b) == ['submit:BEGIN', 'submit:END']
 
     def test_a_failed_job_raises_with_its_log_and_journals_the_error(self, cluster, kubectl, tmp_path):
         b = Leaf(datalake=str(tmp_path))
-        run = kube.submit('true', 'testc', block=b)
+        run = kube.submit('true', cluster, block=b)
         kubectl.conditions = ['Failed']
         with pytest.raises(RuntimeError, match='boom'):
             run.wait(poll=0)
@@ -286,35 +300,32 @@ class TestSubmit:
         monkeypatch.setattr(kube, '_kubectl_', FakeKubectl(fail_create=True))
         b = Leaf(datalake=str(tmp_path))
         with pytest.raises(RuntimeError, match='forbidden'):
-            kube.submit('true', 'testc', block=b)
+            kube.submit('true', cluster, block=b)
         assert _events_(b) == ['submit:BEGIN', 'submit:ERROR']
 
     def test_status_reads_the_jobs_conditions(self, cluster, kubectl):
-        run = kube.submit('true', 'testc')
+        run = kube.submit('true', cluster)
         assert run.status() == 'running'
         kubectl.conditions = ['Complete']
         assert run.status() == 'complete'
 
-    def test_an_unregistered_cluster_says_how_to_register_one(self):
-        with pytest.raises(KeyError, match='register'):
-            kube.cluster('nowhere')
+    def test_a_name_is_looked_up_among_the_entry_points_each_time(self, entry_points):
+        with pytest.raises(KeyError, match="pass the target itself"):
+            kube.cluster('fromep')
+        entry_points.append({'fromep': kube.Cluster('fromep', image='i')})
+        assert kube.cluster('fromep').name == 'fromep' and list(kube.clusters()) == ['fromep']
+        entry_points.clear()
+        assert kube.clusters() == {}
 
-    def test_a_target_is_found_through_its_packages_entry_point(self, monkeypatch):
-        class EP:
-            def load(self):
-                kube.register(kube.Cluster('fromep', image='i'))
-        monkeypatch.setattr(submits, '_LOADED_', False)
-        monkeypatch.setattr(submits.metadata, 'entry_points', lambda group: [EP()] if group == 'dbx.targets' else [])
-        try:
-            assert kube.cluster('fromep').name == 'fromep' and 'fromep' in kube.clusters()
-        finally:
-            submits.TARGETS.pop('fromep', None)
+    def test_an_entry_point_may_name_one_target_or_a_list(self, entry_points):
+        entry_points.extend([kube.Cluster('one', image='i'), [kube.Cluster('two', image='i'), 'not a target']])
+        assert sorted(kube.clusters()) == ['one', 'two']
 
 
 class TestPipelineSubmit:
     def test_a_call_ships_the_pipelines_quote_and_the_datalake(self, cluster, kubectl, tmp_path):
         p = Single(spec={'n': 3}, datalake=str(tmp_path), n_gpus=2)
-        run = p.submit('testc').build_tree()
+        run = p.submit(cluster).build_tree()
         m = kubectl.created[0]
         expression = _env_(m)['DBX_SUBMIT_EXPRESSION']
         assert expression == f"dbx.eval({p.quote()!r}).entry.build_tree()" == run.record['expression']
@@ -325,40 +336,40 @@ class TestPipelineSubmit:
 
     def test_entry_reads_as_the_call_and_arguments_travel_as_literals(self, cluster, kubectl, tmp_path):
         p = Single(datalake=str(tmp_path))
-        p.submit('testc', gpus=0).entry.build(extra=[1, 'a'])
+        p.submit(cluster, gpus=0).entry.build(extra=[1, 'a'])
         assert _env_(kubectl.created[0])['DBX_SUBMIT_EXPRESSION'].endswith(".entry.build(extra=[1, 'a'])")
 
     def test_a_non_literal_argument_is_refused_before_anything_is_sent(self, cluster, kubectl, tmp_path):
         with pytest.raises(TypeError, match='literals'):
-            Single(datalake=str(tmp_path)).submit('testc').build(object())
+            Single(datalake=str(tmp_path)).submit(cluster).build(object())
         assert kubectl.calls == []
 
     def test_the_submit_is_of_the_targets_kind_and_refuses_options_it_does_not_take(self, cluster, tmp_path):
         p = Single(datalake=str(tmp_path))
-        assert type(p.submit('testc')) is kube.KubeSubmit and type(p.submit(cluster)) is kube.KubeSubmit
+        assert type(p.submit(cluster)) is kube.KubeSubmit
         with pytest.raises(TypeError, match='no option partition'):
-            p.submit('testc', partition='gpu')
+            p.submit(cluster, partition='gpu')
         with pytest.raises(ValueError, match="'kube', not 'slurm'"):
-            p.submit('testc', mode='slurm')
-        assert type(p.submit('testc', mode='kube')) is kube.KubeSubmit
+            p.submit(cluster, mode='slurm')
+        assert type(p.submit(cluster, mode='kube')) is kube.KubeSubmit
 
     def test_a_method_the_entry_lacks_is_an_attribute_error(self, cluster, tmp_path):
         with pytest.raises(AttributeError, match='no method'):
-            Single(datalake=str(tmp_path)).submit('testc').no_such_method
+            Single(datalake=str(tmp_path)).submit(cluster).no_such_method
 
     def test_a_valid_entry_is_not_built_again_unless_forced(self, cluster, kubectl, tmp_path):
         p = Single(datalake=str(tmp_path))
         p.entry.build()
-        run = p.submit('testc').build_tree()
+        run = p.submit(cluster).build_tree()
         assert run.job is None and run.skipped and run.status() == 'skipped' and run.wait()
         assert type(run) is kube.KubeRun and 'skipped' in repr(run)
         assert kubectl.calls == []
-        assert p.submit('testc', force=True).build_tree().job is not None
+        assert p.submit(cluster, force=True).build_tree().job is not None
 
 
 class TestWatching:
     def test_a_call_runs_captured_under_a_session_of_its_own_that_is_recorded(self, cluster, kubectl, tmp_path):
-        run = Single(datalake=str(tmp_path)).submit('testc').build_tree()
+        run = Single(datalake=str(tmp_path)).submit(cluster).build_tree()
         env = _env_(kubectl.created[0])
         assert env['DBX_KUBE_COMMAND'] == 'dbx.pprint --capture-output "$DBX_SUBMIT_EXPRESSION"'
         assert env['DBX_JOURNAL_SESSION'] == run.record['run_session'] != env['DBX_PARENT_SESSION']
@@ -395,49 +406,61 @@ class TestWatching:
 
     def test_the_runs_of_a_block_come_back_from_its_journal(self, cluster, kubectl, tmp_path):
         p = Single(datalake=str(tmp_path))
-        first = p.submit('testc').build_tree()
+        first = p.submit(cluster).build_tree()
         kubectl.conditions = ['Complete']
         first.wait(poll=0)
-        second = p.submit('testc').build_tree()
-        runs = dbx.submits.runs(p)
+        second = p.submit(cluster).build_tree()
+        runs = dbx.cluster.runs(p)
         assert [r.id for r in runs] == [first.id, second.id] and type(runs[0]) is kube.KubeRun
         assert runs[0]._closed_ and not runs[1]._closed_
         assert runs[1].record['manifest'] == kubectl.created[1]
         runs[1].wait(poll=0)
         assert _events_(p.entry) == ['submit:BEGIN', 'submit:END', 'submit:BEGIN', 'submit:END']
 
+    def test_a_runs_target_comes_back_from_its_record_not_by_its_name(self, cluster, kubectl, entry_points, tmp_path):
+        p = Single(datalake=str(tmp_path))
+        p.submit(cluster).build_tree()
+        assert kube.clusters() == {}            # nothing to look 'testc' up in
+        (run,) = dbx.cluster.runs(p)
+        assert run.target == cluster and run.target is not cluster
+
+    def test_a_name_submits_to_the_entry_points_target(self, cluster, kubectl, entry_points, tmp_path):
+        entry_points.append({'testc': cluster})
+        run = Single(datalake=str(tmp_path)).submit('testc').build_tree()
+        assert run.record['target_spec']['fields']['queue'] == 'gpu-q' and kubectl.created
+
     def test_a_pending_job_says_why(self, cluster, kubectl):
-        run = kube.submit('true', 'testc')
+        run = kube.submit('true', cluster)
         kubectl.conditions = ['Pending']
         assert run.status() == 'pending' and run.reason() == 'insufficient quota for cpu'
-        df = kube.jobs(['testc'])
+        df = kube.jobs([cluster])
         assert list(df['job']) == [run.id] and df['reason'].iloc[0] == 'insufficient quota for cpu'
         assert df['command'].iloc[0] == 'true'
 
     def test_jobs_are_the_users_unless_all_users(self, cluster, kubectl, monkeypatch):
-        kube.submit('true', 'testc')
+        kube.submit('true', cluster)
         cluster.user = 'someone-else'
-        assert len(kube.jobs(['testc'])) == 0 and len(kube.jobs(['testc'], all_users=True)) == 1
+        assert len(kube.jobs([cluster])) == 0 and len(kube.jobs([cluster], all_users=True)) == 1
 
 
 class TestClusterDryRun:
     def test_it_ships_a_small_run_that_verifies_the_entry_and_records_the_call(self, cluster, kubectl, tmp_path):
         p = Single(spec={'n': 2}, datalake=str(tmp_path), n_gpus=8)
         p.entry.build()
-        run = p.submit('testc', dry_run='cluster').build_tree()
+        run = p.submit(cluster, dry_run='cluster').build_tree()
         m = kubectl.created[0]
         assert run.id is not None and m['metadata']['name'].startswith('me-single-build-tree-check-')
-        assert _env_(m)['DBX_SUBMIT_EXPRESSION'] == f"dbx.submits.verify(dbx.eval({p.quote()!r}).entry, {p.entry.hash!r})"
+        assert _env_(m)['DBX_SUBMIT_EXPRESSION'] == f"dbx.cluster.verify(dbx.eval({p.quote()!r}).entry, {p.entry.hash!r})"
         assert _env_(m)['DBX_SUBMIT_CALL'].endswith('.entry.build_tree()')
         req = _container_(m)['resources']['requests']
         assert (req['nvidia.com/gpu'], req['cpu']) == ('0', '2') and 'ray start' not in _container_(m)['command'][2]
 
     def test_verify_reports_the_entry_and_refuses_another_hash(self, tmp_path):
         b = Leaf(datalake=str(tmp_path))
-        got = dbx.submits.verify(dbx.eval(b.quote()), b.hash)
+        got = dbx.cluster.verify(dbx.eval(b.quote()), b.hash)
         assert got['hash'] == b.hash and got['valid'] is False
         with pytest.raises(ValueError, match='differs'):
-            dbx.submits.verify(b, '0' * 8)
+            dbx.cluster.verify(b, '0' * 8)
 
 
 # --------------------------------------------------------------------------------------------- #

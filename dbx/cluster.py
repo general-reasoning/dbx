@@ -1,12 +1,17 @@
-"""Submitting: a pipeline's call, or a shell command, run somewhere else, and journaled here.
+"""Running on a cluster: a pipeline's call, or a shell command, run somewhere else, and journaled here.
 
 A *target* is where a run goes: a Kubernetes cluster with Kueue (`dbx.kube.Cluster`), and later a
-Slurm partition. A project registers its targets by name -- `register(target)`, at the import of the
-module defining them, which it names in its packaging as an entry point of group `dbx.targets`, so
-`target('lambda')` finds it without the project being imported first:
+Slurm partition. It is a value, passed where it is used -- nothing is registered:
+
+    LAMBDA = dbx.kube.Cluster('lambda', namespace=..., queue=..., ...)
+    my_pipeline('preset').submit(LAMBDA).build_tree()
+
+A name works too, for a `dbx.pprint` one-liner, a console script or a new shell: `target('lambda')`
+looks it up, each time, among the targets the installed packages name as entry points of group
+`dbx.targets` -- each a Target, or a dict or list of them -- imported for the lookup and kept nowhere:
 
     [project.entry-points."dbx.targets"]
-    myproject = "myproject.clusters"
+    myproject = "myproject.clusters:CLUSTERS"
 
 `Pipeline.submit(target, **options)` hands out the pipeline's entrypoint as a `Submit` of the
 target's kind -- `target.SUBMIT`, e.g. `dbx.kube.KubeSubmit` -- and a method called on it runs
@@ -16,15 +21,16 @@ entry's datalake as `DBX_DATALAKE`. It returns a `Run`: `status`, `wait`, `logs`
 The run is journaled on the entrypoint, in the submitting datalake:
 
     submit:BEGIN    before it is launched; its note (a file) the whole record, as JSON: the kind and
-                    target, the run's id, the command and expression, the submitting session, and
-                    what the kind adds -- a Kube Job's manifest, image, revision, synced workdirs
+                    the target itself (`target_spec`), the run's id, the command and expression, the
+                    submitting session, and what the kind adds -- a Kube Job's manifest, image,
+                    revision, synced workdirs
     submit:END      when `Run.wait` sees it complete
     submit:ERROR    when launching it fails, or `Run.wait` sees it fail (with its log tail)
     submit:CANCEL   `Run.cancel`
 
 so `entry.buildjournal(event='^submit')` lists every run of a block, whatever its kind, and
-`runs(block)` hands each back as its Run -- to `status`, `logs`, `wait` on or `cancel` from another
-process, a later session.
+`runs(block)` hands each back as its Run, its target rebuilt from the record -- to `status`, `logs`,
+`wait` on or `cancel` from another process, a later session.
 
 The run's own record is the target's datalake (the entry's, `DBX_DATALAKE`): the call runs as
 `dbx.pprint --capture-output`, under a session chosen here (`DBX_JOURNAL_SESSION`, recorded as
@@ -40,65 +46,76 @@ small run on the target that only evaluates the pipeline's quote there and `veri
 every import, the venv, the revision, the workdirs, the datalake, the same hash -- and builds nothing.
 """
 import ast
+import dataclasses
 import datetime
 import functools
+import importlib
 import json
 import time
 import uuid
 from importlib import metadata
 
 
-__all__ = ['Target', 'Run', 'Submit', 'register', 'target', 'targets', 'runs', 'verify']
+__all__ = ['Target', 'Run', 'Submit', 'target', 'targets', 'runs', 'verify']
 
 
 class Target:
-    """Where a run goes. A kind subclasses it with its `MODE`, its `Submit` subclass `SUBMIT`, and a `name`."""
+    """Where a run goes. A kind subclasses it -- a dataclass, so the journal can record it -- with its
+    `MODE`, its `Submit` subclass `SUBMIT`, and a `name`."""
     MODE: str = None
     SUBMIT: type = None
     name: str
 
 
-TARGETS: dict = {}
-_LOADED_ = False
-
-
-def register(t: Target) -> Target:
-    """Make *t* a target by its name."""
-    TARGETS[t.name] = t
-    return t
-
-
-def _load_entry_points_():
-    """Import every module a package names in group `dbx.targets`: each registers its targets."""
-    global _LOADED_
-    if not _LOADED_:
-        _LOADED_ = True
-        for ep in metadata.entry_points(group='dbx.targets'):
-            ep.load()
+def _flatten_(obj) -> list:
+    """The Targets in an entry point's object: a Target, or a dict or iterable of them."""
+    if isinstance(obj, Target):
+        return [obj]
+    return [t for t in (obj.values() if isinstance(obj, dict) else obj) if isinstance(t, Target)]
 
 
 def targets(mode: str | None = None) -> dict:
-    """The registered targets, by name -- of kind *mode* only, when given -- the `dbx.targets` entry points' among them."""
-    _load_entry_points_()
-    return {n: t for n, t in TARGETS.items() if mode is None or t.MODE == mode}
+    """The targets the installed packages name as `dbx.targets` entry points, by name -- of kind *mode* only, when given."""
+    found = [t for ep in metadata.entry_points(group='dbx.targets') for t in _flatten_(ep.load())]
+    return {t.name: t for t in found if mode is None or t.MODE == mode}
 
 
 def target(t: 'str | Target', mode: str | None = None) -> Target:
-    """The target named *t* (*t* itself when a Target), which must be of kind *mode* when given."""
+    """*t* when a Target, else the one of that name among `targets()`; of kind *mode* when given."""
     if isinstance(t, str):
-        if t not in TARGETS:
-            _load_entry_points_()
-        if t not in TARGETS:
-            raise KeyError(f"No target {t!r} is registered; have {sorted(TARGETS)} -- a project registers its own, "
-                           f"e.g. dbx.kube.register(dbx.kube.Cluster(...)), in a module it names as a "
-                           f"'dbx.targets' entry point")
-        t = TARGETS[t]
+        named = targets()
+        if t not in named:
+            raise KeyError(f"No target {t!r} among the 'dbx.targets' entry points' {sorted(named)}: pass the "
+                           f"target itself (e.g. a dbx.kube.Cluster), or name it in a package's 'dbx.targets' "
+                           f"entry point")
+        t = named[t]
     if mode is not None and t.MODE != mode:
         raise ValueError(f"Target {t.name!r} is {t.MODE!r}, not {mode!r}")
     return t
 
 
 _target_of_ = target  # For Submit, whose argument is named target.
+
+
+def _spec_(t: Target) -> dict | None:
+    """*t* as JSON -- its class and its fields -- when a dataclass; what `_rebuild_` makes it again from."""
+    if not dataclasses.is_dataclass(t):
+        return None
+    return {'class': f"{type(t).__module__}:{type(t).__qualname__}",
+            'fields': {f.name: getattr(t, f.name) for f in dataclasses.fields(t) if f.init}}
+
+
+def _rebuild_(record: dict) -> Target:
+    """The target a journaled record ran on: from its `target_spec`, else (an older record) by its name."""
+    spec = record.get('target_spec')
+    if not spec:
+        return target(record['target'])
+    module, qualname = spec['class'].split(':')
+    cls = functools.reduce(getattr, qualname.split('.'), importlib.import_module(module))
+    fields = {f.name: f for f in dataclasses.fields(cls)}
+    kw = {k: tuple(v) if isinstance(v, list) and isinstance(fields[k].default, tuple) else v
+          for k, v in spec['fields'].items() if k in fields}
+    return cls(**kw)
 
 
 class Run:
@@ -240,7 +257,7 @@ class Submit:
             options.pop('dry_run')
             options = {**options, **self._check_options_(), 'name': f"{options['name']}-check"}
             options['env'] = {'DBX_SUBMIT_CALL': expression, **options.get('env', {})}
-            expression = f"dbx.submits.verify(dbx.eval({self._pipeline_.quote()!r}).entry, {entry.hash!r})"
+            expression = f"dbx.cluster.verify(dbx.eval({self._pipeline_.quote()!r}).entry, {entry.hash!r})"
         options['env'] = {'DBX_DATALAKE': entry.datalake, 'DBX_SUBMIT_EXPRESSION': expression,
                           'DBX_PARENT_SESSION': _session_(), 'DBX_JOURNAL_SESSION': str(uuid.uuid4()),
                           'DBX_JOURNAL_DATALAKE': entry.datalake, **options.get('env', {})}
@@ -252,7 +269,8 @@ class Submit:
         options = {**self._options_, **options}
         dry_run = options.pop('dry_run', False)
         dry_run = False if dry_run == 'cluster' else dry_run  # A check is a run: _ship_ made it one.
-        record = dict(executor=self._target_.MODE, target=self._target_.name, command=command, expression=expression,
+        record = dict(executor=self._target_.MODE, target=self._target_.name, target_spec=_spec_(self._target_),
+                      command=command, expression=expression,
                       run_session=(options.get('env') or {}).get('DBX_JOURNAL_SESSION'),
                       submitted=datetime.datetime.now().isoformat())
         record.update(self._prepare_(command, **options))
@@ -309,7 +327,7 @@ def runs(block) -> list:
     """The runs submitted for *block* (a pipeline: its entrypoint), oldest first, as their Runs, from its journal.
 
     A run whose `submit:END`, `submit:ERROR` or `submit:CANCEL` is journaled is closed: its `wait`
-    journals nothing more. Each target must be registered, as when it was submitted.
+    journals nothing more. Its target is rebuilt from the record.
     """
     from .pipelines import Pipeline
     if isinstance(block, Pipeline):
@@ -326,7 +344,7 @@ def runs(block) -> list:
     for note in j[j['event'] == 'submit:BEGIN']['note']:
         with open(note) as f:
             record = json.load(f)
-        t = target(record['target'])
+        t = _rebuild_(record)
         run = t.SUBMIT.RUN(t, record['id'], record, block=block)
         run._closed_ = any(f" {record['id']} " in c or f"/{record['id']} " in c for c in closings)
         out.append(run)

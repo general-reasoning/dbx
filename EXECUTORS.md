@@ -3,7 +3,7 @@
 **Status: superseded for Kubernetes by `CLUSTERS.md`** (2026-11-03), which is what was built: not
 an `executor` operational kwarg, but `Pipeline.submit(target, **options)`, handing out the
 entrypoint as a `Submit` of the target's kind; a method called on it runs there and returns a `Run`
-(`dbx/submits.py`, `dbx/kube.py`). Sections 1, 2, 4 and 5 are done that way, section 6 by
+(`dbx/cluster.py`, `dbx/kube.py`). Sections 1, 2, 4 and 5 are done that way, section 6 by
 `Cluster.url`; Slurm, the per-block resources (section 3) and fan-out are not. The proposal is kept
 as written.
 

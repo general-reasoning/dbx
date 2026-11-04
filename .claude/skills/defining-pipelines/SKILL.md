@@ -310,9 +310,11 @@ two requirements on the definition:
   the tree in its VAR and its operational kwargs, and read paths through the
   project's env module (above), not from the submitting shell's state.
   `submit(..., dry_run='cluster')` checks exactly this: same hash there as here.
-- **The project registers its targets, not the pipeline.** Clusters are
-  registered in a module of their own, named as a `dbx.targets` entry point in
-  the project's packaging. A pipeline module never registers or names a cluster.
+- **The project defines its targets, not the pipeline.** Clusters are values
+  (`dbx.kube.Cluster`) in a module of their own, passed at call time
+  (`p.submit(LAMBDA)`); nothing is registered. For names in one-liners, the
+  module's dict of them is a `dbx.targets` entry point in the project's
+  packaging. A pipeline module never defines or names a cluster.
 
 *This skill is meant to grow: record new conventions here as the pipelines
 that use it settle them.*

@@ -12,7 +12,7 @@ its root -- an entrypoint function -- its arguments the pipeline's VAR: a
 `PipelineFromEntrypointFn`.
 
 `Pipeline.submit` runs a call on the pipeline's entrypoint elsewhere -- a Kueue Job (`dbx.kube`) -- and
-journals it: a `dbx.submits.Submit`.
+journals it: a `dbx.cluster.Submit`.
 """
 import dataclasses
 import functools
@@ -23,8 +23,8 @@ from typing import Any
 from .databits import default_datalake
 from .datablocks import SYNTHETIC, Datablock
 from .journals import PipeJournal
-from . import submits
-from .submits import Submit
+from . import cluster as _cluster_
+from .cluster import Submit
 
 
 __all__ = ['Pipeline', 'PipelineFromEntrypointFn', 'pipeline', 'entrypoint_tag']
@@ -126,15 +126,15 @@ class Pipeline(Datablock):
     def submit(self, target, *, mode: str | None = None, force: bool = False, **options) -> 'Submit':
         """This pipeline's entrypoint, its method calls run on *target*: a `Submit` of the target's kind.
 
-            p.submit('lambda').build_tree()          # a Run -- here a dbx.kube.KubeRun
-            p.submit('lambda', gpus=8, venv='/v').entry.try_specialize_tree(...)
+            p.submit(LAMBDA).build_tree()            # a Run -- here a dbx.kube.KubeRun
+            p.submit(LAMBDA, gpus=8, venv='/v').entry.try_specialize_tree(...)
 
-        *target* is a registered target's name, or the target (`dbx.submits`); *mode*, when given,
-        is the kind it must be ('kube'). *options* are the kind's -- `dbx.kube.job`'s for 'kube' --
+        *target* is where (`dbx.cluster`): a value, e.g. a `dbx.kube.Cluster`, or the name a
+        `dbx.targets` entry point gives one. *mode*, when given, is the kind it must be ('kube'). *options* are the kind's -- `dbx.kube.job`'s for 'kube' --
         refused here when it does not take them; `gpus` is by default the pipeline's `n_gpus`, or 0.
         *force* launches `build`/`build_tree` of an entrypoint that is valid here.
         """
-        t = submits.target(target, mode)
+        t = _cluster_.target(target, mode)
         return t.SUBMIT(self, t, force=force, **options)
 
 

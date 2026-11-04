@@ -53,6 +53,7 @@ import argparse
 import contextlib
 import dataclasses
 import datetime
+import hashlib
 import importlib
 import inspect
 import json
@@ -61,6 +62,8 @@ import re
 import shlex
 import subprocess
 import sys
+import tarfile
+import tempfile
 import uuid
 
 import fsspec
@@ -218,6 +221,10 @@ class KubeRunner(Runner):
 
     def _prepare_(self, command: str, **options) -> dict:
         c = self._target_
+        if options.get('pack', c.options.get('pack')) and c.storage:
+            # Planned here, so the Job unpacks what _stage_ will send: each tree's digest names its archive.
+            workdirs = {**c.options.get('workdirs', {}), **(options.get('workdirs') or {})}
+            options = dict(options, packs=[_pack_plan_(c, src, target, options) for src, target in workdirs.items()])
         manifest = job(command, c, **options)
         container = manifest['spec']['template']['spec']['containers'][0]
         return dict(id=manifest['metadata']['name'], job=manifest['metadata']['name'], cluster=c.name,
@@ -232,6 +239,9 @@ class KubeRunner(Runner):
                       input=json.dumps(record['manifest']))
 
     def _stage_(self, record: dict, **options) -> dict:
+        packs = json.loads(record['manifest']['metadata']['annotations'].get('dbx/packs', '[]'))
+        if packs:
+            return dict(workdirs={p['src']: _send_pack_(self._target_, p) for p in packs})
         workdirs = {**self._target_.options.get('workdirs', {}), **(options.get('workdirs') or {})}
         return dict(workdirs=_sync_workdirs_(self._target_, workdirs) if workdirs else {})
 
@@ -489,12 +499,13 @@ def _manifest_(command: str, c: Cluster, *, name: str = 'dbx', gpus: int = 0, cp
                revision=None, pin_source=None, env: dict | None = None, setup: list | None = None,
                anyscale: bool = False, ray: bool = False, ray_bin: str = 'ray', run_as: tuple | None = None,
                priority: str | None = None, deadline_hours: float = 24, ttl_days: float = 7,
-               workdirs: dict | None = None) -> dict:
+               workdirs: dict | None = None, pack: bool = False, packs: list | None = None) -> dict:
     """`job`'s manifest, from all its options.
 
     *cpus* and *gib* (memory) default to the cluster's per-GPU share times *gpus*; lower them when the
     queue's CPU or memory quota, not its GPUs, is what Kueue is waiting on. *workdirs* are recorded
-    on the Job; `submit` syncs them.
+    on the Job; `submit` syncs them -- or with *pack*, sends each as one archive, which the Job
+    unpacks first (*packs*, the plan, is made by `KubeRunner._prepare_`; see `_pack_plan_`).
     """
     env, setup = dict(env or {}), list(setup or [])
     if anyscale:
@@ -514,7 +525,7 @@ def _manifest_(command: str, c: Cluster, *, name: str = 'dbx', gpus: int = 0, cp
     jobname = f"{user}-{_slug_(name, 40)}-{uuid.uuid4().hex[:5]}"
     pins = _pins_(revision, pin_source) if revision is not None else []
 
-    script = ['set -euo pipefail', *setup]
+    script = ['set -euo pipefail', *(_unpack_lines_(packs) if packs else []), *setup]
     if venv:
         script.append(f"source {shlex.quote(os.path.join(venv, 'bin', 'activate'))}")
     for source, sha in reversed(pins):  # dbx first on PYTHONPATH: prepended last.
@@ -537,6 +548,8 @@ def _manifest_(command: str, c: Cluster, *, name: str = 'dbx', gpus: int = 0, cp
         annotations['dbx/revision'] = ' '.join(f"{s}@{sha}" for s, sha in pins)
     if workdirs:
         annotations['dbx/workdirs'] = json.dumps(workdirs)
+    if packs:
+        annotations['dbx/packs'] = json.dumps(packs)
     mounts = [{'name': f"v{i}", 'mountPath': path, **({'readOnly': True} if path in c.readonly else {})}
               for i, path in enumerate(c.mounts)]
     volumes = [{'name': f"v{i}", 'persistentVolumeClaim': {'claimName': claim,
@@ -632,6 +645,107 @@ def _sync_workdirs_(c: Cluster, workdirs: dict) -> dict:
             continue
         done[src] = dict(target=target, **sync(src, c.url(target), storage_options=c.fsspec_options()))
     return done
+
+
+# Left out of a packed tree: what Python regenerates, and changes too often to be worth an archive.
+_PACK_SKIP_ = ('__pycache__',)
+_PACK_SKIP_SUFFIXES_ = ('.pyc',)
+
+
+def _pack_plan_(c: Cluster, src: str, target: str, options: dict) -> dict:
+    """What packing workdir *src* for *target* on *c* is: its digest, the archive's name and where the Job finds it.
+
+    The digest is of every file's relative path, size, mtime, mode and link target -- not its bytes --
+    so planning is a walk, not a read. The archive goes in `.dbx-packs/` beside *target*. The target
+    is REPLACED by the tree when unpacked, so a mount point, or a path holding one or the datalake,
+    is refused.
+    """
+    src, target = os.path.abspath(src), os.path.normpath(target)
+    held = [m for m in c.mounts if os.path.normpath(m) == target or os.path.normpath(m).startswith(f"{target}/")]
+    datalake = ((options.get('env') or {}).get('DBX_DATALAKE') or os.environ.get('DBX_DATALAKE') or '').rstrip('/')
+    if held or (datalake and (datalake == target or datalake.startswith(f"{target}/"))):
+        raise ValueError(f"Workdir target {target} would be replaced when its pack is unpacked, and it holds "
+                         f"{held or datalake}: pack a narrower tree")
+    h = hashlib.sha256()
+    for rel, st, link in _pack_walk_(src):
+        h.update(f"{rel}\0{st.st_size}\0{st.st_mtime_ns}\0{st.st_mode}\0{link or ''}\n".encode())
+    digest = h.hexdigest()[:16]
+    name = f"{_slug_(os.path.basename(src), 40)}-{digest}.tar.gz"
+    return dict(src=src, target=target, digest=digest, archive=f"{os.path.dirname(target)}/.dbx-packs/{name}")
+
+
+def _send_pack_(c: Cluster, plan: dict) -> dict:
+    """Pack *plan*'s tree and upload it, unless the cluster has its archive already; what was done."""
+    fs, rpath = fsspec.core.url_to_fs(c.url(plan['archive']), **c.fsspec_options())
+    if fs.exists(rpath):
+        print(f"[pack] {os.path.basename(plan['archive'])}: on {c.name} already", file=sys.stderr, flush=True)
+        return dict(target=plan['target'], archive=plan['archive'], digest=plan['digest'], uploaded=False,
+                    bytes=fs.info(rpath)['size'])
+    again = _pack_plan_(c, plan['src'], plan['target'], {})['digest']
+    if again != plan['digest']:
+        raise RuntimeError(f"{plan['src']} changed while launching (digest {plan['digest']} -> {again}): launch again")
+    with tempfile.TemporaryDirectory(prefix='dbx-pack-') as tmp:
+        local = os.path.join(tmp, os.path.basename(plan['archive']))
+        with tarfile.open(local, 'w:gz', compresslevel=1) as tar:
+            for rel, _, _ in _pack_walk_(plan['src']):
+                tar.add(os.path.join(plan['src'], rel), arcname=rel, recursive=False)
+        size = os.path.getsize(local)
+        fs.makedirs(os.path.dirname(rpath), exist_ok=True)
+        _upload_(fs, local, f"{rpath}.partial", f"[pack] {os.path.basename(plan['archive'])}")
+        fs.mv(f"{rpath}.partial", rpath)
+    return dict(target=plan['target'], archive=plan['archive'], digest=plan['digest'], uploaded=True, bytes=size)
+
+
+def _pack_walk_(src: str):
+    """*src*'s files, links and directories as `(relative path, lstat, link target or None)`, sorted, but `_PACK_SKIP_`."""
+    out = []
+    for dirpath, dirnames, filenames in os.walk(src):
+        dirnames[:] = sorted(d for d in dirnames if d not in _PACK_SKIP_)
+        rel = os.path.relpath(dirpath, src)
+        if rel != '.':
+            out.append((rel, os.lstat(dirpath), None))
+        for n in sorted(filenames) + [d for d in dirnames if os.path.islink(os.path.join(dirpath, d))]:
+            if n.endswith(_PACK_SKIP_SUFFIXES_):
+                continue
+            path = os.path.join(dirpath, n)
+            link = os.readlink(path) if os.path.islink(path) else None
+            out.append((os.path.normpath(os.path.join(rel, n)), os.lstat(path), link))
+    return sorted(out, key=lambda e: e[0])
+
+
+def _upload_(fs, local: str, rpath: str, desc: str) -> None:
+    """Put *local* at *rpath* on *fs*, with a progress bar on a terminal (advancing within the file over sftp)."""
+    size = os.path.getsize(local)
+    with tqdm.tqdm(total=size, unit='B', unit_scale=True, unit_divisor=1024, desc=desc,
+                   disable=not sys.stderr.isatty(), dynamic_ncols=True) as bar:
+        sftp = getattr(fs, 'ftp', None)
+        if sftp:
+            sent = [0]
+
+            def advance(done, total):
+                bar.update(done - sent[0])
+                sent[0] = done
+            sftp.put(local, rpath, callback=advance)
+            bar.update(size - sent[0])
+        else:
+            fs.put_file(local, rpath)
+            bar.update(size)
+
+
+def _unpack_lines_(packs: list) -> list:
+    """The Job's shell lines making each pack's target its tree: unpacked into a sibling, then swapped in, under a
+    lock, unless the target's `.dbx-pack` already names that digest."""
+    lines = ['dbx_unpack() {  # archive target digest',
+             '  mkdir -p "$(dirname "$2")"',
+             '  ( flock 9',
+             '    if [ "$(cat "$2/.dbx-pack" 2>/dev/null)" != "$3" ]; then',
+             '      t="$2.unpack-$$"; rm -rf "$t"; mkdir -p "$t"; tar -xzf "$1" -C "$t"; echo "$3" > "$t/.dbx-pack"',
+             '      if [ -e "$2" ]; then mv "$2" "$2.old-$$"; fi; mv "$t" "$2"; rm -rf "$2.old-$$"',
+             '      echo "[dbx] unpacked $1 -> $2"',
+             '    fi',
+             '  ) 9>"$2.dbx-pack.lock"',
+             '}']
+    return lines + [f"dbx_unpack {shlex.quote(p['archive'])} {shlex.quote(p['target'])} {p['digest']}" for p in packs]
 
 
 def _mtime_(info) -> float | None:

@@ -399,6 +399,7 @@ returns a `Run` (section 5).
 | `venv` | a venv to `source` first -- one built for the Job's image |
 | `revision`, `pin_source` | git pins, as `dbx.remote(revision=...)`: `'dbx_rev:project_rev'`, or True for both HEADs (refused when dirty). Cloned in the Job from `pin_source` (default: the repos' own paths -- reachable where the cluster mounts them; give git URLs otherwise) and put first on `PYTHONPATH`. |
 | `workdirs` | `{src: target}`: trees the run needs that are not in git (section 3) |
+| `pack` | send each workdir as one archive, unpacked by the Job (section 3) |
 | `env`, `setup`, `cwd` | environment variables; shell lines run first; the working directory |
 | `ray`, `ray_bin` | start a single-node Ray head first, for code that calls `ray.init(address='auto')` |
 | `anyscale` | False by default. True adds what an Anyscale image needs (`dbx.anyscale.job_options`): its `ray` user (1000:100), its Ray (`/home/ray/venv/bin/ray`), `ANYSCALE_WORKING_DIR`, and its image by default. |
@@ -420,7 +421,16 @@ What the run imports and reads must be there, at the paths the expression names:
   one when they are not data -- an SSH socket, an auth strategy -- and so cannot be journaled with the
   cluster. `workdirs={src: target}` are synced there before the Job is created -- file by file,
   skipping those whose size and mtime match, keeping modes (console scripts stay executable) and
-  symlinks, deleting nothing (`dbx.kube.sync`). A block built there is copied back with
+  symlinks, deleting nothing (`dbx.kube.sync`), with a progress bar per tree on a terminal.
+  **`pack=True`** (a job option, or in `Cluster.options` for every run there) sends each tree as one
+  archive instead, for a link where every file costs a round trip: the tree's digest -- each file's
+  path, size, mtime, mode and link target, `__pycache__` and `*.pyc` left out -- names a gzip
+  tarball in `.dbx-packs/` beside the target, uploaded (with a bar) only when the cluster does not
+  have it. The Job unpacks it first, under a lock, into a sibling swapped in for the target, unless
+  the target's `.dbx-pack` names that digest already: the target BECOMES the tree, so a target that
+  is a mount point, or holds one or the datalake, is refused. Over Lambda's tailnet SFTP (~0.12 s a
+  file, ~1.6 MB/s), an 8,000-file, 160 MB venv is ~20 min file by file, ~2 min packed, and seconds
+  when unchanged. A block built there is copied back with
   `UNSAFE_copy_from(cluster.url(block.anchorkeypath))` inside `with cluster.fsspec_defaults():` --
   `UNSAFE_copy_from` opens its source with the block's own options, so the cluster's are set as
   fsspec's defaults for its protocols, and only while the block copies. Its anchorkeypath is the

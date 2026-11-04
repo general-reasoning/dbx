@@ -251,6 +251,82 @@ class TestWorkdirs:
         assert run.record['workdirs'][str(tmp_path / 'src')]['files'] == 1
 
 
+class TestPackedWorkdirs:
+    """pack=True: each workdir sent as one archive, named by its tree's digest, which the Job unpacks first."""
+
+    @pytest.fixture
+    def tree(self, tmp_path):
+        src = tmp_path / 'src'
+        (src / 'bin').mkdir(parents=True)
+        (src / 'bin' / 'tool').write_text('#!/bin/sh\n')
+        os.chmod(src / 'bin' / 'tool', 0o755)
+        (src / 'data.txt').write_text('abc')
+        os.symlink('data.txt', src / 'link')
+        (src / '__pycache__').mkdir()
+        (src / '__pycache__' / 'x.pyc').write_text('bytecode')
+        return src
+
+    @pytest.fixture
+    def remote(self, cluster, tmp_path):
+        cluster.storage = {'/mnt/team': f"file://{tmp_path / 'remote'}"}
+        return tmp_path / 'remote'
+
+    def test_the_tree_goes_as_one_archive_the_job_unpacks_first(self, cluster, kubectl, tree, remote):
+        run = kube.submit('true', cluster, workdirs={str(tree): '/mnt/team/code'}, pack=True)
+        [(src, done)] = run.record['workdirs'].items()
+        assert src == str(tree) and done['uploaded'] and done['archive'].startswith('/mnt/team/.dbx-packs/src-')
+        assert (remote / '.dbx-packs' / os.path.basename(done['archive'])).exists()
+        assert not (remote / 'code').exists()          # nothing copied file by file
+        script = _container_(kubectl.created[0])['command'][2]
+        assert script.index(f"dbx_unpack {done['archive']} /mnt/team/code {done['digest']}") < script.index('exec bash')
+
+    def test_an_unchanged_tree_is_not_sent_again_and_a_change_is(self, cluster, kubectl, tree, remote):
+        first = kube.submit('true', cluster, workdirs={str(tree): '/mnt/team/code'}, pack=True)
+        again = kube.submit('true', cluster, workdirs={str(tree): '/mnt/team/code'}, pack=True)
+        (tree / '__pycache__' / 'y.pyc').write_text('more bytecode')          # left out: no new archive
+        cached = kube.submit('true', cluster, workdirs={str(tree): '/mnt/team/code'}, pack=True)
+        (tree / 'data.txt').write_text('abcd')
+        changed = kube.submit('true', cluster, workdirs={str(tree): '/mnt/team/code'}, pack=True)
+        d = [r.record['workdirs'][str(tree)] for r in (first, again, cached, changed)]
+        assert [x['uploaded'] for x in d] == [True, False, False, True]
+        assert d[0]['digest'] == d[1]['digest'] == d[2]['digest'] != d[3]['digest']
+
+    def test_the_unpack_makes_the_target_the_tree_once(self, cluster, kubectl, tree, remote, tmp_path):
+        run = kube.submit('true', cluster, workdirs={str(tree): '/mnt/team/code'}, pack=True)
+        p = run.record['workdirs'][str(tree)]
+        target = tmp_path / 'there' / 'code'
+        target.mkdir(parents=True)
+        (target / 'stale.txt').write_text('from before')
+        lines = kube._unpack_lines_([dict(archive=str(remote / '.dbx-packs' / os.path.basename(p['archive'])),
+                                          target=str(target), digest=p['digest'])])
+        script = '\n'.join(['set -euo pipefail', *lines])
+        first = subprocess.run(['bash', '-c', script], capture_output=True, text=True, check=True)
+        assert 'unpacked' in first.stdout and (target / 'data.txt').read_text() == 'abc'
+        assert os.stat(target / 'bin' / 'tool').st_mode & 0o777 == 0o755 and os.readlink(target / 'link') == 'data.txt'
+        assert not (target / 'stale.txt').exists() and not (target / '__pycache__').exists()
+        assert (target / '.dbx-pack').read_text().strip() == p['digest']
+        second = subprocess.run(['bash', '-c', script], capture_output=True, text=True, check=True)
+        assert 'unpacked' not in second.stdout
+
+    def test_a_cluster_may_pack_by_default_and_a_call_may_not(self, cluster, kubectl, tree, remote):
+        cluster.options = {'pack': True}
+        packed = kube.submit('true', cluster, workdirs={str(tree): '/mnt/team/code'})
+        synced = kube.submit('true', cluster, workdirs={str(tree): '/mnt/team/code'}, pack=False)
+        assert packed.record['workdirs'][str(tree)]['uploaded'] and 'files' in synced.record['workdirs'][str(tree)]
+
+    def test_a_target_holding_a_mount_or_the_datalake_is_refused(self, cluster, kubectl, tree, remote, monkeypatch):
+        with pytest.raises(ValueError, match='would be replaced'):
+            kube.submit('true', cluster, workdirs={str(tree): '/mnt/team'}, pack=True)
+        monkeypatch.setenv('DBX_DATALAKE', '/mnt/team/me/datalake')
+        with pytest.raises(ValueError, match='would be replaced'):
+            kube.submit('true', cluster, workdirs={str(tree): '/mnt/team/me'}, pack=True)
+
+    def test_a_cluster_mounting_our_paths_is_not_packed(self, cluster, kubectl, tmp_path):
+        run = kube.submit('true', cluster, workdirs={str(tmp_path): str(tmp_path)}, pack=True)
+        assert 'dbx_unpack' not in _container_(kubectl.created[0])['command'][2]
+        assert run.record['workdirs'][str(tmp_path)]['skipped'] is None
+
+
 # --------------------------------------------------------------------------------------------- #
 # Submitting
 # --------------------------------------------------------------------------------------------- #

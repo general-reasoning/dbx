@@ -60,11 +60,13 @@ import os
 import re
 import shlex
 import subprocess
+import sys
 import uuid
 
 import fsspec
 import fsspec.implementations.local
 import pandas as pd
+import tqdm
 
 from . import anyscale
 from . import cluster as _cluster_
@@ -280,13 +282,19 @@ def submit(command: str, c: 'str | Cluster', *, block=None, expression: str | No
     return KubeRunner(None, c, **options)._launch_(command, on=block, expression=expression)
 
 
-def sync(src: str, url: str, *, storage_options: dict | None = None) -> dict:
+def sync(src: str, url: str, *, storage_options: dict | None = None, progress: bool | None = None) -> dict:
     """Copy the tree *src* to *url*, skipping files whose size and mtime (to the second) match; `{'files', 'bytes', 'skipped'}`.
 
     Modes and mtimes are kept where the filesystem lets them be set (local, sftp), and symlinks are
-    made as symlinks there. Nothing at *url* is deleted.
+    made as symlinks there. Nothing at *url* is deleted. *progress* shows a bar of the bytes to copy
+    (within a file, too, over sftp), on stderr; by default when stderr is a terminal. A sync killed
+    midway resumes: what was copied is skipped, and a file cut short is copied again (its size differs).
     """
+    progress = sys.stderr.isatty() if progress is None else progress
+    name = os.path.basename(os.path.normpath(src))
     fs, root = fsspec.core.url_to_fs(url, **(storage_options or {}))
+    if progress:
+        print(f"[sync] {name}: listing {url}", file=sys.stderr, flush=True)
     try:
         there = {p: i for p, i in fs.find(root, detail=True, withdirs=False).items()}
     except FileNotFoundError:
@@ -294,7 +302,8 @@ def sync(src: str, url: str, *, storage_options: dict | None = None) -> dict:
     sftp = getattr(fs, 'ftp', None)
     local = isinstance(fs, fsspec.implementations.local.LocalFileSystem)
     stats = dict(files=0, bytes=0, skipped=0)
-    made = set()
+    # What to do, before doing it: the bar's total is what there is to copy.
+    links, copies = [], []
     for dirpath, dirnames, filenames in os.walk(src):
         rel = os.path.relpath(dirpath, src)
         rdir = root if rel == '.' else f"{root.rstrip('/')}/{rel}"
@@ -303,31 +312,52 @@ def sync(src: str, url: str, *, storage_options: dict | None = None) -> dict:
             st = os.lstat(path)
             if os.path.islink(path):
                 if rpath not in there and (sftp or local):
-                    if rdir not in made:
-                        fs.makedirs(rdir, exist_ok=True)
-                        made.add(rdir)
-                    try:
-                        (sftp.symlink if sftp else os.symlink)(os.readlink(path), rpath)
-                    except OSError:
-                        pass  # Already there, as a link the listing does not show.
+                    links.append((path, rpath, rdir))
                 continue
             info = there.get(rpath) or there.get(rpath.lstrip('/'))
             if info and info.get('size') == st.st_size and _mtime_(info) is not None \
                     and int(_mtime_(info)) == int(st.st_mtime):
                 stats['skipped'] += 1
                 continue
-            if rdir not in made:
-                fs.makedirs(rdir, exist_ok=True)
-                made.add(rdir)
-            fs.put_file(path, rpath)
+            copies.append((path, rpath, rdir, st))
+    bar = tqdm.tqdm(total=sum(st.st_size for *_, st in copies), unit='B', unit_scale=True, unit_divisor=1024,
+                    desc=f"[sync] {name}", disable=not progress, dynamic_ncols=True,
+                    postfix=dict(files=f"0/{len(copies)}", skipped=stats['skipped']))
+    made = set()
+
+    def ensure(rdir):
+        if rdir not in made:
+            fs.makedirs(rdir, exist_ok=True)
+            made.add(rdir)
+
+    with bar:
+        for path, rpath, rdir in links:
+            ensure(rdir)
+            try:
+                (sftp.symlink if sftp else os.symlink)(os.readlink(path), rpath)
+            except OSError:
+                pass  # Already there, as a link the listing does not show.
+        for k, (path, rpath, rdir, st) in enumerate(copies):
+            ensure(rdir)
             if sftp:
+                sent = [0]
+
+                def advance(done, total, sent=sent):
+                    bar.update(done - sent[0])
+                    sent[0] = done
+                sftp.put(path, rpath, callback=advance)
+                bar.update(st.st_size - sent[0])
                 sftp.chmod(rpath, st.st_mode & 0o7777)
                 sftp.utime(rpath, (st.st_atime, st.st_mtime))
-            elif local:
-                os.chmod(rpath, st.st_mode & 0o7777)
-                os.utime(rpath, (st.st_atime, st.st_mtime))
+            else:
+                fs.put_file(path, rpath)
+                bar.update(st.st_size)
+                if local:
+                    os.chmod(rpath, st.st_mode & 0o7777)
+                    os.utime(rpath, (st.st_atime, st.st_mtime))
             stats['files'] += 1
             stats['bytes'] += st.st_size
+            bar.set_postfix(files=f"{k + 1}/{len(copies)}", skipped=stats['skipped'], refresh=False)
     return stats
 
 

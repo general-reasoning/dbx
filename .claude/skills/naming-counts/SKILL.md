@@ -27,8 +27,9 @@ not what it measures (`mem_gib`); `timeout=` says neither (`timeout_s`).
 ## Third-party names stay at the boundary
 
 Ray's `@ray.remote(num_gpus=, num_cpus=)`, `ThreadPoolExecutor(max_workers=)`,
-`DataLoader(num_workers=)`, `kubectl`'s resource names: those are the other
-library's API and are spelled its way, exactly where it is called. Our own
+torch's `DataLoader(num_workers=)`, Lightning's `seed_everything(workers=True)`,
+`kubectl`'s resource names: those are the other framework's API, forwarded as-is
+exactly where it is called -- we do not rename them, nor wrap them only to rename them. Our own
 signature around the call takes the `n_` name and translates:
 
 ```python
@@ -49,17 +50,18 @@ def run(fn, calls, *, n_gpus=1, n_cpus=4): ...
 - **A job option** (`dbx.kube.job`'s) is recorded in each run's record: rename it
   and keep reading the old name in records written before.
 
-## Where the code does not follow it yet (2026-11-04)
+## Renamed so far (2026-11-04)
 
-To rename, each in its own commit:
+Each old name is still taken, with a `DeprecationWarning`:
 
-- `dbx.kube.job` / `Runner` options `gpus`, `cpus`, `gib` → `n_gpus`, `n_cpus`,
-  `mem_gib`; `kube.Cluster` fields `cpu_per_gpu`, `gib_per_gpu` →
-  `n_cpus_per_gpu`, `mem_gib_per_gpu`.
-- `dbx.gpu.run(..., num_gpus=, num_cpus=)` → `n_gpus`, `n_cpus` (Ray's names
-  stay inside it).
-- `dbx.databits`: the callable executors' `workers=` / `n_workers` mix → `n_workers`.
-- sctx: `SCQwenVLContextModelEval`'s operational `cpus_per_gpu` → `n_cpus_per_gpu`;
-  `build_ctxmodel.answer_windows(num_shards=)` → `n_shards`;
-  `workers=` in `build_windows`, `context.viz.render_windows`,
-  `representation.viz.render_sr` and `context.lightning` → `n_workers`.
+- dbx: the runner's and `dbx.kube.job`'s `gpus`, `cpus`, `gib` → `n_gpus`, `n_cpus`,
+  `mem_gib`; `kube.Cluster`'s `cpu_per_gpu`, `gib_per_gpu` → `n_cpus_per_gpu`,
+  `mem_gib_per_gpu` (and in old run records); `dbx.gpu.run`'s `num_gpus`, `num_cpus`
+  → `n_gpus`, `n_cpus`; `dbx.slurm`'s `gpus`, `cpus`, `nodes` → `n_gpus`, `n_cpus`,
+  `n_nodes` (`mem` stays: its value is Slurm's string, unit included).
+- sctx: the operational `cpus_per_gpu`, `loader_workers` → `n_cpus_per_gpu`,
+  `n_loader_workers`; `num_shards`, `workers` and `gpus` parameters and CLI flags →
+  `n_shards`, `n_workers`, `n_gpus`.
+
+Not renamed, and not to be: `databits`' `workers` -- lists of worker processes, not
+a count -- and every framework's own name, passed through as-is at the call.

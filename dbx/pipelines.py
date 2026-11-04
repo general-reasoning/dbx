@@ -127,7 +127,7 @@ class Pipeline(Datablock):
     def runner(self, target=None, *, mode: str | None = None, force: bool = False, **options) -> 'Runner':
         """This pipeline's runs on *target*: a `dbx.cluster.Runner` of the target's kind, which launches, lists, watches and cancels them.
 
-            r = p.runner(LAMBDA, gpus=8)
+            r = p.runner(LAMBDA, n_gpus=8)
             r.build_tree()                           # a Run -- here a dbx.kube.KubeRun
             r.ship('try_specialize_tree', ...)
             r.runs(), r.rundash(), r.cancel()        # its runs on LAMBDA
@@ -136,7 +136,7 @@ class Pipeline(Datablock):
         *target* is where (`dbx.cluster`): a value, e.g. a `dbx.kube.Cluster`, or the name a
         `dbx.clusters` entry point gives one; with none, the Runner lists runs and launches nothing.
         *mode*, when given, is the kind it must be ('kube'). *options* are the kind's --
-        `dbx.kube.job`'s for 'kube' -- refused here when it does not take them; `gpus` is by default
+        `dbx.kube.job`'s for 'kube' -- refused here when it does not take them; `n_gpus` is by default
         the pipeline's `n_gpus`, or 0. *force* launches `build`/`build_tree` of an entrypoint that is
         valid here.
         """

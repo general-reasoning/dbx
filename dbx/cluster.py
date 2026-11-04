@@ -73,8 +73,12 @@ from .databits import default_datalake
 from .journals import BuildJournal, PipeJournal, execjournal
 
 
-__all__ = ['Target', 'Run', 'Runner', 'Submit', 'GROUP', 'cluster', 'clusters', 'runner', 'runs', 'rundash', 'verify']
+__all__ = ['Target', 'Run', 'Runner', 'Submit', 'GROUP', 'RENAMED_OPTIONS', 'cluster', 'clusters', 'renamed_options',
+           'runner', 'runs', 'rundash', 'verify']
 
+
+# A run's resource options as they were named before 2026-11-04 (skill naming-counts): still taken, with a warning.
+RENAMED_OPTIONS = {'gpus': 'n_gpus', 'cpus': 'n_cpus', 'gib': 'mem_gib'}
 
 # The entry-point group naming the installed packages' clusters, and its name before 2026-11-04.
 GROUP = 'dbx.clusters'
@@ -216,7 +220,7 @@ class Runner:
     `Pipeline.runner(target, **options)` hands out the pipeline's, of the target's kind --
     `target.RUNNER`, e.g. `dbx.kube.KubeRunner` -- and `runner(what, target)` anyone's:
 
-        r = my_pipeline('preset').runner(LAMBDA, gpus=8)
+        r = my_pipeline('preset').runner(LAMBDA, n_gpus=8)
         r.build_tree()                          # a Run, of dbx.eval('<the quote>').entry.build_tree() there
         r.ship('try_specialize_tree', ...)      # any other method of the entry
         r.runs(), r.rundash()                   # its runs on LAMBDA, from the entry's journal
@@ -255,6 +259,7 @@ class Runner:
         self._dblk_ = what.entry if self._pipeline_ is not None else (
             what if what is not None and not isinstance(what, (str, type)) else None)
         self._datalake_ = datalake or getattr(self._dblk_, 'datalake', None)
+        options = renamed_options(options)
         if self._target_ is not None:
             self._check_(options)
         self._options_ = options
@@ -284,7 +289,7 @@ class Runner:
             return self.RUN(self._target_, None, {}, on=self._pipeline_, skipped=f"{entry.anchorkeypath} is valid here")
         call = ', '.join([repr(a) for a in args] + [f"{k}={v!r}" for k, v in kwargs.items()])
         expression = f"dbx.eval({self._pipeline_.quote()!r}).entry.{method}({call})"
-        options.setdefault('gpus', getattr(self._pipeline_, 'n_gpus', None) or 0)
+        options.setdefault('n_gpus', getattr(self._pipeline_, 'n_gpus', None) or 0)
         options.setdefault('name', f"{type(self._pipeline_).__name__.removesuffix('Pipeline')}-{method}")
         if check:  # The call is recorded, not made: the run evaluates the quote and verifies the entry.
             options.pop('dry_run')
@@ -561,6 +566,19 @@ def cluster(t: 'str | Target', mode: str | None = None) -> Target:
     return t
 
 
+def renamed_options(options: dict) -> dict:
+    """*options* with each `RENAMED_OPTIONS` old name as its new one, warning that it was used; both given is an error."""
+    old = [k for k in options if k in RENAMED_OPTIONS]
+    if not old:
+        return options
+    both = [k for k in old if RENAMED_OPTIONS[k] in options]
+    if both:
+        raise TypeError(f"options {', '.join(f'{k}= and {RENAMED_OPTIONS[k]}=' for k in both)}: give the second only")
+    warnings.warn(f"options {', '.join(f'{k}=' for k in old)} are now "
+                  f"{', '.join(f'{RENAMED_OPTIONS[k]}=' for k in old)}", DeprecationWarning, stacklevel=3)
+    return {RENAMED_OPTIONS.get(k, k): v for k, v in options.items()}
+
+
 def runner(what, target: 'str | Target | None' = None, *, mode: str | None = None, force: bool = False,
            datalake: str | None = None, **options) -> Runner:
     """The `Runner` of *what* on *target* -- of the target's kind, or a plain one with no target.
@@ -707,8 +725,10 @@ def _rebuild_(record: dict) -> Target:
     module, qualname = spec['class'].split(':')
     cls = functools.reduce(getattr, qualname.split('.'), importlib.import_module(module))
     fields = {f.name: f for f in dataclasses.fields(cls)}
+    renamed = getattr(cls, 'RENAMED_FIELDS', {})       # a record written before a field was renamed
+    given = {renamed.get(k, k): v for k, v in spec['fields'].items()}
     kw = {k: tuple(v) if isinstance(v, list) and isinstance(fields[k].default, tuple) else v
-          for k, v in spec['fields'].items() if k in fields}
+          for k, v in given.items() if k in fields}
     return cls(**kw)
 
 

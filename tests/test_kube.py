@@ -22,7 +22,7 @@ from dbx.pipelines import Pipeline
 def cluster():
     return kube.Cluster('testc', context='ctx', namespace='ns', queue='gpu-q', cpu_queue='cpu-q',
                         priority='normal', mounts={'/mnt/team': 'team-pvc', '/mnt/data': 'data-pvc'},
-                        readonly=('/mnt/data',), cpu_per_gpu=10, gib_per_gpu=100, image='img:1', user='me')
+                        readonly=('/mnt/data',), n_cpus_per_gpu=10, mem_gib_per_gpu=100, image='img:1', user='me')
 
 
 class _EP_:
@@ -99,7 +99,7 @@ def _env_(manifest):
 
 class TestTheJob:
     def test_a_gpu_job_is_sized_by_the_clusters_share_and_queued_suspended(self, cluster):
-        m = kube.job('echo hi', cluster, gpus=2, name='My Thing')
+        m = kube.job('echo hi', cluster, n_gpus=2, name='My Thing')
         res = _container_(m)['resources']['requests']
         assert (res['cpu'], res['memory'], res['nvidia.com/gpu']) == ('20', '200Gi', '2')
         assert m['metadata']['labels']['kueue.x-k8s.io/queue-name'] == 'gpu-q'
@@ -146,8 +146,8 @@ class TestTheJob:
         assert lines[-1] == 'exec bash -c "$DBX_KUBE_COMMAND"'
 
     def test_the_clusters_options_are_defaults_and_its_env_is_added_to(self, cluster):
-        cluster.options = {'venv': '/v', 'env': {'A': '1'}, 'gpus': 1}
-        m = kube.job('true', cluster, env={'B': '2'}, gpus=4)
+        cluster.options = {'venv': '/v', 'env': {'A': '1'}, 'n_gpus': 1}
+        m = kube.job('true', cluster, env={'B': '2'}, n_gpus=4)
         assert _env_(m)['A'] == '1' and _env_(m)['B'] == '2'
         assert 'source /v/bin/activate' in _container_(m)['command'][2]
         assert _container_(m)['resources']['requests']['nvidia.com/gpu'] == '4'
@@ -389,7 +389,7 @@ class TestSubmit:
 
     def test_a_submission_is_journaled_with_its_whole_record(self, cluster, kubectl, tmp_path):
         b = Leaf(datalake=str(tmp_path))
-        run = kube.submit('echo hi', cluster, block=b, gpus=1)
+        run = kube.submit('echo hi', cluster, block=b, n_gpus=1)
         assert kubectl.created[0]['metadata']['name'] == run.job
         j = b.buildjournal()
         [row] = j[j['event'] == 'submit:BEGIN'].to_dict('records')
@@ -456,6 +456,19 @@ class TestSubmit:
             named = kube.clusters()
         assert named == {'old': old, 'both': new}
 
+    def test_old_resource_names_still_work_with_a_warning(self, kubectl, tmp_path):
+        with pytest.warns(DeprecationWarning, match='n_cpus_per_gpu'):
+            old = kube.Cluster('c', image='i', cpu_per_gpu=12, gib_per_gpu=90)
+        assert (old.n_cpus_per_gpu, old.mem_gib_per_gpu) == (12, 90)
+        assert dbxcluster._rebuild_({'target_spec': {'class': 'dbx.kube:Cluster', 'fields': {
+            'name': 'c', 'image': 'i', 'cpu_per_gpu': 12, 'gib_per_gpu': 90}}}) == old
+        with pytest.warns(DeprecationWarning, match='n_gpus=, n_cpus=, mem_gib='):
+            m = kube.job('true', old, gpus=1, cpus=3, gib=7)
+        assert _container_(m)['resources']['requests'] == {'cpu': '3', 'memory': '7Gi', 'ephemeral-storage': '100Gi',
+                                                            'nvidia.com/gpu': '1'}
+        with pytest.raises(TypeError, match='give the second only'):
+            kube.job('true', old, cpus=3, n_cpus=4)
+
     def test_an_entry_point_may_name_one_target_or_a_list(self, entry_points):
         entry_points.extend([kube.Cluster('one', image='i'), [kube.Cluster('two', image='i'), 'not a target']])
         assert sorted(kube.clusters()) == ['one', 'two']
@@ -475,7 +488,7 @@ class TestPipelineSubmit:
 
     def test_entry_reads_as_the_call_and_arguments_travel_as_literals(self, cluster, kubectl, tmp_path):
         p = Single(datalake=str(tmp_path))
-        p.submit(cluster, gpus=0).entry.build(extra=[1, 'a'])
+        p.submit(cluster, n_gpus=0).entry.build(extra=[1, 'a'])
         assert _env_(kubectl.created[0])['DBX_SUBMIT_EXPRESSION'].endswith(".entry.build(extra=[1, 'a'])")
 
     def test_a_non_literal_argument_is_refused_before_anything_is_sent(self, cluster, kubectl, tmp_path):

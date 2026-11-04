@@ -6,7 +6,7 @@ where it submits:
 
     LAMBDA = dbx.kube.Cluster('lambda', namespace='kueue-team-x', queue='x-queue',
                               mounts={'/mnt/team-x': 'default-pvc-team-x'}, image=...)
-    run = dbx.kube.submit('python -m my.thing', LAMBDA, gpus=8)
+    run = dbx.kube.submit('python -m my.thing', LAMBDA, n_gpus=8)
     run.wait()                      # True when the Job completes; raises with its log tail if it fails
 
 A pipeline runs its own calls (`Pipeline.runner`, `dbx.cluster`) through a `KubeRunner` on a Cluster:
@@ -65,6 +65,7 @@ import sys
 import tarfile
 import tempfile
 import uuid
+import warnings
 
 import fsspec
 import fsspec.implementations.local
@@ -101,18 +102,29 @@ class Cluster(Target):
     priority: str | None = None                 # Kueue WorkloadPriorityClass
     mounts: dict = dataclasses.field(default_factory=dict)
     readonly: tuple = ()
-    cpu_per_gpu: int = 8
-    gib_per_gpu: int = 64
+    n_cpus_per_gpu: int = 8                     # a Job's CPUs and memory per GPU, by default
+    mem_gib_per_gpu: int = 64
     image: str | None = None
     storage: dict = dataclasses.field(default_factory=dict)
     storage_options: 'dict | str' = dataclasses.field(default_factory=dict)
     user: str | None = None                     # prefixes Job names; $USER by default
     options: dict = dataclasses.field(default_factory=dict)
+    # The per-GPU shares' names before 2026-11-04, still taken with a warning.
+    cpu_per_gpu: dataclasses.InitVar[int | None] = None
+    gib_per_gpu: dataclasses.InitVar[int | None] = None
+
+    # A record's field name before it was renamed -> its name now (`dbx.cluster._rebuild_`).
+    RENAMED_FIELDS = {'cpu_per_gpu': 'n_cpus_per_gpu', 'gib_per_gpu': 'mem_gib_per_gpu'}
 
     # 1. Protocol ---------------------------------------------------------------------------- #
 
-    def __post_init__(self):
+    def __post_init__(self, cpu_per_gpu=None, gib_per_gpu=None):
         self.context = self.context or self.name
+        if cpu_per_gpu is not None or gib_per_gpu is not None:
+            warnings.warn("Cluster: cpu_per_gpu= and gib_per_gpu= are now n_cpus_per_gpu= and mem_gib_per_gpu=",
+                          DeprecationWarning, stacklevel=3)
+            self.n_cpus_per_gpu = self.n_cpus_per_gpu if cpu_per_gpu is None else cpu_per_gpu
+            self.mem_gib_per_gpu = self.mem_gib_per_gpu if gib_per_gpu is None else gib_per_gpu
 
     # 2. Declared API ------------------------------------------------------------------------ #
 
@@ -217,7 +229,7 @@ class KubeRunner(Runner):
             raise TypeError(f"{type(self).__name__}: no option {', '.join(bad)}; it takes {', '.join(sorted(takes))}")
 
     def _check_options_(self) -> dict:
-        return dict(gpus=0, cpus=2, gib=8, ray=False)
+        return dict(n_gpus=0, n_cpus=2, mem_gib=8, ray=False)
 
     def _prepare_(self, command: str, **options) -> dict:
         c = self._target_
@@ -273,10 +285,11 @@ def job(command: str, c: 'str | Cluster', **options) -> dict:
     and `setup` add to the cluster's.
     """
     c = cluster(c)
-    merged = {**c.options, **options}
+    options, cluster_options = _cluster_.renamed_options(options), _cluster_.renamed_options(c.options)
+    merged = {**cluster_options, **options}
     for k in ('env', 'setup'):
-        if k in c.options and k in options:
-            merged[k] = ({**c.options[k], **options[k]} if k == 'env' else [*c.options[k], *options[k]])
+        if k in cluster_options and k in options:
+            merged[k] = ({**cluster_options[k], **options[k]} if k == 'env' else [*cluster_options[k], *options[k]])
     return _manifest_(command, c, **merged)
 
 
@@ -379,7 +392,7 @@ def jobs(clusters_: list | None = None, *, user: str | None = None, all_users: b
          status: str | None = None) -> pd.DataFrame:
     """The Jobs in each cluster's namespace -- of *clusters_* (Clusters, or their names; default every `dbx.clusters` one) -- as a table, newest first.
 
-    One row per Job: `cluster, job, status, gpus, created, started, ended, command`, and `reason`,
+    One row per Job: `cluster, job, status, n_gpus, created, started, ended, command`, and `reason`,
     Kueue's message for a pending one. Only *user*'s (default each cluster's `user`, else $USER),
     unless *all_users*; only those of *status* ('pending', 'running', 'complete', 'failed') when given.
     """
@@ -404,11 +417,11 @@ def jobs(clusters_: list | None = None, *, user: str | None = None, all_users: b
             command = md.get('annotations', {}).get('dbx/command') or md.get('annotations', {}).get('sctx/command') or ''
             expression = {e.get('name'): e.get('value') for e in cont.get('env', [])}.get('DBX_SUBMIT_EXPRESSION')
             rows.append(dict(cluster=c.name, job=md['name'], status=s,
-                             gpus=cont.get('resources', {}).get('requests', {}).get('nvidia.com/gpu', '0'),
+                             n_gpus=cont.get('resources', {}).get('requests', {}).get('nvidia.com/gpu', '0'),
                              created=md.get('creationTimestamp'), started=st.get('startTime'),
                              ended=st.get('completionTime'), command=(expression or command)[:120],
                              reason=reasons.get(md['name']) if s == 'pending' else None))
-    cols = ['cluster', 'job', 'status', 'gpus', 'created', 'started', 'ended', 'reason', 'command']
+    cols = ['cluster', 'job', 'status', 'n_gpus', 'created', 'started', 'ended', 'reason', 'command']
     df = pd.DataFrame(rows, columns=cols + (['error'] if any('error' in r for r in rows) else []))
     return df.sort_values('created', ascending=False, na_position='first').reset_index(drop=True)
 
@@ -494,15 +507,15 @@ _BYTES_ = {'k': 1e3, 'M': 1e6, 'G': 1e9, 'T': 1e12, 'P': 1e15, 'Ki': 2 ** 10, 'M
            'Ti': 2 ** 40, 'Pi': 2 ** 50}
 
 
-def _manifest_(command: str, c: Cluster, *, name: str = 'dbx', gpus: int = 0, cpus: int | None = None,
-               gib: int | None = None, image: str | None = None, venv: str | None = None, cwd: str | None = None,
+def _manifest_(command: str, c: Cluster, *, name: str = 'dbx', n_gpus: int = 0, n_cpus: int | None = None,
+               mem_gib: int | None = None, image: str | None = None, venv: str | None = None, cwd: str | None = None,
                revision=None, pin_source=None, env: dict | None = None, setup: list | None = None,
                anyscale: bool = False, ray: bool = False, ray_bin: str = 'ray', run_as: tuple | None = None,
                priority: str | None = None, deadline_hours: float = 24, ttl_days: float = 7,
                workdirs: dict | None = None, pack: bool = False, packs: list | None = None) -> dict:
     """`job`'s manifest, from all its options.
 
-    *cpus* and *gib* (memory) default to the cluster's per-GPU share times *gpus*; lower them when the
+    *n_cpus* and *mem_gib* default to the cluster's per-GPU share times *n_gpus*; lower them when the
     queue's CPU or memory quota, not its GPUs, is what Kueue is waiting on. *workdirs* are recorded
     on the Job; `submit` syncs them -- or with *pack*, sends each as one archive, which the Job
     unpacks first (*packs*, the plan, is made by `KubeRunner._prepare_`; see `_pack_plan_`).
@@ -519,8 +532,8 @@ def _manifest_(command: str, c: Cluster, *, name: str = 'dbx', gpus: int = 0, cp
     if image is None:
         raise ValueError(f"No image for the Job on {c.name!r}: pass image=, set Cluster.image, or anyscale=True "
                          f"in an Anyscale workspace")
-    cpu = cpus or (c.cpu_per_gpu * gpus if gpus else 8)
-    mem = gib or (c.gib_per_gpu * gpus if gpus else 32)
+    cpu = n_cpus or (c.n_cpus_per_gpu * n_gpus if n_gpus else 8)
+    mem = mem_gib or (c.mem_gib_per_gpu * n_gpus if n_gpus else 32)
     user = _slug_(c.user or os.environ.get('USER') or 'dbx', 16)
     jobname = f"{user}-{_slug_(name, 40)}-{uuid.uuid4().hex[:5]}"
     pins = _pins_(revision, pin_source) if revision is not None else []
@@ -533,11 +546,11 @@ def _manifest_(command: str, c: Cluster, *, name: str = 'dbx', gpus: int = 0, cp
         script += [f"git clone --quiet {shlex.quote(source)} {d}", f"git -C {d} checkout --quiet {sha}",
                    f'export PYTHONPATH={d}${{PYTHONPATH:+:$PYTHONPATH}}']
     if ray:
-        script.append(f"{ray_bin} start --head --num-gpus={gpus} --num-cpus={cpu} --disable-usage-stats")
+        script.append(f"{ray_bin} start --head --num-gpus={n_gpus} --num-cpus={cpu} --disable-usage-stats")
     script.append('exec bash -c "$DBX_KUBE_COMMAND"')
 
-    resources = {'cpu': str(cpu), 'memory': f"{mem}Gi", 'ephemeral-storage': '100Gi', 'nvidia.com/gpu': str(gpus)}
-    queue = c.queue if gpus else (c.cpu_queue or c.queue)
+    resources = {'cpu': str(cpu), 'memory': f"{mem}Gi", 'ephemeral-storage': '100Gi', 'nvidia.com/gpu': str(n_gpus)}
+    queue = c.queue if n_gpus else (c.cpu_queue or c.queue)
     labels = {'dbx/user': user}
     if queue:
         labels['kueue.x-k8s.io/queue-name'] = queue

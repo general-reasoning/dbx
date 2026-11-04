@@ -47,7 +47,7 @@ def _shard_(shard, log):
 
 def test_each_call_is_a_task_with_its_resources_and_its_own_log(ray, tmp_path, monkeypatch):
     monkeypatch.setattr(anyscale, 'present', lambda: False)
-    got = gpu.run(_shard_, [dict(shard=0), dict(shard=1)], log_dir=str(tmp_path), num_gpus=1, num_cpus=6,
+    got = gpu.run(_shard_, [dict(shard=0), dict(shard=1)], log_dir=str(tmp_path), n_gpus=1, n_cpus=6,
                   env={'X': '1'})
     assert got == [0, 10]
     assert ray.resources == [dict(num_gpus=1, num_cpus=6)]

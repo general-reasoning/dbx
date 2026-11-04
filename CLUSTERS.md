@@ -267,15 +267,15 @@ a Slurm job, and cancels the job when the expression is done.
 `dbx.slurm_eval`, does not exist. There is a TODO for it in `pyproject.toml`.
 
 ```bash
-dbx.slurm.exec 'module.function()' gpus=1 mem=32G cpus=8 time=04:00:00 partition=gpu
+dbx.slurm.exec 'module.function()' n_gpus=1 mem=32G n_cpus=8 time=04:00:00 partition=gpu
 ```
 
 | argument    | default    | what it sets                                   |
 |-------------|------------|------------------------------------------------|
-| `gpus`      | `0`        | `--gres=gpu:N`, and Ray's `--num-gpus`, per node |
-| `mem`       | `8G`       | `--mem`                                        |
-| `cpus`      | `1`        | `--cpus-per-task`, and Ray's `--num-cpus`, per node |
-| `nodes`     | `1`        | `--nodes`: the head on the first, a Ray worker on each other |
+| `n_gpus`    | `0`        | `--gres=gpu:N`, and Ray's `--num-gpus`, per node |
+| `mem`       | `8G`       | `--mem`, in Slurm's own format                 |
+| `n_cpus`    | `1`        | `--cpus-per-task`, and Ray's `--num-cpus`, per node |
+| `n_nodes`   | `1`        | `--nodes`: the head on the first, a Ray worker on each other |
 | `partition` | none       | `--partition`                                  |
 | `nodelist`  | none       | `--nodelist`                                   |
 | `time`      | `01:00:00` | `--time`                                       |
@@ -324,7 +324,7 @@ LAMBDA = kube.Cluster(
     namespace='kueue-team-x', queue='x-queue', cpu_queue='cpu-only-queue', priority='normal-priority',
     mounts={'/mnt/team-x': 'default-pvc-team-x'},  # path in the Job -> volume claim mounted there
     readonly=(),                                # mount paths mounted read-only
-    cpu_per_gpu=20, gib_per_gpu=187,            # a Job's CPU and memory per GPU, by default
+    n_cpus_per_gpu=20, mem_gib_per_gpu=187,     # a Job's CPUs and memory per GPU, by default
     image='registry/image:tag',                 # the Job's image, unless given
     storage={'/mnt/team-x': 'sftp://host/data'},  # the cluster's own filesystem, by URL (see 3)
     storage_options='myproject.clusters:sftp_options',  # fsspec's options for those URLs (see 3)
@@ -383,7 +383,8 @@ returns a `Run` (section 5).
   `skipped` -- unless `force=True`.
 - **`mode`** ('kube'), when given, must be the target's kind: a check, not a choice.
 - **Options** are the kind's, and are refused at `runner(...)` when it does not take them -- a
-  misspelling fails before anything is sent. `gpus` defaults to the pipeline's `n_gpus`, or 0.
+  misspelling fails before anything is sent. `n_gpus` defaults to the pipeline's `n_gpus`, or 0.
+  The names before 2026-11-04 -- `gpus`, `cpus`, `gib` -- are still taken, with a warning.
 - **A shell command:** `dbx.kube.submit(command, LAMBDA, **options)`, the same Job without a
   pipeline; journaled only when given `block=`.
 - **`Pipeline.submit(target, ...)`** is the older spelling, kept for the commands that use it: any
@@ -394,7 +395,7 @@ returns a `Run` (section 5).
 
 | option | |
 |---|---|
-| `gpus`, `cpus`, `gib` | GPUs; CPU and memory default to the cluster's per-GPU share times `gpus` (8 / 32 GiB without GPUs). Kueue admits on all three: lower `cpus`/`gib` when the queue waits on those. |
+| `n_gpus`, `n_cpus`, `mem_gib` | GPUs; CPUs and memory default to the cluster's per-GPU share times `n_gpus` (8 / 32 GiB without GPUs). Kueue admits on all three: lower `n_cpus`/`mem_gib` when the queue waits on those. |
 | `image` | the Job's image; else `Cluster.image`; else, with `anyscale=True`, `$ANYSCALE_RAY_IMAGE_URI` |
 | `venv` | a venv to `source` first -- one built for the Job's image |
 | `revision`, `pin_source` | git pins, as `dbx.remote(revision=...)`: `'dbx_rev:project_rev'`, or True for both HEADs (refused when dirty). Cloned in the Job from `pin_source` (default: the repos' own paths -- reachable where the cluster mounts them; give git URLs otherwise) and put first on `PYTHONPATH`. |
@@ -561,6 +562,6 @@ the journal, `wait`, `runs`, `command` -- the same for every kind.
 ### 8. Not done
 
 - Slurm as a kind (`SlurmCluster`, `SlurmSubmit`, `SlurmRun`), reusing `SlurmRayCluster`.
-- Resources declared by the blocks (`EXECUTORS.md` section 3): today `gpus` comes from `n_gpus`.
+- Resources declared by the blocks (`EXECUTORS.md` section 3): today `n_gpus` comes from the pipeline's `n_gpus`.
 - Fan-out: one run per tree.
 - `UNSAFE_copy_from` given the source's storage options, rather than `fsspec_defaults`.

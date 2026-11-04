@@ -405,6 +405,19 @@ class TestSubmit:
         assert run.wait(poll=0) and run.wait(poll=0)
         assert _events_(b) == ['submit:BEGIN', 'submit:END']
 
+    def test_wait_says_what_changes(self, cluster, kubectl, tmp_path, capsys):
+        run = kube.submit('true', cluster, block=Leaf(datalake=str(tmp_path)))
+        kubectl.conditions = ['Pending']
+        run._say_(run.status(), 0, said := {})
+        run._say_(run.status(), 60, said)                    # nothing changed: nothing said
+        kubectl.conditions = []
+        run._say_(run.status(), 120, said)
+        kubectl.conditions = ['Complete']
+        assert run.wait(poll=0, verbose=True)
+        err = capsys.readouterr().err.splitlines()
+        assert 'pending after 0.0 min: insufficient quota for cpu' in err[0] and len(err) == 4
+        assert 'running after 2.0 min' in err[1] and err[2].endswith('Traceback: boom') and 'complete' in err[3]
+
     def test_a_failed_job_raises_with_its_log_and_journals_the_error(self, cluster, kubectl, tmp_path):
         b = Leaf(datalake=str(tmp_path))
         run = kube.submit('true', cluster, block=b)

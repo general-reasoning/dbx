@@ -60,6 +60,7 @@ import importlib
 import json
 import os
 import re
+import sys
 import time
 import uuid
 import warnings
@@ -119,16 +120,22 @@ class Run:
         """The run's log: the last *tail* lines, all when -1."""
         return '' if self.id is None else self._logs_(tail)
 
-    def wait(self, *, poll: float = 30, timeout: float | None = None) -> bool:
+    def wait(self, *, poll: float = 30, timeout: float | None = None, verbose: bool | None = None) -> bool:
         """Block until the run completes (True), or *timeout* passes (False); raise RuntimeError with its log tail if it fails.
 
-        Journals `submit:END` or `submit:ERROR` on what it was submitted on, once.
+        Journals `submit:END` or `submit:ERROR` on what it was submitted on, once. *verbose* (by default
+        when stderr is a terminal) says on stderr what the run is doing, as it changes: its status with
+        the elapsed time, why it is pending (`reason`, where the kind says), and its log's latest line.
+        Interrupting the wait leaves the run running: `Runner.runs(open=True)[-1].wait()` takes it up again.
         """
         if self.id is None:
             return True
-        start = time.monotonic()
+        verbose = sys.stderr.isatty() if verbose is None else verbose
+        start, said = time.monotonic(), {}
         while timeout is None or time.monotonic() - start < timeout:
             s = self._status_()
+            if verbose:
+                self._say_(s, time.monotonic() - start, said)
             if s == 'complete':
                 self._close_('submit:END', f"{self._where_()} complete")
                 return True
@@ -138,6 +145,29 @@ class Run:
                 raise RuntimeError(f"{self._where_()} failed; its log ends:\n{tail}")
             time.sleep(poll)
         return False
+
+    def _say_(self, status: str, elapsed: float, said: dict) -> None:
+        """Print what changed since *said* -- the status (and why it is pending), the log's latest line -- and remember it."""
+        clock = time.strftime('%H:%M:%S')
+        reason = None
+        if status == 'pending' and hasattr(self, 'reason'):
+            try:
+                reason = self.reason()
+            except Exception as e:
+                reason = f"(no reason: {str(e).splitlines()[0][:80]})"
+        if (status, reason) != said.get('status'):
+            why = f": {reason}" if reason else ''
+            print(f"[run] {clock} {self._where_()}: {status} after {elapsed / 60:.1f} min{why}", file=sys.stderr,
+                  flush=True)
+            said['status'] = (status, reason)
+        if status == 'running':
+            try:
+                line = next((ln for ln in reversed(self._logs_(5).splitlines()) if ln.strip()), '')
+            except Exception:
+                line = ''
+            if line and line != said.get('line'):
+                print(f"[run] {clock}   {line[:200]}", file=sys.stderr, flush=True)
+                said['line'] = line
 
     def cancel(self) -> None:
         """Stop the run; journals `submit:CANCEL`."""

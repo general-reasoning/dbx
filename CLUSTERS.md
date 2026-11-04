@@ -12,7 +12,8 @@ dbx.kubedash -q myteam             # the clusters' Kueue queues: quota, use, pen
 ```
 
 Modules: `dbx/cluster.py` (targets, `Submit`, `Run`, the journal), `dbx/kube.py` (Kubernetes),
-`dbx/anyscale.py` (what a Job on an Anyscale image needs). `EXECUTORS.md` is the earlier proposal.
+`dbx/image.py` (an image of a venv's code), `dbx/gpu.py` (a function on a node's GPUs, through Ray),
+`dbx/anyscale.py` (what a Job or an image needs on Anyscale). `EXECUTORS.md` is the earlier proposal.
 
 ## 1. Targets: values, passed where they are used
 
@@ -31,6 +32,7 @@ LAMBDA = kube.Cluster(
     cpu_per_gpu=20, gib_per_gpu=187,            # a Job's CPU and memory per GPU, by default
     image='registry/image:tag',                 # the Job's image, unless given
     storage={'/mnt/team-x': 'sftp://host/data'},  # the cluster's own filesystem, by URL (see 3)
+    storage_options='myproject.clusters:sftp_options',  # fsspec's options for those URLs (see 3)
     user='me',                                  # prefixes Job names; $USER by default
     options=dict(venv='/mnt/team-x/me/venv', ray=True),  # job options always given here
 )
@@ -53,8 +55,8 @@ myproject = "myproject.clusters:CLUSTERS"
 `dbx.cluster.target('lambda')` -- and so `submit('lambda')`, `dbx.kubejobs`, `dbx.kubedash` --
 loads every `dbx.targets` entry point and looks the name up in what they name. It does that on
 each call and keeps nothing: what a name means is a function of the installed packages, not of
-what this process happened to import. `dbx.cluster.targets()` lists them. (sctx: `sctx/kube.py`,
-`LAMBDA` and `CRUSOE`; entry point `sctx = "sctx.kube:CLUSTERS"`.)
+what this process happened to import. `dbx.cluster.targets()` lists them. (sctx: `sctx/clusters.py`,
+`LAMBDA` and `CRUSOE`; entry point `sctx = "sctx.clusters:CLUSTERS"`.)
 
 **A journaled run carries its target.** `submit:BEGIN`'s record holds the target itself as
 `target_spec` -- its class and its fields -- so `dbx.cluster.runs(block)` rebuilds each run's target
@@ -113,13 +115,25 @@ What the run imports and reads must be there, at the paths the expression names:
   own storage) runs the live tree: a venv, editable installs, the datalake are simply there. An edit
   made here while it runs is seen by it -- pin with `revision` when that matters.
 - **A cluster with its own filesystem** (`storage={local_prefix: url_prefix}`) has the same paths
-  under another root, reached from here by URL: `Cluster.url(path)`. `workdirs={src: target}` are
-  synced there before the Job is created -- file by file, skipping those whose size and mtime match,
-  keeping modes (console scripts stay executable) and symlinks, deleting nothing (`dbx.kube.sync`).
-  A block built there is copied back with `UNSAFE_copy_from(cluster.url(block.anchorkeypath))`:
-  its anchorkeypath is the same path on both sides.
-- **The code itself:** `revision` pins the dbx and project repos to commits, cloned in the Job. A
-  venv, an image -- what is not in git -- are the project's to provide.
+  under another root, reached from here by URL: `Cluster.url(path)`, opened with
+  `Cluster.fsspec_options()`. Those are `storage_options`: a dict, or `'module:function'` returning
+  one when they are not data -- an SSH socket, an auth strategy -- and so cannot be journaled with the
+  cluster. `workdirs={src: target}` are synced there before the Job is created -- file by file,
+  skipping those whose size and mtime match, keeping modes (console scripts stay executable) and
+  symlinks, deleting nothing (`dbx.kube.sync`). A block built there is copied back with
+  `UNSAFE_copy_from(cluster.url(block.anchorkeypath))` inside `with cluster.fsspec_defaults():` --
+  `UNSAFE_copy_from` opens its source with the block's own options, so the cluster's are set as
+  fsspec's defaults for its protocols, and only while the block copies. Its anchorkeypath is the
+  same path on both sides.
+- **The code itself:** `revision` pins the dbx and project repos to commits, cloned in the Job.
+- **The code and the venv, as an image:** `image=dbx.image.build(venv, repo=..., anyscale=True)` --
+  the venv's editable installs as they are on disk, the packages it adds over the base image, and any
+  `extra` trees, appended to the base image as one layer (`crane`, no Docker build). The tag is the
+  layer's sha256, so the same code is the same image, an unchanged rebuild pushes nothing, and the
+  manifest a run journals names the code it ran. Nothing to sync, and no venv to keep on the cluster.
+
+Within the run, `dbx.gpu.run(fn, calls, ...)` farms `fn` out over the node's GPUs, one Ray task per
+call, each with its own log; on a Kube Job that needs `ray=True`, the Job's own Ray head.
 
 ## 4. Dry runs
 
@@ -161,7 +175,8 @@ The journal is the one record of the output, and the one way to it: `ExecJournal
 
 ```python
 run.command().output()                                         # a cluster that mounts the datalake
-run.command(datalake=LAMBDA.url(run.record['datalake'])).output()   # by URL
+run.command(datalake=LAMBDA.url(run.record['datalake']),             # by URL
+            storage_options=LAMBDA.fsspec_options()).output()
 ```
 
 ```bash
@@ -209,4 +224,4 @@ the journal, `wait`, `runs`, `command` -- the same for every kind.
 - Slurm as a kind (`SlurmCluster`, `SlurmSubmit`, `SlurmRun`), reusing `SlurmRayCluster`.
 - Resources declared by the blocks (`EXECUTORS.md` section 3): today `gpus` comes from `n_gpus`.
 - Fan-out: one run per tree.
-- Code that is not in git, shipped as an image layer (sctx's `image.py` prototype).
+- `UNSAFE_copy_from` given the source's storage options, rather than `fsspec_defaults`.

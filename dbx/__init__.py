@@ -35,11 +35,14 @@ pipelines
     `Pipeline`, a Datablock tree defined flat; every creation of
     one is recorded in the `PipeJournal`, read with
     `pipejournal`.
-kube, anyscale
-    `dbx.kube`: a shell command, or a pipeline's call
-    (`Pipeline.submit`), run as a Kueue Job on a `dbx.kube.Cluster`;
-    `kubedash`, its queues as a table. `dbx.anyscale`: what a Job on an
-    Anyscale image needs. Imported as modules, not into `dbx`.
+cluster, kube, gpu, image, anyscale
+    `dbx.cluster`: a pipeline's call (`Pipeline.submit`) run on a
+    target, and journaled. `dbx.kube`: the target a Kueue cluster
+    is, `dbx.kube.Cluster`, its Jobs, and `kubedash`, its queues as a
+    table. `dbx.gpu`: a function on GPUs through Ray, one task per
+    call. `dbx.image`: an image of a venv's code, for a Job.
+    `dbx.anyscale`: what a Job or an image needs on Anyscale. Imported
+    as modules, not into `dbx`.
 
 Modules NOT imported here
 -------------------------
@@ -80,5 +83,5 @@ if _importlib_util.find_spec('torch') and _importlib_util.find_spec('streaming')
     from .featuretables import *
     from .probes import *
 from .pipelines import *
-from . import anyscale, cluster, kube
+from . import anyscale, cluster, gpu, image, kube
 

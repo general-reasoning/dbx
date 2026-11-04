@@ -1002,11 +1002,15 @@ class TestSessionIndex:
         row = dbx.execjournal(iloc=0)
         assert ids(BuildJournal.session_entries(row['session'], datalake=str(tmp_path))) == written_order(b)
 
-    def test_nothing_is_indexed_outside_a_command(self, tmp_path):
-        block(tmp_path).build()
-        with BuildJournal():
-            block(tmp_path, x=2).build()
-        assert not os.path.exists(os.path.join(str(tmp_path), '.journal', 'sessions'))
+    def test_a_session_outside_a_command_is_indexed_under_its_blocks_datalake(self, tmp_path):
+        """Built without `dbx.exec`, a block is found by its session as one built with it is: the process's default, or a `with`'s."""
+        default = block(tmp_path)
+        default.build()
+        with BuildJournal() as dj:
+            scoped = block(tmp_path, x=2)
+            scoped.build()
+        assert ids(BuildJournal.session_entries(DEFAULT_BUILDJOURNAL.session, datalake=str(tmp_path))) == written_order(default, session=DEFAULT_BUILDJOURNAL.session)
+        assert ids(BuildJournal.session_entries(dj.session, datalake=str(tmp_path))) == written_order(scoped, session=dj.session)
 
     def test_a_process_the_command_started_is_part_of_it(self, tmp_path):
         dbx.exec("run(\"Child(datalake=os.environ['DBX_ROOT']).build()\")", run=_run_child)
@@ -1061,6 +1065,48 @@ class TestSessionIndex:
         entries = dbx.execjournal(id=row['id'], iloc=0).dataentries()
         assert sorted(e['event'] for e in entries) == ['build:end', 'build:start']
         assert {e['session'] for e in entries} == {row['session']}
+
+
+class TestAnEntryRecordsTheBlockInItself:
+    """Since 2026-11-03 an entry records the block's spec, kwargs and renderings in itself, and its environment: no side files."""
+
+    def test_its_renderings_and_dicts_are_in_the_entry(self, tmp_path):
+        b = block(tmp_path)
+        b.build()
+        e = b.buildjournal(iloc=0)
+        assert (e['quote'], e['cite'], e['repr']) == (b.quote(), b.cite(), b.repr())
+        assert (e['signature'], e['type']) == (b.signaturestr(), b.typestr())
+        assert e.read('spec') == b.spec and e.read('kwargs') == b.kwargs
+        assert e.pretty.quote(pretty=False) == b.quote() and e.pretty.signaturestr() == b.signaturestr()
+        sides = ('spec', 'kwargs', 'quote', 'cite', 'repr', 'signature', 'type')
+        assert not [d for d, _, _ in os.walk(tmp_path) if os.path.basename(os.path.dirname(d)) in sides]
+
+    def test_its_environment_with_its_secrets_withheld(self, tmp_path, monkeypatch):
+        monkeypatch.setenv('DBX_TEST_PLAIN', 'plain')
+        monkeypatch.setenv('SOME_API_TOKEN', 's3cret')
+        monkeypatch.setenv('DBX_TEST_URL', 'postgres://u:pw@host/db')
+        b = block(tmp_path)
+        b.build()
+        env = b.buildjournal(iloc=0).read('env')
+        assert env['DBX_TEST_PLAIN'] == 'plain'
+        assert env['SOME_API_TOKEN'] == env['DBX_TEST_URL'] == '<withheld>'
+
+    def test_an_entry_from_before_reads_its_side_files(self, tmp_path):
+        """An entry that names side files -- as all did before -- reads them, and compaction keeps them."""
+        from dbx.databits import write_str, write_yaml
+        b = block(tmp_path)
+        b.build()
+        entries = [os.path.join(d, f) for d, _, fs in os.walk(tmp_path) for f in fs if '-journal-' in f]
+        [f] = [p for p in entries if pd.read_parquet(p)['event'][0] == 'build:end']
+        old = pd.read_parquet(f)
+        for name, ext in (('spec', 'yaml'), ('kwargs', 'yaml'), ('quote', 'txt'), ('signature', 'txt')):
+            path = BuildJournal.path(b, name, ext)
+            (write_yaml if ext == 'yaml' else write_str)(old[name][0] if ext == 'txt' else b.spec if name == 'spec' else b.kwargs, path)
+            old[name] = [path]
+        old.to_parquet(f)
+        e = b.buildjournal(event='build:end', iloc=0)
+        assert e['quote'].endswith('.txt') and e.read('spec') == b.spec and e.read('kwargs') == b.kwargs
+        assert e.pretty.quote(pretty=False) == b.quote() and e.pretty.signaturestr() == b.signaturestr()
 
 
 class TestAPrefixIsEnough:

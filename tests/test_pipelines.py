@@ -377,3 +377,19 @@ def test_compact_some_anchors(lake):
     assert list(frame['pipeline']) == [Flat().fqcn]
     entries = PipeJournal.read(PipeJournal.ANCHOR, datalake=lake)
     assert sorted(entries['hash']) == sorted([Flat(spec={'n': 1}).hash] + [Spared().hash] * 2)
+
+
+def test_a_command_finds_the_pipeline_entries_it_wrote(lake, monkeypatch):
+    """`read_refs` looks for a pipeline's entry where `PipeJournal` files it: under `.pipelines`, not its anchor."""
+    import json
+    monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
+    dbx.exec("Flat(spec={'n': 4}).create()", Flat=Flat)
+    row = dbx.execjournal(iloc=0)
+    frame = row.buildjournal()
+    assert 'create' in set(frame['event'])
+    [ref] = [r for r in BuildJournal.session_entries(row['session'], datalake=lake)
+             if json.loads(r)['anchor'] == Flat(spec={'n': 4}).anchor]
+    assert json.loads(ref)['journal'] == PipeJournal.ANCHOR
+    # A reference from before it said which journal: found under .pipelines all the same.
+    old = json.dumps({k: v for k, v in json.loads(ref).items() if k != 'journal'}, sort_keys=True)
+    assert list(BuildJournal.read_refs([old])['event']) == ['create']

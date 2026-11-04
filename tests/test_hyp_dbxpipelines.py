@@ -17,8 +17,8 @@ from test_hyp_engine import EchoSummarizer, quiet
 
 
 
-def write_run(lake, anchor, key, i, spec, signature=None):
-    """One pipeline journal entry, laid out as dbx's PipeJournal writes it."""
+def write_run(lake, anchor, key, i, spec, signature=None, inline=False):
+    """One pipeline journal entry, laid out as dbx's PipeJournal writes it: *inline*, its spec, signature and cite in it, as since 2026-11-03; else in side files."""
     tag = f"pkg.pipelines.{anchor.lower()}"
     cls_dir = lake / ".pipelines" / f"pkg.{anchor}" / tag / key / ".journal" / f"pkg.{anchor}"
     jdir = cls_dir / "journal" / f"h{key}"
@@ -42,7 +42,9 @@ def write_run(lake, anchor, key, i, spec, signature=None):
         "wrkrepo": "/tmp/w/dbx",
     }
     for side, content in (("spec", spec), ("signature", signature), ("cite", f"cite {i}")):
-        if content is not None:
+        if content is not None and inline:
+            row[side] = content
+        elif content is not None:
             sdir = cls_dir / side / f"h{key}"
             sdir.mkdir(parents=True, exist_ok=True)
             path = sdir / f"{side}-{i}.{'yaml' if side == 'spec' else 'txt'}"
@@ -200,6 +202,52 @@ def test_a_point_carries_its_var_name(tmp_path, monkeypatch):
     write_run(tmp_path, "EvalPipeline", "bbbb", 1, "split: test\n")
     by_anchor = {e.extra["anchor"]: e.extra["name"] for e in dbxpipelines.pipelines(quiet)}
     assert by_anchor == {"pkg.TrainPipeline": "gigapath clip", "pkg.EvalPipeline": None}
+
+
+def test_an_entry_recording_itself_reads_as_one_with_side_files(tmp_path, monkeypatch):
+    """Since 2026-11-03 an entry records its spec, cite and the rest in itself; hyp shows, names and embeds it as it did the side files."""
+    monkeypatch.setenv("DBX_DATALAKE", str(tmp_path / "old"))
+    write_run(tmp_path / "old", "TrainPipeline", "aaaa", 0, "lr: 0.1\nname: gigapath clip\n", signature="Sig(lr)")
+    [old] = dbxpipelines.pipelines(quiet)
+    monkeypatch.setenv("DBX_DATALAKE", str(tmp_path / "new"))
+    write_run(tmp_path / "new", "TrainPipeline", "aaaa", 0, "lr: 0.1\nname: gigapath clip\n", signature="Sig(lr)", inline=True)
+    [new] = dbxpipelines.pipelines(quiet)
+    assert new.extra["name"] == old.extra["name"] == "gigapath clip"
+    assert new.embed == old.embed
+    for shown in ("── cite ──\ncite 0", "── type ──\nSig(lr)", "'lr': 0.1"):  # a signature with no type is read as from August: a type
+        assert shown in new.text and shown in old.text
+
+
+def test_the_quote_is_read_from_the_entry_or_its_side_file(tmp_path):
+    side = tmp_path / ".journal" / "pkg.M" / "quote" / "h" / "pkg.M-quote-h-dt.txt"
+    side.parent.mkdir(parents=True)
+    side.write_text("$pkg.M(spec={'x': 1})\n")
+    assert dbxpipelines.quote_text({"quote": str(side), "entry_path": str(tmp_path)}) == "$pkg.M(spec={'x': 1})"
+    assert dbxpipelines.quote_text({"quote": "$pkg.M(spec={'x': 1})", "entry_path": str(tmp_path)}) == "$pkg.M(spec={'x': 1})"
+    side.unlink()
+    with pytest.raises(FileNotFoundError):
+        dbxpipelines.quote_text({"quote": str(side), "entry_path": str(tmp_path)})
+
+
+def test_the_env_is_shown_as_the_dict_it_is():
+    shown, _ = dbxpipelines._side_file_("env", "HOME: /home/u\nAWS_SECRET_ACCESS_KEY: <withheld>\n", "")
+    assert "'HOME': '/home/u'" in shown and "<withheld>" in shown
+
+
+def test_the_exec_commands_of_a_session_are_found_by_its_id(tmp_path, monkeypatch):
+    import dbx
+
+    monkeypatch.setenv("DBX_DATALAKE", str(tmp_path))
+    monkeypatch.setenv("DBX_DIRTY_REPO_OK", "1")
+    dbx.exec("1 + 1")
+    dbx.exec("2 + 2")
+    rows = dbx.execjournal(index=None)
+    execs = dbxpipelines.session_execs(str(tmp_path), str(tmp_path))
+    for _, r in rows.iterrows():
+        [command] = [c for c in execs[r["session"]] if c["id"] == r["id"]]
+        text = dbxpipelines.exec_text(command)
+        assert text.startswith(f"exec") and r["exec"] in text and r["session"] in text
+        assert dbxpipelines.exec_label(command).endswith(f"ok   {r['exec']}")
 
 
 def test_has_output_only_where_a_capture_was_recorded():
@@ -395,7 +443,7 @@ def pipelines_app(monkeypatch):
     os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
     from hyp.app import Worker
 
-    monkeypatch.setattr(dbxpipelines.HypDbxJournal, "run_async", lambda self, fn, then: None)
+    monkeypatch.setattr(dbxpipelines.HypDbxJournal, "run_async", lambda self, fn, then, failed=None: None)
     app = dbxpipelines.HypDbxJournal(engine=None, worker=Worker())
     row = {"anchorkeypath": "/lake/pkg.Train/k", "datalake": "/lake", "tag": "pkg.train"}
     app.snap = SimpleNamespace(points=[{"row": row}], summaries=["train"], texts=["t"])
@@ -472,7 +520,7 @@ def test_reload_picks_up_new_pipelines_and_lays_out_afresh(tmp_path, monkeypatch
 
 def test_reload_rereads_what_pipeline_windows_keep(pipelines_app):
     reads = []
-    pipelines_app.run_async = lambda fn, then: reads.append(fn)
+    pipelines_app.run_async = lambda fn, then, failed=None: reads.append(fn)
     pipelines_app.sessions = {"s1": []}
     pipelines_app.__reload__()
     assert pipelines_app.journal is None and pipelines_app.constructed is None and pipelines_app.sessions == {}
@@ -611,7 +659,7 @@ def test_the_window_samples_what_is_picked_and_shows_it(pipelines_app, monkeypat
     from hyp import layout
 
     app = pipelines_app
-    app.run_async = lambda fn, then: then(fn())
+    app.run_async = lambda fn, then, failed=None: then(fn())
     calls = []
     monkeypatch.setattr(dbxpipelines, "slice_plan", lambda row, python: {"tablets": 532, "rows0": {"features": 286}})
     monkeypatch.setattr(dbxpipelines, "slice_sample", lambda row, data, labels, fraction, **kw: calls.append((data, labels, fraction, kw))
@@ -893,7 +941,7 @@ def journal_app(anchor_journal, monkeypatch):
     os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
     from hyp.app import Worker
 
-    monkeypatch.setattr(dbxpipelines.HypDbxJournal, "run_async", lambda self, fn, then: None)
+    monkeypatch.setattr(dbxpipelines.HypDbxJournal, "run_async", lambda self, fn, then, failed=None: None)
     app = dbxpipelines.HypDbxJournal(engine=None, worker=Worker(), args=NS(journal="pkg.Model", n_workers=2))
     found = dbxpipelines.blocks("pkg.Model", progress=lambda *a: None, n_workers=2)
     app.snap = NS(positions=np.array([0.1 + 0j, 0.2 + 0j]), summaries=[e.summary for e in found], texts=[e.text for e in found],
@@ -960,7 +1008,7 @@ def test_the_quote_and_cite_buttons_follow_the_entry_shown_and_open_the_line(jou
     app = journal_app
     (tmp_path / "quote.txt").write_text("$pkg.T(spec={'n': 1})\n")
     app.__click_point__(0, 0.0)
-    app.run_async = lambda fn, then: then(fn())  # the quote read at once: the journal's, by the click, never
+    app.run_async = lambda fn, then, failed=None: then(fn())  # the quote read at once: the journal's, by the click, never
     window = app.viewers[-1]
     quote, cite = [m for m in window.menus if getattr(m, "label", None) in ("quote", "cite")]
     window.row = {"quote": "None"}
@@ -984,7 +1032,7 @@ def test_the_quote_and_cite_buttons_follow_the_entry_shown_and_open_the_line(jou
 def test_an_entry_with_no_revision_has_no_pin(journal_app, tmp_path):
     app = journal_app
     (tmp_path / "quote.txt").write_text("$pkg.T()\n")
-    app.run_async = lambda fn, then: then(fn())
+    app.run_async = lambda fn, then, failed=None: then(fn())
     app._open_rerun_({"quote": str(tmp_path / "quote.txt"), "revision": "None"}, "quote")
     assert not app.viewers[-1].menus[1].visible()
     assert app.viewers[-1].text == dbxpipelines.rerun_line("$pkg.T()") == r'''dbx.pprint "dbx.eval(\"\$pkg.T()\")"'''
@@ -1115,3 +1163,23 @@ def test_an_anchors_journal_is_listed_then_read_against_the_total(anchor_journal
     listing, reading = "dbx.BuildJournal.list('pkg.Model')", "dbx.BuildJournal.read_frame(3 journal files of pkg.Model)"
     assert told[:5] == [(listing, None, None), (listing, 1, None), (listing, 3, None), (reading, 0, 3), (reading, 1, 3)]
     assert told[-1][1:] == (2, 2), "and then the side files, counted"
+
+
+def test_a_pipelines_exec_menu_lists_every_command_that_touched_it(tmp_path, monkeypatch):
+    """Not only the command that wrote the entry shown: the one that built its entry block, too; and no other."""
+    import dbx
+    from test_pipelines import Flat
+
+    monkeypatch.setenv("DBX_DATALAKE", str(tmp_path))
+    monkeypatch.setenv("DBX_DIRTY_REPO_OK", "1")
+    dbx.exec("Flat(spec={'n': 5}).create()", Flat=Flat)
+    root = Flat(spec={"n": 5}).create()  # outside dbx.exec: no command of its own
+    dbx.exec("root.var.leaf.build(); root.build()", root=root)
+    dbx.exec("1 + 1")
+
+    journal = dbxpipelines.journal_entries()
+    row = {k: v for k, v in journal.iloc[0].items()}
+    lake = str(tmp_path)
+    execs = dbxpipelines.session_execs(lake, lake)
+    items = dbxpipelines.HypDbxJournal._exec_items_(lake, execs, dbxpipelines.pipeline_sessions(row, journal))
+    assert [execs[s][i]["exec"] for _, (_, s, i) in items] == ["root.var.leaf.build(); root.build()", "Flat(spec={'n': 5}).create()"]

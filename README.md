@@ -315,6 +315,9 @@ dbx.pprint 'module.function(arg1, arg2)'   # evaluate and pretty-print
 dbx.slurm.exec 'module.function()'         # execute on a Slurm Ray cluster
 ```
 
+For a datalake on another host or an Anyscale workspace, a Ray head on the
+datalake's host, and Slurm, see [CLUSTERS.md](CLUSTERS.md).
+
 The expression may be a sequence of statements separated by `;` (or newlines),
 optionally ending in a `#` comment:
 
@@ -360,6 +363,7 @@ Remote tests rely on **Ray**. If you are running tests in an environment with a 
 | Variable | Description |
 |---|---|
 | `DBX_DATALAKE` | The datalake a block is stored in when not given `datalake=` (`DBX_ROOT`, then `DBX_URL`, its names before the rename, are still read after it) |
+| `DBX_STORAGE_OPTIONS` | fsspec options for every datalake path, `key=val;key=val`: see [CLUSTERS.md](CLUSTERS.md) |
 | `DBX_GIT_REPO` | Path to the git repository for revision tracking |
 | `DBX_DIRTY_REPO_OK` | Set to skip the dirty-repo check |
 | `DBX_LOG_INFO`, `DBX_LOG_DEBUG`, etc. | Control per-level log output |

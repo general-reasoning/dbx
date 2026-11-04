@@ -162,3 +162,43 @@ class TestJournalFunctionStorageOptions:
         result = journal(df, storage_options=so)
         assert isinstance(result, BuildJournalFrame)
         assert result.storage_options == so
+
+
+# ---------------------------------------------------------------------------
+# The exec journal: DBX_STORAGE_OPTIONS by default
+# ---------------------------------------------------------------------------
+
+class TestExecJournalStorageOptions:
+    """The exec journal is read and written with DBX_STORAGE_OPTIONS when given none.
+
+    An Anyscale datalake is `ssh://<workspace id>/...`, a host only the ssh
+    config in DBX_STORAGE_OPTIONS names: without them, `dbx.pprint` failed
+    resolving the workspace id as a hostname, writing its own exec journal.
+    """
+
+    @pytest.fixture
+    def opened(self, tmp_path, monkeypatch):
+        """The storage options every exec journal url is opened with, as they are asked for."""
+        import dbx.journals
+        monkeypatch.setenv('DBX_DATALAKE', str(tmp_path))
+        monkeypatch.setenv('DBX_STORAGE_OPTIONS', 'auto_mkdir=True')
+        seen = []
+        real = fsspec.url_to_fs
+
+        def url_to_fs(url, **kwargs):
+            if '/.journal/exec' in str(url):
+                seen.append(kwargs)
+            return real(url, **kwargs)
+
+        monkeypatch.setattr(dbx.journals.fsspec, 'url_to_fs', url_to_fs)
+        return seen
+
+    def test_written_with_them(self, opened):
+        from dbx.journals import write_exec_journal
+        write_exec_journal('1 + 1', session='s')
+        assert opened and all(kw == {'auto_mkdir': 'True'} for kw in opened)
+
+    def test_read_with_them(self, opened):
+        from dbx.journals import execjournal
+        execjournal()
+        assert opened and all(kw == {'auto_mkdir': 'True'} for kw in opened)

@@ -43,17 +43,18 @@ from .app import Button, DiskViewer, Dropdown, Hyp, TextField, TextViewer
 # then the side files, then TAIL_COLUMNS.
 HEAD_COLUMNS = ("anchor", "tag", "key", "event", "datetime", "entrypaths")
 TAIL_COLUMNS = ("gitrepo", "entry_path", "wrkrepo")
-# Columns holding paths to side files: their contents are shown, in this
-# order, in place of the paths -- cite first, right below the table, and dfn
-# right after it. The note is shown in the table, right after what can be
+# Columns holding what the block recorded -- in the entry, or, before
+# 2026-11-03, in side files they hold the paths to: shown, in this order,
+# below the table -- cite first, and dfn right after it; env, the
+# environment, last. The note is shown in the table, right after what can be
 # read from the block: NOTE_AFTER.
-SIDE_FILES = ("cite", "dfn", "spec", "kwargs", "signature", "type", "repr", "quote")
+SIDE_FILES = ("cite", "dfn", "spec", "kwargs", "signature", "type", "repr", "quote", "env")
 # The note follows the first of these the row has: as dbx records it.
 NOTE_AFTER = ("slices", "paths", "topics")
 # Side files shown deslashed: a dfn's speclines are dumped with their quotes escaped.
 DESLASHED = ("dfn",)
-# Side files that are yaml dumps of dicts: shown as the dicts they hold.
-DICT_FILES = ("spec", "dfn", "kwargs")
+# Those that are yaml dumps of dicts: shown as the dicts they hold.
+DICT_FILES = ("spec", "dfn", "kwargs", "env")
 # Path columns shown relative to the datalake, which is shown once.
 LAKE_PATHS = ("anchorkeypath", "entrypaths")
 # Columns holding a dict's repr: shown one key per line.
@@ -259,38 +260,57 @@ def read_dump(path):
     """The yaml dump at *path* -- a spec, dfn or kwargs side file -- as data, with `_inert_loader_`."""
     from dbx.databits import read_str
 
-    return yaml.load(read_str(path), Loader=_inert_loader_())
+    return load_dump(read_str(path))
 
 
-def _side_file_(column, path, url):
-    """The side file *path* names, as `(shown, compact)` text; None where it cannot be read.
+def load_dump(text):
+    """The yaml dump *text* -- a spec, dfn, kwargs or env, from a side file or the entry itself -- as data, with `_inert_loader_`."""
+    return yaml.load(text, Loader=_inert_loader_())
+
+
+def recorded(value, url):
+    """The text a journal column's *value* records: read from the side file it names -- an entry from before 2026-11-03 -- or itself.
+
+    None where a side file it names cannot be read.
+    """
+    from dbx.databits import read_str
+    from dbx.journals import side_file
+
+    path = side_file(value)
+    if path is None:
+        return value
+    try:
+        return read_str(rebase(path, url), storage_options=_dbx_().default_storage_options())
+    except (FileNotFoundError, OSError):
+        return None
+
+
+def _side_file_(column, value, url):
+    """What the column *column* records, *value* -- in the entry, or in the side file it names -- as `(shown, compact)` text; None where it cannot be read.
 
     For DICT_FILES, *shown* is the dict one key per line, a level per four
     spaces -- so that a viewer folds it by level -- and *compact* the dict
     pretty-printed, as points have always been embedded from: a change to
-    how it is shown must not move every point. Otherwise both are the file.
+    how it is shown must not move every point. Otherwise both are the text.
+    A note recorded in the entry is not read here: it is shown as it is.
     """
+    from dbx.journals import side_file
 
-    from dbx.databits import read_str
-
-    if not isinstance(path, str) or not re.search(r"\.(txt|yaml|yml|json)$", path):
+    if not isinstance(value, str) or (side_file(value) is None and column not in SIDE_FILES):
         return None
-    path = rebase(path, url)
-    try:
-        shown = compact = None
-        if column in DICT_FILES and path.endswith((".yaml", ".yml")):
-            try:
-                # As data: the dumps hold python tuples, which the safe
-                # loader does not make, and blocks, which must not be made.
-                data = read_dump(path)
-                shown = "\n".join(dict_lines(repr(data)))
-                compact = pprint.pformat(data, width=100, sort_dicts=False)
-            except yaml.YAMLError:
-                pass  # shown as the yaml it is
-        if shown is None:
-            shown = compact = read_str(path)
-    except (FileNotFoundError, OSError):
+    text = recorded(value, url)
+    if text is None:
         return None
+    shown = compact = text
+    if column in DICT_FILES and (side_file(value) is None or value.endswith((".yaml", ".yml"))):
+        try:
+            # As data: the dumps hold python tuples, which the safe
+            # loader does not make, and blocks, which must not be made.
+            data = load_dump(text)
+            shown = "\n".join(dict_lines(repr(data)))
+            compact = pprint.pformat(data, width=100, sort_dicts=False)
+        except yaml.YAMLError:
+            pass  # shown as the yaml it is
 
     def limited(text):
         return text if len(text) <= SIDE_FILE_LIMIT else text[:SIDE_FILE_LIMIT] + "\n…"
@@ -299,14 +319,15 @@ def _side_file_(column, path, url):
 
 
 def var_name(row):
-    """The pipeline's `VAR.name`, from the spec side file *row* names; None where it has none, or it cannot be read."""
+    """The pipeline's `VAR.name`, from the spec *row* records -- in the entry, or a side file; None where it has none, or it cannot be read."""
 
-    path = row.get("spec")
-    if not isinstance(path, str) or not path.endswith((".yaml", ".yml")):
+    value = row.get("spec")
+    if not isinstance(value, str):
         return None
     try:
-        spec = read_dump(rebase(path, row.get("entry_path", "")))
-    except (FileNotFoundError, OSError, yaml.YAMLError):
+        text = recorded(value, row.get("entry_path", ""))
+        spec = load_dump(text) if text is not None else None
+    except yaml.YAMLError:
         return None
     name = spec.get("name") if isinstance(spec, dict) else None
     return None if name is None or str(name) == "" else str(name)
@@ -542,10 +563,11 @@ def has_quote(row):
 
 
 def quote_text(row):
-    """The quote *row*'s entry recorded, in full: read, as the side files are, through the protocol and host of its `entry_path`."""
-    from dbx.databits import read_str
-
-    return read_str(rebase(row["quote"], row.get("entry_path", ""))).strip()
+    """The quote *row*'s entry recorded, in full: in the entry, or -- before 2026-11-03 -- in a side file, read through the protocol and host of its `entry_path`."""
+    text = recorded(row["quote"], row.get("entry_path", ""))
+    if text is None:
+        raise FileNotFoundError(f"the quote's side file is gone: {row['quote']}")
+    return text.strip()
 
 
 def rerun_line(quote, cite=False, revision=None):
@@ -607,8 +629,9 @@ def session_blocks(row, n_workers=16):
     its session, by any process -- `BuildJournal.session_entries` -- under
     `{datalake}/.journal/sessions/{session}/`. The index and the entries it
     lists are recorded as the datalake's host wrote them, and are read, as the
-    side files are, through the row's `entry_path`. A session no command
-    ran -- a block built outside `dbx.exec` -- has no index, and no blocks.
+    side files are, through the row's `entry_path`. A session outside
+    `dbx.exec` is indexed too, under its blocks' datalake, since 2026-11-03;
+    one from before has no index, and no blocks.
     A pipeline's entries are left out: they are its creations, filed in the
     pipeline journal, and its block directory holds none of them.
     """
@@ -627,6 +650,101 @@ def session_blocks(row, n_workers=16):
         if not _is_blank_(r.get("anchorkeypath")) and "/.pipelines/" not in str(r.get("entry_path", "")):
             blocks[str(r["anchorkeypath"])] = str(r.get("event", ""))
     return list(blocks.items())
+
+
+# An exec window's table, in this order; its other columns follow, then its exception and traceback.
+EXEC_SHOWN = ("exec", "datetime", "exec:start:datetime", "exec:end:datetime", "success", "comment", "id", "session",
+              "output_captures", "buildjournal_entries")
+
+
+def session_execs(lake, url, n_workers=16):
+    """The exec journal of the datalake *lake* as `{session: [command]}`: each `dbx.exec` command a dict of its columns, newest first.
+
+    Read, as the side files are, through *url* -- an entry's `entry_path`.
+    The whole journal, once: it is read whole even to filter it.
+    """
+
+    dbx = _dbx_()
+    df = dbx.execjournal(datalake=rebase(lake, url), storage_options=dbx.default_storage_options(), n_workers=n_workers, index=None)
+    out = {}
+    for _, r in pd.DataFrame(df).iterrows():
+        command = {k: v for k, v in r.items() if not _is_blank_(v)}
+        if "session" in command:
+            out.setdefault(str(command["session"]), []).append(command)
+    return out
+
+
+def pipeline_sessions(row, journal, n_workers=16):
+    """Every session that touched the pipeline *row* is an entry of: newest first.
+
+    Those of its own entries in *journal* -- the pipeline journal, every
+    entry -- each a command that created it, and those of every entry of each
+    entry block it was created to, read as `entrypoint_text` reads one: the
+    commands that built them, and any that read them since.
+    """
+
+    dbx = _dbx_()
+    key, lake, url = str(row.get("anchorkeypath", "")), str(row.get("datalake", "")), row.get("entry_path", "")
+    mine = pd.DataFrame(journal) if journal is not None else pd.DataFrame()
+    if len(mine) and "anchorkeypath" in mine.columns:
+        mine = mine[mine["anchorkeypath"].astype(str) == key]
+    found = [(str(r.get("datetime", "")), str(r["session"])) for _, r in mine.iterrows() if not _is_blank_(r.get("session"))]
+    if not _is_blank_(row.get("session")):
+        found.append((str(row.get("datetime", "")), str(row["session"])))
+    entrypaths = {str(p) for p in (mine["entrypath"] if "entrypath" in mine.columns else []) if not _is_blank_(p)}
+
+    def block_sessions(entrypath):
+        if not lake or not entrypath.startswith(lake):
+            return []
+        try:
+            df = pd.DataFrame(dbx.BuildJournal.read(entrypath[len(lake) :].strip("/"), datalake=rebase(lake, url),
+                                                    n_workers=n_workers, index=None))
+        except FileNotFoundError:
+            return []
+        if "anchorkeypath" in df.columns:
+            df = df[df["anchorkeypath"].astype(str) == entrypath]
+        return [(str(r.get("datetime", "")), str(r["session"])) for _, r in df.iterrows() if not _is_blank_(r.get("session"))]
+
+    if entrypaths:
+        with ThreadPoolExecutor(max_workers=min(8, len(entrypaths))) as ex:
+            for sessions in ex.map(block_sessions, sorted(entrypaths)):
+                found += sessions
+    newest = {}
+    for dt, session in sorted(found, reverse=True):
+        newest.setdefault(session, dt)
+    return list(newest)
+
+
+def exec_label(command):
+    """A `dbx.exec` command as a menu item: when, whether it succeeded, and the command."""
+    ok = command.get("success")
+    status = "running or killed" if ok is None else ("ok" if bool(ok) else "failed")
+    return f"{when(command.get('datetime', ''), seconds=True)}   {status}   {tail_text(str(command.get('exec', '')), 100)}"
+
+
+def tail_text(text, n):
+    """*text* on one line, its first *n* characters."""
+    one = " ".join(text.split())
+    return one if len(one) <= n else one[: n - 1] + "…"
+
+
+def exec_text(command):
+    """A `dbx.exec` command, as an exec journal recorded it, as text: a table of its columns, then its exception and traceback."""
+
+    rest = ("exception", "traceback")
+    cols = [c for c in EXEC_SHOWN if c in command] + [c for c in command if c not in EXEC_SHOWN + rest]
+    width = max((len(c) for c in cols), default=0)
+
+    def values(v):
+        if isinstance(v, str) or not hasattr(v, "__iter__"):
+            return str(v).split("\n")
+        return [str(x) for x in v] or [""]
+
+    lines = [f"{(c if i == 0 else '').ljust(width)}  {v}" for c in cols for i, v in enumerate(values(command[c]))]
+    for c in rest:
+        if c in command:
+            lines += ["", f"── {c} ──", str(command[c]).rstrip()]
+    return "\n".join(lines)
 
 
 def _entry_(row):
@@ -1081,6 +1199,8 @@ class HypDbxJournal(Hyp):
         self.journal = None  # every pipeline journal entry, newest first; None until read
         self.constructed = None  # {anchorkeypath: [entrypath]}; None until read
         self.sessions = {}  # {session: [(anchorkeypath, last event)]}; None while read
+        self.execs = {}  # {datalake: {session: [dbx.exec command]}}; None while read
+        self.touched = {}  # {pipeline anchorkeypath: [session that touched it]}; None while read
         self.slice_info = {}  # {(entry_path, id): {slice: (rows, {column: kind})}}; None while read
         self._read_journals_()
         self.run_async(lambda: _dbx_().anchors(datalake()), lambda a: setattr(self, "anchors", a))
@@ -1089,6 +1209,8 @@ class HypDbxJournal(Hyp):
         """The journal, the constructed entry blocks, the session indexes and the anchors, read again with the points."""
         self.journal = self.constructed = None
         self.sessions = {}
+        self.execs = {}
+        self.touched = {}
         self.slice_info = {}
         self._read_journals_()
         self.run_async(lambda: _dbx_().anchors(datalake()), lambda a: setattr(self, "anchors", a))
@@ -1138,7 +1260,7 @@ class HypDbxJournal(Hyp):
         self._titled_()
         self.viewers, self.popup, self.snap, self.tween = [], None, None, None
         self.journal = self.constructed = None
-        self.sessions, self.slice_info = {}, {}
+        self.sessions, self.execs, self.touched, self.slice_info = {}, {}, {}, {}
         self._read_journals_()
         data, source = corpus_dir(anchor), journal_source(anchor, self.filters, self.n_workers)
         options = _dbx_().default_storage_options()
@@ -1223,11 +1345,11 @@ class HypDbxJournal(Hyp):
             "session blocks",
             lambda: self._session_blocks_(viewer, viewer.row),
             lambda p: self._open_entrypoint_(viewer.row, p, viewer.title_color),
-            empty="none indexed: the session was no dbx.exec command's",
+            empty="none indexed: built outside dbx.exec, before such sessions were",
             visible=lambda: bool(viewer.row) and not _is_blank_(viewer.row.get("session")),
             **self._copies_anchorkey_(viewer.row),
         )
-        viewer.menus = [times, roots, session, self._output_button_(viewer), *self._rerun_buttons_(viewer)]
+        viewer.menus = [times, roots, session, self._pipeline_exec_menu_(viewer), self._output_button_(viewer), *self._rerun_buttons_(viewer)]
         self.viewers = [viewer]
 
     # Helpers -----------------------------------------------------------------
@@ -1303,10 +1425,11 @@ class HypDbxJournal(Hyp):
                 "session blocks",
                 lambda: self._session_blocks_(window, row),
                 lambda p: self._show_session_block_(window, row, p),
-                empty="none indexed: the session was no dbx.exec command's",
+                empty="none indexed: built outside dbx.exec, before such sessions were",
                 visible=lambda: bool(window.row) and not _is_blank_(window.row.get("session")),
                 **self._copies_anchorkey_(row),
             ),
+            self._exec_menu_(window),
             Dropdown(
                 "read",
                 lambda: self._topic_items_(window, stored_only=False),
@@ -1362,6 +1485,82 @@ class HypDbxJournal(Hyp):
             self.run_async(read, lambda blocks: self.sessions.__setitem__(session, blocks))
         blocks = self.sessions[session]
         return None if blocks is None else [(f"{self._relative_(row, p)}   {event}", p) for p, event in blocks]
+
+    def _exec_menu_(self, window):
+        """The `exec` menu of a window showing an entry: the `dbx.exec` commands run under its session -- found by its id in the exec journal -- each opened over it."""
+        return Dropdown(
+            "exec",
+            lambda: self._session_execs_(window),
+            self._open_exec_,
+            empty="no dbx.exec command ran under the session",
+            visible=lambda: bool(window.row) and not _is_blank_(window.row.get("session")),
+        )
+
+    def _pipeline_exec_menu_(self, viewer):
+        """A pipeline window's `exec` menu: every `dbx.exec` command that touched the pipeline -- created it, or built or read its entry blocks -- newest first."""
+        return Dropdown(
+            "exec",
+            lambda: self._pipeline_execs_(viewer),
+            self._open_exec_,
+            empty="no dbx.exec command touched the pipeline",
+            visible=lambda: bool(viewer.row),
+        )
+
+    def _session_execs_(self, window):
+        """The `dbx.exec` commands run under the session of the entry *window* shows, as dropdown items; None while the exec journal is read, the first time asked."""
+        shown = window.row
+        lake = str(shown.get("datalake", ""))
+        return self._exec_items_(lake, self._execs_(lake, shown.get("entry_path", "")), [str(shown.get("session"))])
+
+    def _pipeline_execs_(self, viewer):
+        """The `dbx.exec` commands of every session that touched the pipeline *viewer* shows, as dropdown items; None while any of it is read."""
+        row = viewer.row
+        lake, key = str(row.get("datalake", "")), str(row.get("anchorkeypath", ""))
+        execs = self._execs_(lake, row.get("entry_path", ""))
+        if key not in self.touched:
+            self.touched[key] = None
+
+            def read():
+                try:
+                    return pipeline_sessions(row, self.journal, self.n_workers)
+                except Exception:
+                    self.touched[key] = []  # not read: shown as none, the error in the status line
+                    raise
+
+            self.run_async(read, lambda sessions: self.touched.__setitem__(key, sessions))
+        sessions = self.touched[key]
+        return None if sessions is None else self._exec_items_(lake, execs, sessions)
+
+    def _execs_(self, lake, url):
+        """The exec journal of *lake*, `{session: [command]}`, read through *url* the first time asked; None while read."""
+        if lake not in self.execs:
+            self.execs[lake] = None
+
+            def read():
+                try:
+                    return session_execs(lake, url, self.n_workers)
+                except Exception:
+                    self.execs[lake] = {}  # not read: shown as none, the error in the status line
+                    raise
+
+            self.run_async(read, lambda execs: self.execs.__setitem__(lake, execs))
+        return self.execs[lake]
+
+    @staticmethod
+    def _exec_items_(lake, execs, sessions):
+        """The commands of *sessions* in *execs*, newest first, as dropdown items; None while *execs* is read."""
+        if execs is None:
+            return None
+        # Each named by where it is kept, not itself: a command's columns may be arrays, which `==` answers elementwise.
+        found = [(str(c.get("datetime", "")), (lake, session, i)) for session in dict.fromkeys(sessions)
+                 for i, c in enumerate(execs.get(session, []))]
+        return [(exec_label(execs[s][i]), (lake, s, i)) for _, (lake, s, i) in sorted(found, reverse=True)]
+
+    def _open_exec_(self, where):
+        """Open the `dbx.exec` command *where* -- `(datalake, session, index)` -- names, as the exec journal recorded it, over the window it was asked from."""
+        lake, session, i = where
+        command = self.execs[lake][session][i]
+        self.push_viewer(TextViewer(f"exec · {when(command.get('datetime', ''), seconds=True)}", exec_text(command)))
 
     def _show_session_block_(self, window, row, path):
         """Show the journal of the session's block at *path* in *window*, as picking a constructed entrypoint does."""
@@ -1563,13 +1762,14 @@ class HypDbxJournal(Hyp):
         window = TextViewer(how, "reading the quote …", menus=[title, pin])
         show()
         self.push_viewer(window)
-        self.run_async(lambda: quote_text(row), read)
+        self.run_async(lambda: quote_text(row), read, failed=lambda line: window.set_text(f"could not read the quote:\n\n{line}"))
 
     def _open_output_(self, row):
         """Open the captured output of the entry *row* in a window over the one it was asked from, read off the UI thread."""
         window = TextViewer(f"output · {when(row.get('datetime', ''), seconds=True)} · {str(row.get('log')).rsplit('/', 1)[-1]}", "reading the captured output …")
         self.push_viewer(window)
-        self.run_async(lambda: output_text(row), window.set_text)
+        self.run_async(lambda: output_text(row), window.set_text,
+                       failed=lambda line: window.set_text(f"could not read the captured output:\n\n{line}"))
 
     def _anchor_blocks_(self, row):
         """The anchor's blocks -- the points -- as dropdown items, newest first."""
@@ -1589,7 +1789,8 @@ class HypDbxJournal(Hyp):
         """Right click on a block: the blocks journaled under its session, at the mouse; picking one opens its window."""
 
         if _is_blank_(row.get("session")):
-            self.status = "no session: the block was built outside dbx.exec"
+            # Every entry has recorded its session since then, with dbx.exec or without: the process's own.
+            self.status = "no session: the entry was written before dbx recorded sessions, on 2026-09-29"
             return
         held = SimpleNamespace(row=row)
 
@@ -1597,7 +1798,7 @@ class HypDbxJournal(Hyp):
             self.viewers = []
             self._open_entrypoint_(row, path, self.title_color(i))
 
-        self.open_popup(lambda: self._session_blocks_(held, row), opened, pos, empty="none indexed: the session was no dbx.exec command's",
+        self.open_popup(lambda: self._session_blocks_(held, row), opened, pos, empty="none indexed: built outside dbx.exec, before such sessions were",
                         **self._copies_anchorkey_(row))
 
     def _copies_anchorkey_(self, row):

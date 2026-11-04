@@ -46,6 +46,7 @@ import fsspec
 import numpy as np
 import pandas as pd
 import tqdm
+import yaml
 
 from . import databits
 from .databits import (
@@ -520,7 +521,10 @@ def write_exec_journal(s: str, datalake: str | None = None, storage_options: dic
     """
     dbx_url = datalake or url or default_datalake() or './dbx'
     exec_dir = os.path.join(dbx_url, '.journal', 'exec')
-    fs, _ = fsspec.url_to_fs(exec_dir, **(storage_options or {}))
+    # DBX_STORAGE_OPTIONS by default, as the build journal's: an ssh datalake may be reachable only through them.
+    if storage_options is None:
+        storage_options = default_storage_options()
+    fs, _ = fsspec.url_to_fs(exec_dir, **storage_options)
     try:
         fs.makedirs(exec_dir, exist_ok=True)
     except Exception:
@@ -786,11 +790,12 @@ class ExecJournalEntry(pd.Series):
         session index is read -- the datalake its exec journal was read from,
         unless given.
         """
+        lake = one_datalake(datalake, url, 'buildjournal') or self.datalake
         return _written_buildjournal_(
-            ExecJournalEntry._written_refs_(self, one_datalake(datalake, url, 'buildjournal') or self.datalake,
-                                            self.storage_options),
+            ExecJournalEntry._written_refs_(self, lake, self.storage_options),
             anchor, loc, iloc, storage_options=self.storage_options if storage_options is None else storage_options,
-            log=log, n_workers=n_workers, index=index, unnormalized=unnormalized, filters=filter_kwargs)
+            log=log, n_workers=n_workers, index=index, unnormalized=unnormalized, filters=filter_kwargs,
+            read_from=lake)
 
     def anchors(self) -> list:
         """Every anchor this command wrote a build journal entry for, sorted."""
@@ -1041,10 +1046,12 @@ class ExecJournalFrame(pd.DataFrame):
                     log=None, n_workers: int | None = None, index: 'str | None' = ...,
                     unnormalized: bool = False, url=None, **filter_kwargs):
         """What `dataentries` reads, as one `BuildJournalFrame`. Takes what `ExecJournalEntry.buildjournal` takes."""
+        lake = one_datalake(datalake, url, 'buildjournal') or self.datalake
         return _written_buildjournal_(
-            self._written_refs_(one_datalake(datalake, url, 'buildjournal') or self.datalake),
+            self._written_refs_(lake),
             anchor, loc, iloc, storage_options=self.storage_options if storage_options is None else storage_options,
-            log=log, n_workers=n_workers, index=index, unnormalized=unnormalized, filters=filter_kwargs)
+            log=log, n_workers=n_workers, index=index, unnormalized=unnormalized, filters=filter_kwargs,
+            read_from=lake)
 
     def anchors(self) -> list:
         """Every anchor the commands here wrote a build journal entry for, sorted."""
@@ -1151,8 +1158,10 @@ def _derived_frame_(cls, defaults, args, kwargs):
 
 
 def _written_buildjournal_(refs, anchor, loc, iloc, *, storage_options, log, n_workers, index,
-                          unnormalized, filters):
+                          unnormalized, filters, read_from=None):
     """The build journal entries *refs* name (`BuildJournal.read_refs`), narrowed and indexed as `buildjournal` would be.
+
+    *read_from* is the datalake *refs* were read from, as `read_refs` takes it.
 
     *anchor* is matched exactly, as `buildjournal` reads exactly one
     anchor's journal -- not as a filter pattern, where `'a.B'` would also
@@ -1164,7 +1173,8 @@ def _written_buildjournal_(refs, anchor, loc, iloc, *, storage_options, log, n_w
         name = _anchor_of_(anchor)
         filters = {'anchor': lambda a: a == name, **filters}
     frame = BuildJournal.read_refs(refs, storage_options=storage_options or None, log=log,
-                                  n_workers=n_workers, index=index, unnormalized=unnormalized, **filters)
+                                  n_workers=n_workers, index=index, unnormalized=unnormalized,
+                                  read_from=read_from, **filters)
     if loc is not None:
         return frame.get(loc, dropna=True)
     if iloc is not None:
@@ -1235,7 +1245,10 @@ def read_exec_journal(
 
     dbx_url = datalake or url or default_datalake() or './dbx'
     exec_dir = os.path.join(dbx_url, '.journal', 'exec')
-    fs, _ = fsspec.url_to_fs(exec_dir, **(storage_options or {}))
+    # DBX_STORAGE_OPTIONS by default, as the build journal's: an ssh datalake may be reachable only through them.
+    if storage_options is None:
+        storage_options = default_storage_options()
+    fs, _ = fsspec.url_to_fs(exec_dir, **storage_options)
     try:
         if not fs.exists(exec_dir):
             files = []
@@ -1523,6 +1536,87 @@ def _on_fs_of_(path, url):
         return path
     m = re.match(r'^((?:ssh|sftp)://[^/]+)/', str(url or ''))
     return m[1] + path if m else path
+
+
+def _datalakes_seen_(recorded, read_from):
+    """Where a datalake its writer recorded as *recorded* is, to a reader of *read_from*: the likeliest first.
+
+    An ssh datalake is local to its host and remote to everyone else, and is
+    recorded as its writer saw it. Written on the host -- a bare path -- and
+    read over ssh, it is on *read_from*'s host (`_on_fs_of_`). Written over
+    ssh and read anywhere but over ssh -- on the host itself, likeliest --
+    it is its bare path, and failing that, the ssh url it was. Anything else
+    -- a bare path read locally, a `gs://` or `abfss://` url -- is where it
+    says.
+    """
+    if not isinstance(recorded, str) or not recorded:
+        return [recorded]
+    on = _on_fs_of_(recorded, read_from)
+    if on != recorded:
+        return [on]
+    m = re.match(r'^(?:ssh|sftp)://[^/]+(/.*)$', recorded)
+    if m and not re.match(r'^(?:ssh|sftp)://', str(read_from or '')):
+        return [m[1], recorded]
+    return [recorded]
+
+
+# An entry's columns recorded in it as dicts -- the yaml their side files held -- and as text.
+RECORDED_DICTS = ('spec', 'kwargs', 'env')
+RECORDED_TEXTS = ('quote', 'cite', 'repr', 'signature', 'type')
+
+
+def side_file(value):
+    """The path of the side file the journal column *value* names, or None where *value* is what was recorded.
+
+    Entries written before 2026-11-03 recorded spec, kwargs, quote, cite,
+    repr, signature and type in side files, and the column held a path;
+    those written since hold the thing itself -- text, or a dict's yaml. A
+    long note still goes to a side file. A path is one line, with a `/` in
+    it, and a file name with a side file's extension and nothing in it a
+    rendering has -- no space, quote, `=`, `:` or bracket: a type ends in
+    its topics' files, `topic:output=output.txt`, and is no path. It is
+    absolute, or a url, as no rendering is -- a type starts with `(`, a
+    quote with `$` -- or, relative, its file is named as `BuildJournal.path`
+    names one: for its column, `{fqcn}-{column}-{hash}-{dt}.txt`.
+    """
+    if not isinstance(value, str) or '\n' in value or '/' not in value:
+        return None
+    name = value.rsplit('/', 1)[1]
+    if not _SIDE_FILE_EXT_.search(name) or re.search(r'[\s\'"=:(){}\[\],]', name):
+        return None
+    if value.startswith('/') or re.match(r'[a-z][a-z0-9+.-]*://', value) or _SIDE_FILE_NAME_.search(name):
+        return value
+    return None
+
+
+_SIDE_FILE_EXT_ = re.compile(r'\.(?:txt|yaml|yml|json|log)\Z')
+# A side file's name, as `BuildJournal.path` names one: its column's, among the others.
+_SIDE_FILE_NAME_ = re.compile(r'(?:\A|[-._])(?:spec|dfn|kwargs|quote|cite|repr|signature|subsignature|norm|type|hashstr'
+                              r'|note|message)(?:-.*)?\.(?:txt|yaml|yml|json|log)\Z')
+
+
+# A variable whose name or value says it holds a secret: recorded withheld.
+_SECRET_NAME_ = re.compile(r'KEY|SECRET|TOKEN|PASSW|CREDENTIAL|AUTH|COOKIE|PRIVATE|STORAGE_OPTIONS', re.IGNORECASE)
+_SECRET_VALUE_ = re.compile(r'://[^/\s:@]+:[^/\s@]+@')  # a url with a password in it
+WITHHELD = '<withheld>'
+
+
+def recorded_env(environ=None):
+    """The environment a build entry records, `env`: every variable of *environ* -- this process's -- by name.
+
+    A journal is read by whoever can read the datalake, so a variable whose
+    name or value says it holds a secret -- a key, a token, a password, a
+    url with one in it, dbx's storage options -- is recorded as there, but
+    its value WITHHELD.
+    """
+    environ = os.environ if environ is None else environ
+    return {k: (WITHHELD if _SECRET_NAME_.search(k) or _SECRET_VALUE_.search(v) else v)
+            for k, v in sorted(environ.items())}
+
+
+def _yaml_text_(data):
+    """*data* as the yaml its side file would have held: what an entry records in a dict's column."""
+    return yaml.dump(data)
 
 
 def _anchor_of_(cls_or_anchor) -> str:
@@ -1826,6 +1920,18 @@ class Pretty:
 
     # 2. Declared API ------------------------------------------------------
 
+    @classmethod
+    def of(cls, block) -> 'Pretty':
+        """*block* as an entry written for it now would read: `Datablock.pretty`.
+
+        Over what `BuildJournal.write` records of a block (`_block_record_`),
+        held in memory and written nowhere, so `block.pretty.quote()` is the
+        `quote()` of the entry its next build writes.
+        """
+        record = BuildJournal._block_record_(block)
+        return cls(BuildJournalEntry(pd.Series(record, dtype=object),
+                                     storage_options=getattr(block, 'storage_options', None)))
+
     def signaturestr(self, *, deslash: bool = False, **kwargs):
         """The recorded signature TEXT.
 
@@ -1904,26 +2010,32 @@ class Pretty:
         """
         return list(self._dict_column_(self._entry, 'topics', parse=datablocks.literal_topics))
 
-    def quote(self, *, pretty: bool = True, deslash: bool | None = None):
+    def quote(self, *, pretty: bool = True, deslash: bool | None = None, specline: bool = True):
         """The recorded `Datablock.quote`, laid out to be read as a cite is, or None.
 
         *pretty* lays it out as `Datablock.cite` does (`cite_specline`): a
         keyword a line, every nested block an indented block of its own,
         nothing left escaped. `pretty=False` is the TEXT as recorded -- the
         evaluable specline. *deslash* strips backslashes: by default when
-        *pretty*, as `cite` does, and not otherwise. The row's `quote` column
-        holds the path to the file it was written to.
+        *pretty*, as `cite` does, and not otherwise. `specline=False` drops
+        the leading specline anchor -- `$`, `@` or `#` -- leaving the call.
         """
         text = self._recorded_text_('quote', False)
         if text is None:
             return None
         if pretty:
-            return cite_specline(text, deslash=True if deslash is None else deslash)
-        return text.replace('\\', '') if deslash else text
+            text = cite_specline(text, deslash=True if deslash is None else deslash)
+        elif deslash:
+            text = text.replace('\\', '')
+        return text if specline else self._unanchored_(text)
 
-    def cite(self, *, deslash: bool = False):
-        """The recorded `Datablock.cite` TEXT, or None. The path is the row's `cite` column."""
-        return self._recorded_text_('cite', deslash)
+    def cite(self, *, deslash: bool = False, specline: bool = True):
+        """The recorded `Datablock.cite` TEXT, or None.
+
+        `specline=False` drops the leading specline anchor -- `$`, `@` or `#` -- leaving the call.
+        """
+        text = self._recorded_text_('cite', deslash)
+        return text if specline or text is None else self._unanchored_(text)
 
     def repr(self, *, deslash: bool = False):
         """The recorded `Datablock.repr` TEXT -- every kwarg the block had -- or None.
@@ -2276,6 +2388,12 @@ class Pretty:
             return '/'.join(parts)
         return hash  # fallback
 
+    @staticmethod
+    def _unanchored_(text):
+        """*text* without its leading specline anchor -- `$`, `@` or `#` -- if it has one."""
+        stripped = text.lstrip()
+        return stripped[1:] if stripped[:1] in ('$', '@', '#') else text
+
     def _recorded_text_(self, column, deslash):
         """The text of the side file *column* names, or None when the row has none."""
         val = self._entry.read(column, safe=True)
@@ -2347,8 +2465,16 @@ class BuildJournalEntry(pd.Series):
             # methods now, and getattr would hand back a bound method whose
             # str() is its repr rather than the path the column holds.
             val = self.column(self, target_attr)
-            if val is not None and not (isinstance(val, float) and pd.isna(val)):
-                # Where the entry was read from: a host's own path, read over ssh.
+            if (val is not None and not (isinstance(val, float) and pd.isna(val))
+                    and target_attr in RECORDED_DICTS + RECORDED_TEXTS and side_file(val) is None):
+                # Recorded in the entry itself: a dict as its yaml, which is parsed as its side file was.
+                if not raw and target_attr in RECORDED_DICTS and isinstance(val, str):
+                    result = yaml.load(val, Loader=yaml.BaseLoader if safe else yaml.UnsafeLoader)
+                else:
+                    result = str(val)
+            elif val is not None and not (isinstance(val, float) and pd.isna(val)):
+                # An entry from before: the column names a side file. Where the entry
+                # was read from: a host's own path, read over ssh.
                 path = _on_fs_of_(str(val), self.get('entry_path'))
                 _, _ext = os.path.splitext(path)
                 ext = _ext[1:] if _ext else ''
@@ -2756,14 +2882,15 @@ class BuildJournal:
     A session is operational, like `tree`: nothing about it reaches a
     block's identity.
 
-    A COMMAND session -- the one a `dbx.exec` runs under, see
-    `command_session` -- also indexes what is written under it, in
-    storage: one marker per entry, under
-    `{datalake}/.journal/sessions/{session}/`, where the exec journal is. It
-    is written by whichever process writes the entry, so it holds what a
-    worker wrote even when that worker never returned -- killed, or started by
-    something other than a dbx executor -- and `session_entries` reads
-    it back.
+    Every session also indexes what is written under it, in storage: one
+    marker per entry, under `{datalake}/.journal/sessions/{session}/`. A
+    COMMAND session's -- the one a `dbx.exec` runs under, see
+    `command_session` -- is under the datalake its exec journal is in; any
+    other's -- a process's default, outside `dbx.exec` -- under the datalake
+    of the block whose entry it is. It is written by whichever process
+    writes the entry, so it holds what a worker wrote even when that worker
+    never returned -- killed, or started by something other than a dbx
+    executor -- and `session_entries` reads it back.
     """
 
     # 1. Protocol and hooks ------------------------------------------------
@@ -3099,27 +3226,43 @@ class BuildJournal:
         return [frame.get(i, dropna=True) for i in range(len(frame))]
 
     @staticmethod
-    def entry_ref(block, entry_id) -> str:
+    def entry_ref(block, entry_id, journal=None) -> str:
         """The entry *entry_id* of *block*, as what it is and not where it is filed: a JSON string.
 
         Its block -- `anchor`, `hash` -- and its `id`, with what finding a
         block's entries by hash takes (`version`, `tag`, `keyby`,
         `datalake`): `read_refs` finds it again in its own file or, compacted
-        since, in its anchor's compacted journal.
+        since, in its anchor's compacted journal. *journal* is the directory
+        under the datalake a journal of another kind keeps its anchors in --
+        `PipeJournal.ANCHOR` -- and is left out for a block's own.
         """
-        return json.dumps({'anchor': block.anchor, 'hash': block.hash, 'id': entry_id, 'version': block.version,
-                           'tag': block.tag, 'keyby': block.keyby, 'datalake': block.datalake},
-                          sort_keys=True, default=str)
+        ref = {'anchor': block.anchor, 'hash': block.hash, 'id': entry_id, 'version': block.version,
+               'tag': block.tag, 'keyby': block.keyby, 'datalake': block.datalake}
+        if journal is not None:
+            ref['journal'] = journal
+        return json.dumps(ref, sort_keys=True, default=str)
 
     @classmethod
     def read_refs(cls, refs, *, storage_options=None, log=None, n_workers=None, index: str | None = None,
-                  unnormalized: bool = False, **filter_kwargs) -> 'BuildJournalFrame':
+                  unnormalized: bool = False, read_from: str | None = None,
+                  **filter_kwargs) -> 'BuildJournalFrame':
         """The entries *refs* name, in the order given, as one `BuildJournalFrame`: as `read_frame` reads files.
 
         A reference is `entry_ref`'s: one entry. One with a `session`
         and no `id` is every entry of its block written under that session.
         Each block's entries are read once, by hash (`read_hash`), or from its
-        anchor's whole journal when it is filed nowhere `read_hash` looks.
+        anchor's whole journal when it is filed nowhere `read_hash` looks. A
+        reference recording its `journal` -- a pipeline's, `PipeJournal.ANCHOR`
+        -- is looked for there; one from before references recorded it, under
+        its anchor and then under `PipeJournal.ANCHOR`.
+
+        A reference records its `datalake` as its writer saw it, and
+        *read_from* -- the datalake the references were read from -- says how
+        the reader sees it (`_datalakes_seen_`): a datalake on an ssh host,
+        written on the host as a bare path, is read over ssh from elsewhere,
+        and one written over ssh is read as a bare path on the host itself. A
+        datalake with a protocol of its own -- `gs://`, `abfss://` -- is the
+        same to every reader.
 
         A path -- what a session recorded before references -- is read as
         `read_frame` reads one; `ExecJournalEntry` turns one whose file is gone
@@ -3130,28 +3273,32 @@ class BuildJournal:
         if storage_options is None:
             storage_options = default_storage_options()
         parsed = [json.loads(str(r)) if str(r).lstrip().startswith('{') else str(r) for r in refs]
-        keys = ('datalake', 'anchor', 'hash', 'tag', 'version', 'keyby')
+        keys = ('datalake', 'journal', 'anchor', 'hash', 'tag', 'version', 'keyby')
         blocks = {}
         for ref in parsed:
             if isinstance(ref, dict):
                 blocks.setdefault(tuple(str(ref.get(k)) for k in keys), ref)
         entries = {}
         for key, ref in blocks.items():
-            found = cls.read_hash(ref['anchor'], ref['hash'], tag=ref.get('tag'), version=ref.get('version'),
-                                  keyby=ref.get('keyby') or 'tag_version_shorthash', datalake=ref.get('datalake'),
-                                  storage_options=storage_options, log=log, n_workers=n_workers)
-            if found is None:
-                try:
-                    found = cls.read(ref['anchor'], datalake=ref.get('datalake'), storage_options=storage_options,
-                                     log=log, n_workers=n_workers, hash=ref['hash'])
-                except FileNotFoundError:
-                    found = None
-            entries[key] = pd.DataFrame(found).reset_index(drop=True) if found is not None else None
+            # Where its journal keeps the anchor: said, or -- a reference from before it was -- a block's, then a pipeline's.
+            places = ([os.path.join(ref['journal'], ref['anchor'])] if ref.get('journal')
+                      else [ref['anchor'], os.path.join(PipeJournal.ANCHOR, ref['anchor'])])
+            found = None
+            for lake in _datalakes_seen_(ref.get('datalake'), read_from):
+                for anchor in places:
+                    found = cls._read_block_({**ref, 'datalake': lake}, anchor, storage_options=storage_options,
+                                             log=log, n_workers=n_workers)
+                    if found is not None:
+                        break
+                if found is not None:
+                    break
+            entries[key] = found
         dfs = []
         for ref in parsed:
             if isinstance(ref, str):
-                fs, _ = fsspec.url_to_fs(ref, **storage_options)
-                (d,) = cls._read_files_(fs, [ref], n_workers=1, log=log)
+                path = _on_fs_of_(ref, read_from)
+                fs, _ = fsspec.url_to_fs(path, **storage_options)
+                (d,) = cls._read_files_(fs, [path], n_workers=1, log=log)
             else:
                 rows = entries[tuple(str(ref.get(k)) for k in keys)]
                 if rows is None or rows.empty:
@@ -3200,12 +3347,18 @@ class BuildJournal:
         it is and not where it is filed -- for `read_refs` to find again.
         *journal_prefix* only prefixes the file's name.
 
+        The block's spec, kwargs, quote, cite, repr, signature and type are
+        recorded IN the entry -- the dicts as their yaml -- and so is the
+        environment it was built in, `env`, as a dict, with the values of
+        its secrets withheld: see `recorded_env`. Entries written before
+        recorded the block's in side files, and the column the path; `read`
+        reads either. Only a *note* not `inline_note` is still a side file.
+
         *redirection* -- an `entry_code` or a journal filter, normally passed
         by `UNSAFE_redirect` rather than directly -- is recorded IN the
-        entry, in the `redirection` column, not written out to a file the way
-        *note* and `quote`/`subsignature`/`spec` are. A redirection is what
-        `read` falls back to when the data it wanted is gone, so it must
-        not itself depend on a second file still being there.
+        entry, in the `redirection` column. A redirection is what `read`
+        falls back to when the data it wanted is gone, so it must not itself
+        depend on a second file still being there.
 
         *columns* are recorded in the entry beside its own -- read back, they
         sit ahead of `event` -- for what a journal of another kind adds to
@@ -3231,26 +3384,10 @@ class BuildJournal:
         code_seed = f"{block.hash}:{block.tree}:{dt}:{event}:{entry_id}"
         code = hashlib.sha256(code_seed.encode('utf-8')).hexdigest()[:32]
 
-        cls._write_dict_(block, 'spec', block.spec)
-        cls._write_dict_(block, 'kwargs', block.kwargs)
-        cls._write_text_(block, 'quote', block.quote())
-        cls._write_text_(block, 'cite', block.cite())
-        cls._write_text_(block, 'repr', block.repr())
-        cls._write_text_(block, 'signature', block.signaturestr())
-        cls._write_text_(block, 'type', block.typestr())
         # A note is the entry's own, not the instance's: named by the entry's id too, so a second note
         # from the same instance -- same `block.dt` -- is a file of its own, not the first one overwritten.
         if note is not None and not inline_note:
             cls._write_text_(block, 'note', note, filename_prefix=f"{entry_id}-")
-
-        spec_path = cls.path(block, 'spec', 'yaml')
-        kwargs_path = cls.path(block, 'kwargs', 'yaml')
-        quote_path = cls.path(block, 'quote', 'txt')
-        cite_path = cls.path(block, 'cite', 'txt')
-        signature_path = cls.path(block, 'signature', 'txt')
-        repr_path = cls.path(block, 'repr', 'txt')
-        type_path = cls.path(block, 'type', 'txt')
-        if note is not None and not inline_note:
             note_path = cls.path(block, 'note', 'txt', filename_prefix=f"{entry_id}-")
             note_val = note_path
         else:
@@ -3259,16 +3396,7 @@ class BuildJournal:
         # does no capturing of its own. Its path is recorded before it exists:
         # a capture is uploaded when it closes, after the build that wrote here.
         capture = OutputCapture.current()
-        #
-        _TOPICS = getattr(block, 'TOPICS', None)
-        topics_dict = ({name: copy.deepcopy(node) for name, node in _TOPICS.items()}
-                       if isinstance(_TOPICS, dict)
-                       else {topic: datablocks.DIRTOPIC for topic in block.topics()})
-        paths_dict = block.paths()
-        # What can be read from it, which a table's TOPICS do not say: its tablets' slices, and upstream's.
-        readable = getattr(block, 'readable_slices', None)
-        slices_dict = readable() if readable is not None else None
-        #
+        record = cls._block_record_(block)
         # A file per entry, named by it: no entry overwrites another, whatever instance writes it.
         journal_dir = cls.dirpath(block, 'journal')
         cls._lake_(block)[0].makedirs(journal_dir, exist_ok=True)
@@ -3277,33 +3405,18 @@ class BuildJournal:
         df = pd.DataFrame.from_records([{'datetime': dt,
                                          'build:start:datetime': block._build_start_dt,
                                          'build:end:datetime': block._build_end_dt,
-                                         'version': block.version,
-                                         'dbx_version': block.dbx_version,
-                                         'revision': block.revision, 
-                                         'datalake': block.datalake,
-                                         'anchor': block.anchor,
-                                         'hash': block.hash,
-                                         'keyby': block.keyby,
-                                         'key': block.key,
-                                         'anchorkeypath': block.anchorkeypath,
-                                         'code': block.code,
-                                         'tree': block.tree,
+                                         **{k: record[k] for k in ('version', 'dbx_version', 'revision', 'datalake',
+                                                              'anchor', 'hash', 'keyby', 'key', 'anchorkeypath',
+                                                              'code', 'tree')},
                                          'session': dj.session,
                                          'id': entry_id,
-                                         'tag': block.tag,
-                                         'topics': str(topics_dict),
-                                         'paths': str(paths_dict),
-                                         'slices': str(slices_dict) if slices_dict is not None else None,
+                                         **{k: record[k] for k in ('tag', 'topics', 'paths', 'slices')},
                                          'log': capture.path if capture is not None else None,
                                          'event': event,
                                          'redirection': redirection_value,
-                                         'spec': spec_path,
-                                         'kwargs': kwargs_path,
-                                         'quote': quote_path,
-                                         'cite': cite_path,
-                                         'signature': signature_path,
-                                         'type': type_path,
-                                         'repr': repr_path,
+                                         **{k: record[k] for k in ('spec', 'kwargs', 'quote', 'cite', 'signature',
+                                                              'type', 'repr')},
+                                         'env': _yaml_text_(recorded_env()),
                                          'note': note_val,
                                          'gitrepo': databits.DBX_GIT_REPO,
                                          'wrkrepo': databits.DBX_USE_WORK_REPO,
@@ -3322,7 +3435,7 @@ class BuildJournal:
         fs, _, _ = cls._lake_(block)
         with fs.open(journal_path, 'wb') as f:
             df.to_parquet(f)
-        ref = cls.entry_ref(block, entry_id)
+        ref = cls.entry_ref(block, entry_id, journal=getattr(cls, 'ANCHOR', None))
         if dj._record_(ref):
             dj._index_(block, ref, entry_id, dt)
         
@@ -3416,6 +3529,59 @@ class BuildJournal:
         return self._session
 
     # 4. Helpers -----------------------------------------------------------
+
+    @staticmethod
+    def _block_record_(block) -> dict:
+        """What an entry records of *block* itself, column by column, as `write` records it.
+
+        The block's half of an entry: not the moment (`datetime`, `event`,
+        `session`, `id`), nor the process (`env`, `log`, `host`). A live
+        block's `pretty` is a `Pretty` over this, so it reads as an entry
+        written for it now would.
+        """
+        TOPICS = getattr(block, 'TOPICS', None)
+        topics = ({name: copy.deepcopy(node) for name, node in TOPICS.items()} if isinstance(TOPICS, dict)
+                  else {topic: datablocks.DIRTOPIC for topic in block.topics()})
+        # What can be read from it, which a table's TOPICS do not say: its tablets' slices, and upstream's.
+        readable = getattr(block, 'readable_slices', None)
+        slices = readable() if readable is not None else None
+        return {'version': block.version,
+                'dbx_version': block.dbx_version,
+                'revision': block.revision,
+                'datalake': block.datalake,
+                'anchor': block.anchor,
+                'hash': block.hash,
+                'keyby': block.keyby,
+                'key': block.key,
+                'anchorkeypath': block.anchorkeypath,
+                'code': block.code,
+                'tree': block.tree,
+                'tag': block.tag,
+                'topics': str(topics),
+                'paths': str(block.paths()),
+                'slices': str(slices) if slices is not None else None,
+                'spec': _yaml_text_(block.spec),
+                'kwargs': _yaml_text_(block.kwargs),
+                'quote': block.quote(),
+                'cite': block.cite(),
+                'signature': block.signaturestr(),
+                'type': block.typestr(),
+                'repr': block.repr()}
+
+    @classmethod
+    def _read_block_(cls, ref, anchor, *, storage_options, log, n_workers):
+        """The entries of the block *ref* names under *anchor* -- by hash, else from the anchor's whole journal -- as a DataFrame; None for none."""
+        found = cls.read_hash(anchor, ref['hash'], tag=ref.get('tag'), version=ref.get('version'),
+                              keyby=ref.get('keyby') or 'tag_version_shorthash', datalake=ref.get('datalake'),
+                              storage_options=storage_options, log=log, n_workers=n_workers)
+        if found is None:
+            try:
+                found = cls.read(anchor, datalake=ref.get('datalake'), storage_options=storage_options,
+                                 log=log, n_workers=n_workers, hash=ref['hash'])
+            except FileNotFoundError:
+                found = None
+        found = pd.DataFrame(found).reset_index(drop=True) if found is not None else None
+        return found if found is not None and not found.empty else None
 
     # Relative to an anchor's directory: an entry file -- under
     # `**/.journal/{fqcn}/journal/`, or the legacy `.dbx/{fqcn}/journal/`
@@ -3679,26 +3845,6 @@ class BuildJournal:
         return block.fs, block.storage_options, block.anchorkeypath
 
     @classmethod
-    def _write_dict_(cls, block, name, data, *, add_credentials: bool = False):
-        fs, storage_options, _ = cls._lake_(block)
-        if add_credentials:
-            data = copy.deepcopy(data)
-            data['hash'] = block.hash
-            data['datetime'] = block.dt
-        #
-        ypath = cls.path(block, name, 'yaml')
-        write_yaml(data, ypath, storage_options=storage_options)
-        assert fs.exists(ypath), f"path {ypath} does not exist after writing"
-        block.log.detailed(f"WROTE: {name.upper()}: yaml: {ypath}")
-        #
-        pqpath = cls.path(block, name, 'parquet')
-        df = pd.DataFrame.from_records([{k: repr(v) for k, v in data.items()}])
-        with fs.open(pqpath, 'wb') as f:
-            df.to_parquet(f)
-        assert fs.exists(pqpath), f"pqpath {pqpath} does not exist after writing"
-        block.log.detailed(f"WROTE: {name.upper()}: parquet: {pqpath}")
-
-    @classmethod
     def _write_text_(cls, block, name, text, *, filename_prefix: str = ''):
         fs, storage_options, _ = cls._lake_(block)
         path = cls.path(block, name, 'txt', filename_prefix=filename_prefix)
@@ -3715,17 +3861,24 @@ class BuildJournal:
             return True
 
     def _index_(self, block, ref, entry_id, dt):
-        """Drop this session's marker for the entry *ref*, written at *dt*: nothing, for a session that keeps no index.
+        """Drop this session's marker for the entry *ref*, written at *dt*.
 
-        One file per entry, named by its *entry_id*, so concurrent writers
-        never share one. A failure is a warning: the build it records has
-        already succeeded.
+        Under the datalake a command session is pinned to, where its exec
+        journal is; under *block*'s own, for a session no command opened --
+        a process's default, outside `dbx.exec`, or a `with BuildJournal()`
+        -- so that its blocks too are found by session. One file per entry,
+        named by its *entry_id*, so concurrent writers never share one. A
+        failure is a warning: the build it records has already succeeded.
         """
-        if self._datalake is None:
+        if self._datalake is not None:
+            datalake, storage_options = self._datalake, default_storage_options()
+        else:
+            datalake, storage_options = getattr(block, 'datalake', None), getattr(block, 'storage_options', None) or {}
+        if not datalake:
             return
-        marker = os.path.join(self._index_dirpath_(self._datalake, self._session), f"{entry_id}.txt")
+        marker = os.path.join(self._index_dirpath_(datalake, self._session), f"{entry_id}.txt")
         try:
-            fs, _ = fsspec.url_to_fs(self._datalake, **default_storage_options())
+            fs, _ = fsspec.url_to_fs(datalake, **storage_options)
             fs.makedirs(os.path.dirname(marker), exist_ok=True)
             with fs.open(marker, 'w') as f:
                 f.write(f"{dt}\n{ref}")
@@ -4029,7 +4182,7 @@ class PipeJournal(BuildJournal):
                 with fs.open(file, 'rb') as f:
                     df = pd.read_parquet(f, use_threads=False)
                 row = df.iloc[0]
-                sides = {norm(row[c]) for c in cls._SIDE_COLUMNS_ if c in df.columns and isinstance(row[c], str)}
+                sides = {norm(p) for c in cls._SIDE_COLUMNS_ if c in df.columns and (p := side_file(row[c]))}
                 return file, row.get('datetime', ''), row.get('entrypath'), sides
             newest = {}
             with ThreadPoolExecutor(max_workers=_threads_(fs, 8)) as ex:
@@ -4472,8 +4625,9 @@ class JournaledResult:
 
 
 # The session an entry goes under when no `with` is open: one per process,
-# and the bottom of every stack. Keeps no index -- it is no command's -- unless
-# this process was started while a command ran, and so is part of it.
+# and the bottom of every stack. No command's -- it indexes its entries under
+# each block's datalake -- unless this process was started while a command
+# ran, and so is part of it.
 DEFAULT_BUILDJOURNAL = BuildJournal()
 if os.environ.get(JOURNAL_SESSION_ENV):
     # A process started while a command ran: its default is the command's.

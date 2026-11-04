@@ -1,11 +1,11 @@
 ---
 name: python-style
-description: The Python style rules in this repo that are not about class layout - imports go at module level, except to break a circular import or to defer a heavy or questionable dependency like torch or ray; strings are formatted with f-strings, not % or .format(), except for a named template filled elsewhere; a section of computation is bracketed in log lines with Datalog.section(), not hand-written BEGIN/END lines; dbx commands are run through dbx.exec or dbx.pprint, even from Python, so that the exec journal records them; and docstrings and comments carry no reStructuredText or Sphinx markup - no :meth:/:func: roles, no double backticks, no :: before an example, no #: comments. Load when writing or reviewing any Python in dbx or hyp, writing a docstring or comment, adding an import, formatting a string, logging the start and end of a step, or running a dbx command. For member order and private naming, load class-layout.
+description: The Python style rules in this repo that are not about class layout - a Datablock instance is named dblk or datablock, never block; imports go at module level, except to break a circular import or to defer a heavy or questionable dependency like torch or ray; strings are formatted with f-strings, not % or .format(), except for a named template filled elsewhere; a section of computation is bracketed in log lines with Datalog.section(), not hand-written BEGIN/END lines; dbx commands are run through dbx.exec or dbx.pprint, even from Python, so that the exec journal records them; and docstrings and comments carry no reStructuredText or Sphinx markup - no :meth:/:func: roles, no double backticks, no :: before an example, no #: comments. Load when writing or reviewing any Python in dbx or hyp, writing a docstring or comment, adding an import, formatting a string, logging the start and end of a step, or running a dbx command. For member order and private naming, load class-layout.
 ---
 
 # Python style
 
-Five rules, and the few exceptions each one allows. Member order and naming
+Six rules, and the few exceptions each one allows. Member order and naming
 inside a class are covered in class-layout. This skill covers everything else
 in a Python file.
 
@@ -70,6 +70,25 @@ and call `store.Store(...)`, rather than editing the test.
 
 A test module follows the same rule. A missing optional dependency is
 handled as described in running-tests, not by importing inside the test.
+
+## Call a Datablock instance `dblk` or `datablock`, never `block`
+
+A variable, parameter or attribute holding a Datablock instance is named
+`dblk` (or `datablock`, where a longer name reads better), and so are the
+words for it in docstrings, comments and messages: "the datablock", not "the
+block". `block` is too generic -- a code block, a block of rows, a blocking
+call, a Kube or Ray resource -- and a reader cannot tell from the name that it
+is the thing with a hash, an anchor and a journal.
+
+```python
+def runs(dblk, *, open=None): ...
+for dblk in pipeline.walk(): ...
+```
+
+A Datablock *class* is `cls` or `dblk_cls`. Existing names (`block=` keyword
+arguments of the public API, `Datastack.block`, `_block_record_`) stay until
+renamed on purpose -- a public keyword renamed is a break for its callers --
+but new code, and code you are rewriting anyway, uses `dblk`.
 
 ## Format strings with f-strings
 

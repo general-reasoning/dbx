@@ -3313,7 +3313,7 @@ class BuildJournal:
     def write(cls, block, event: str, *, note: str = None, inline_note: bool = False,
               message: str = None, inline_message: bool = False, journal_prefix: str = '',
               redirection: 'str | dict | None' = None, columns: dict | None = None,
-              cluster: str | None = None, run: str | None = None):
+              cluster: str | None = None, run: str | None = None, id: str | None = None):
         """Write one journal entry for *event*, under `current`'s session, and return its `id`.
 
         `id` is a fresh uuid per call, and it is the only field that
@@ -3327,6 +3327,10 @@ class BuildJournal:
 
             id = block.write_journal_entry(event='note')
             entry = block.buildjournal(id=id, iloc=0)
+
+        *id* is for an entry whose `id` is known before it is written: a
+        pipeline's `create` entry has the pipeline's `id`, which the entries
+        of its tree record as `pipeline`.
 
         Every call keeps its entry: each is a file of its own, named by its
         `id`, so a build leaves its `build:start` and its `build:end`.
@@ -3372,7 +3376,8 @@ class BuildJournal:
         # parquet column cannot hold both a string and a mapping.
         redirection_value = redirection if (redirection is None or isinstance(redirection, str)) else str(redirection)
         dj = cls.current()
-        entry_id = uuid.uuid4().hex[:16] if getattr(block, '_uuid16_', False) else str(uuid.uuid4())
+        entry_id = id if id is not None else (uuid.uuid4().hex[:16] if getattr(block, '_uuid16_', False)
+                                              else str(uuid.uuid4()))
         dt = datetime.datetime.now().isoformat().replace(' ', '-').replace(':', '-')
         code_seed = f"{block.hash}:{block.tree}:{dt}:{event}:{entry_id}"
         code = hashlib.sha256(code_seed.encode('utf-8')).hexdigest()[:32]
@@ -3400,7 +3405,7 @@ class BuildJournal:
                                          'build:end:datetime': block._build_end_dt,
                                          **{k: record[k] for k in ('version', 'dbx_version', 'revision', 'datalake',
                                                               'anchor', 'hash', 'keyby', 'key', 'anchorkeypath',
-                                                              'code', 'tree')},
+                                                              'code', 'tree', 'pipeline')},
                                          'session': dj.session,
                                          'id': entry_id,
                                          'cluster': cluster if cluster is not None else os.environ.get('DBX_CLUSTER'),
@@ -3551,6 +3556,7 @@ class BuildJournal:
                 'anchorkeypath': block.anchorkeypath,
                 'code': block.code,
                 'tree': block.tree,
+                'pipeline': block.pipeline,
                 'tag': block.tag,
                 'topics': str(topics),
                 'paths': str(block.paths()),

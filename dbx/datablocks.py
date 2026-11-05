@@ -1280,7 +1280,7 @@ class Datablock:
     # was recorded, and the event last. Columns not listed here are kept, in
     # their own order, just ahead of 'event'.
     JOURNAL_COLUMNS = [
-        'hash', 'code', 'tree', 'session', 'id',
+        'hash', 'code', 'tree', 'pipeline', 'session', 'id',
         'datetime', 'build:start:datetime', 'build:end:datetime',
         'version', 'dbx_version', 'revision',
         'datalake', 'anchor', 'keyby', 'key', 'anchorkeypath', 'tag',
@@ -2107,6 +2107,9 @@ class Datablock:
         # block's own identity does not depend on it, so it stays out of the
         # signature; it is how the journal groups the entries of a tree.
         tree: str | None = None,
+        # The `id` of the pipeline whose tree this block is in, handed down the tree as `tree` is; None in
+        # no pipeline's. Operational like `tree`: out of the signature and out of quotes.
+        pipeline: str | None = None,
         # When a read fails, follow a redirection recorded by UNSAFE_redirect()
         # and read from the entry it names instead. See `read`.
         redirect: bool = True,
@@ -2174,6 +2177,7 @@ class Datablock:
             'keyby': keyby,
             'uuid16': uuid16,
             'tree': tree,
+            'pipeline': pipeline,
             'redirect': redirect,
             'use_specializations': use_specializations,
             'SPECIALIZATIONS': SPECIALIZATIONS,
@@ -2331,6 +2335,9 @@ class Datablock:
         self._tree_ = _unquote(state.get('tree'))
         if self._tree_ == 'None':
             self._tree_ = None
+        self._pipeline_ = _unquote(state.get('pipeline'))
+        if self._pipeline_ == 'None':
+            self._pipeline_ = None
         # Redirection config: dict(code=..., filter=..., paths=...) or legacy bool
         self.redirect = state.get('redirect')
         # The value as given, so __getstate__ reproduces it: None means "ask
@@ -5456,24 +5463,34 @@ class Datablock:
         )
 
     def lastbuilt(self, index: str | None = None):
-        """Return the most recent 'build:end' BuildJournalEntry, or None."""
-        j = self.buildjournal(event='build:end', index=index)
+        """The newest 'build:end' entry of this block's `hash`, or None if it never finished a build.
+
+        A failed build writes 'build:end' too, with its `exception`. Rows of other blocks of the
+        class, which share the anchor's journal, are not considered.
+        """
+        j = self.buildjournal(event='build:end', hash=self.hash, index=index)
         if len(j) == 0:
             return None
         return j.get(0, dropna=True)
 
     def running(self, index: str | None = None):
-        """Return the latest 'build:start' BuildJournalEntry with no matching 'build:end', or None."""
-        j = self.buildjournal(index=index)
+        """The newest 'build:start' entry of this block's `hash` if no 'build:end' of that hash is as new, else None.
+
+        So a rebuild in progress is running even if the block was built before, and a build that
+        died without 'build:end' counts as running until a later build ends. Rows of other blocks
+        of the class are not considered.
+        """
+        j = self.buildjournal(hash=self.hash, index=index)
         if len(j) == 0:
             return None
-        started = set(j[j['event'] == 'build:start']['hash'])
-        ended = set(j[j['event'] == 'build:end']['hash'])
-        running_hashes = started - ended
-        if not running_hashes:
+        starts = j[j['event'] == 'build:start']
+        if len(starts) == 0:
             return None
-        running_entries = j[(j['event'] == 'build:start') & (j['hash'].isin(running_hashes))]
-        return BuildJournalEntry(running_entries.iloc[0].dropna(), storage_options=self.storage_options)
+        start = starts.iloc[0]
+        ends = j[j['event'] == 'build:end']
+        if len(ends) and ends['datetime'].max() >= start['datetime']:
+            return None
+        return BuildJournalEntry(start.dropna(), storage_options=self.storage_options)
 
     # 3. Accessors ---------------------------------------------------------
 
@@ -5530,6 +5547,18 @@ class Datablock:
             self._tree_ = (uuid.uuid4().hex[:16]
                            if getattr(self, '_uuid16_', False) else str(uuid.uuid4()))
         return self._tree_
+
+    @property
+    def pipeline(self):
+        """The `id` of the pipeline whose tree this block is in, or None.
+
+        Set on a pipeline's entrypoint when the pipeline creates it, and handed
+        down the tree with `tree`, so every journal entry its build writes
+        names the pipeline -- whose `create` entry in the `PipeJournal` has
+        that `id`. Not `tree`: a pipeline is not a block of the tree it
+        arranges. Not part of `signature`.
+        """
+        return self._pipeline_
 
     @property
     def revision(self):
@@ -7053,7 +7082,7 @@ class Datablock:
         Called by the framework AFTER the user's hook returns, so a subclass
         that only overrides `__block__` never has to think about it.
         """
-        kw = {'tree': self.tree}
+        kw = {'tree': self.tree, 'pipeline': self.pipeline}
         if keyby and self._keyby_given_():
             kw['keyby'] = self.keyby
         return child.set(**kw)
@@ -7100,9 +7129,9 @@ class Datablock:
         tailkwargs = {
             k: v
             for k, v in state.items()
-            # 'tree' groups a build tree's journal entries; pinning one into a
-            # recorded quote would have inst() rejoin a tree that is over.
-            if k not in ['datalake', 'url', 'anchor', 'hash', 'spec', 'tree',
+            # 'tree' groups a build tree's journal entries, 'pipeline' a pipeline's; pinning
+            # one into a recorded quote would have inst() rejoin a tree that is over.
+            if k not in ['datalake', 'url', 'anchor', 'hash', 'spec', 'tree', 'pipeline',
                          '__redirected_paths__']
             # None means "ask the class", which is what every block that never
             # mentioned the feature says -- and saying it out loud in every

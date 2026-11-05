@@ -151,6 +151,45 @@ def test_create_is_journaled_under_pipelines(lake):
     assert not os.path.exists(os.path.join(p.anchorkeypath, '.journal'))
 
 
+def test_the_create_entry_has_the_pipelines_id(lake):
+    p = Flat()
+    p.create()
+    entry = PipeJournal.read(PipeJournal.ANCHOR, datalake=lake).iloc[0]
+    assert entry['id'] == p.id
+    assert entry['pipeline'] == p.id
+
+
+def test_an_id_is_per_instance_not_per_pipeline(lake):
+    p, q = Flat(), Flat()
+    assert p.hash == q.hash
+    assert p.id == p.id
+    assert p.id != q.id
+
+
+def test_every_block_of_the_tree_built_names_the_pipeline(lake):
+    p = Flat(spec={'n': 2, 'm': 3})
+    p.entry.build_tree()
+    for dblk in (Root(spec={'leaf': Leaf(spec={'n': 2}), 'm': 3}), Leaf(spec={'n': 2})):
+        j = dblk.buildjournal(event='build:end')
+        assert len(j) == 1
+        assert j.iloc[0]['pipeline'] == p.id
+        assert j.iloc[0]['tree'] != p.id
+
+
+def test_the_pipeline_is_not_in_the_entrys_identity_or_quote(lake):
+    p = Flat(spec={'n': 2, 'm': 3})
+    alone = Root(spec={'leaf': Leaf(spec={'n': 2}), 'm': 3})
+    assert p.entry.pipeline == p.id and alone.pipeline is None
+    assert p.entry.hash == alone.hash
+    assert p.id not in p.entry.quote()
+
+
+def test_a_block_built_outside_any_pipeline_names_none(lake):
+    Leaf(spec={'n': 5}).build()
+    j = Leaf(spec={'n': 5}).buildjournal(event='build:end')
+    assert BuildJournalEntry(j.iloc[0]).get('pipeline') is None
+
+
 def test_pipelines_go_to_the_pipelines_own_datalake(lake, tmp_path_factory):
     elsewhere = str(tmp_path_factory.mktemp('elsewhere'))
     p = Flat(datalake=elsewhere)

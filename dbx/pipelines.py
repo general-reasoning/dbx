@@ -18,6 +18,7 @@ import dataclasses
 import functools
 import inspect
 import sys
+import uuid
 from typing import Any
 
 from .databits import default_datalake
@@ -88,14 +89,36 @@ class Pipeline(Datablock):
 
     @functools.cached_property
     def _created_(self) -> Datablock:
-        """The entrypoint `__create__` returns, its creation recorded in the `PipeJournal` as event `'create'` when `JOURNAL`."""
+        """The entrypoint `__create__` returns, its creation recorded in the `PipeJournal` as event `'create'` when `JOURNAL`.
+
+        The entrypoint is given this pipeline's `id` as its `pipeline`, which its tree hands down, and
+        the `create` entry is written with that `id`: every entry the tree's build writes points to it.
+        """
         entrypoint = self.__create__()
         if not isinstance(entrypoint, Datablock):
             raise TypeError(f"{self.__class__.__name__}.__create__() returned a "
                             f"{type(entrypoint).__name__}, not the Datablock at the root of its tree")
+        entrypoint._pipeline_ = self.id
         if self.JOURNAL:
-            PipeJournal.write(self, 'create', entrypath=entrypoint.anchorkeypath)
+            PipeJournal.write(self, 'create', entrypath=entrypoint.anchorkeypath, id=self.id)
         return entrypoint
+
+    @property
+    def id(self) -> str:
+        """This pipeline instance's id: generated once and kept, as `tree` is, and the `id` of its `create` entry.
+
+        Every block of the tree it creates records it as `pipeline`. Per instance, not per pipeline:
+        two instances of one preset -- the same `hash` -- have different ids, as a Job's instance,
+        evaluated from the pipeline's quote, has its own.
+        """
+        if getattr(self, '_id_', None) is None:
+            self._id_ = uuid.uuid4().hex[:16] if getattr(self, '_uuid16_', False) else str(uuid.uuid4())
+        return self._id_
+
+    @property
+    def pipeline(self) -> str:
+        """This pipeline's own `id`: a pipeline's entries -- `create`, `job:*` -- name it as its tree's do."""
+        return self.id
 
     @property
     def entrypoint(self) -> Datablock:

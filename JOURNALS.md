@@ -309,6 +309,8 @@ The main columns:
 - `event`: `build:end`, `build:exception`, `UNSAFE_redirect`, `note:…`, …
 - `datetime`: parsed to a real datetime here, unlike in the exec journal
 - `session`, `tree`: the command, and the build tree within it
+- `pipeline`: the `id` of the pipeline whose tree the block is in, or None. It is the `id` of that pipeline's `create` entry in the PipeJournal, and per pipeline instance, not per preset
+- `cluster`, `run`: the cluster and run (a Kube Job's name) the entry was written from, or None
 - `id`, `code`: identify the row
 - `topics`, `paths`: the recorded `{topic: filename}` and `{topic: path}`
 - `log`: path of the output capture open while the block was built, or None (see [Captured output](#captured-output))

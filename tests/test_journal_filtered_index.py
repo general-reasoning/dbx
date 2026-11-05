@@ -86,13 +86,19 @@ class TestLastbuilt:
         assert isinstance(entry, BuildJournalEntry)
         assert entry.get('event') == 'build:end'
 
-    def test_returns_the_newest_of_several_builds(self, tmp_path):
+    def test_returns_its_own_build_not_the_classs_newest(self, tmp_path):
         for x in (1, 2, 3):
             Built(datalake=str(tmp_path), spec={'x': x}).build()
-        block = Built(datalake=str(tmp_path), spec={'x': 1})
-        entry = block.lastbuilt()
-        newest = block.buildjournal(event='build:end')['datetime'].max()
-        assert entry.get('datetime') == newest
+        dblk = Built(datalake=str(tmp_path), spec={'x': 1})
+        entry = dblk.lastbuilt()
+        assert entry.get('hash') == dblk.hash
+        assert entry.get('datetime') == dblk.buildjournal(event='build:end', hash=dblk.hash)['datetime'].max()
+
+    def test_returns_the_newest_of_its_own_builds(self, tmp_path):
+        Built(datalake=str(tmp_path), spec={'x': 1}).build()
+        rebuilt = Built(datalake=str(tmp_path), spec={'x': 1})
+        newer = rebuilt.write_journal_entry(event='build:end')
+        assert rebuilt.lastbuilt().get('id') == newer
 
     def test_returns_none_when_nothing_was_built(self, tmp_path):
         Built(datalake=str(tmp_path), spec={'x': 1}).write_journal_entry(event='note')
@@ -136,3 +142,28 @@ class TestUserSlicingKeepsPandasSemantics:
         j = newest_is_another_event.buildjournal()
         raw = j[j['event'] == 'build:end']
         assert list(BuildJournalFrame(raw).index) == [1]
+
+
+class TestRunning:
+    """`running()` is this block's own newest build, still without its `build:end`."""
+
+    def test_another_blocks_build_is_not_this_ones(self, tmp_path):
+        Built(datalake=str(tmp_path), spec={'x': 2}).write_journal_entry(event='build:start')
+        assert Built(datalake=str(tmp_path), spec={'x': 1}).running() is None
+
+    def test_a_build_started_and_not_ended_is_running(self, tmp_path):
+        dblk = Built(datalake=str(tmp_path), spec={'x': 1})
+        dblk.write_journal_entry(event='build:start')
+        entry = dblk.running()
+        assert entry.get('event') == 'build:start' and entry.get('hash') == dblk.hash
+
+    def test_a_rebuild_is_running_though_the_block_was_built_before(self, tmp_path):
+        Built(datalake=str(tmp_path), spec={'x': 1}).build()
+        dblk = Built(datalake=str(tmp_path), spec={'x': 1})
+        dblk.write_journal_entry(event='build:start')
+        assert dblk.running() is not None
+
+    def test_a_start_that_never_ended_is_over_once_a_later_build_ended(self, tmp_path):
+        Built(datalake=str(tmp_path), spec={'x': 1}).write_journal_entry(event='build:start')
+        Built(datalake=str(tmp_path), spec={'x': 1}).build()
+        assert Built(datalake=str(tmp_path), spec={'x': 1}).running() is None

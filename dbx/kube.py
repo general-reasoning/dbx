@@ -44,8 +44,8 @@ finish, `job:cancel` -- and by the run in the PipeJournal of the datalake it run
 `job:end`.
 
 Watching: `Run.status()`, `Run.logs(follow=True)`, `KubeRun.reason()` (why Kueue has not
-admitted it), `Run.wait()`, `Run.cancel()` -- and, from another process, a `Runner`'s `runs`,
-`rundash` and `cancel` (`Pipeline.runner`, `dbx.runner`) for the Runs journaled on a datablock, or
+admitted it), `Run.wait()`, `Run.cancel()` -- and, from another process, a `Runner`'s `runs`
+(printed, their dash) and `cancel` (`Pipeline.runner`, `dbx.runner`) for the Runs journaled on a datablock, or
 on every datablock of a class. `jobs` (console `dbx.kubejobs`) is the Jobs of one or more
 clusters as a table, a pending one with Kueue's reason; `kubedash` (console `dbx.kubedash`) is
 their Kueue queues.

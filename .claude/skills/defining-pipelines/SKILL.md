@@ -304,7 +304,8 @@ name. It sets the qualified tag on the pipeline by hand
 Don't write job scripts or YAML for a pipeline. A pipeline runs itself:
 `p.runner('<target>').build_tree()` runs `dbx.eval(<p.quote()>).entry.build_tree()`
 there and journals the submission on the pipeline, in the PipeJournal (`CLUSTERS.md`); the same
-`Runner` lists (`runs`, `rundash`) and cancels (`cancel`) its runs, and
+`Runner` lists (`runs`, which prints as their dash, row `i` being `runs()[i]`) and cancels
+(`cancel`, or `runs()[i].cancel()`) its runs, and
 `dbx.runner(<Datablock class or anchor>)` those of every datablock of a class.
 In a one-liner, wait and check:
 

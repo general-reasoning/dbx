@@ -152,8 +152,9 @@ class Pipeline(Datablock):
             r = p.runner(LAMBDA, n_gpus=8)
             r.build_tree()                           # a Run -- here a dbx.kube.KubeRun
             r.launch('try_specialize_tree', ...)
-            r.runs(), r.rundash(), r.cancel()        # its runs on LAMBDA
-            p.runner().rundash()                     # its runs on every target
+            r.runs()                                 # its runs on LAMBDA: prints as their dash
+            r.runs()[-1].cancel(), r.cancel()        # cancel the last row; all still pending or running
+            p.runner().runs().dash()                 # its runs on every target, the whole table
 
         *target* is where (`dbx.cluster`): a value, e.g. a `dbx.kube.Cluster`, or the name a
         `dbx.clusters` entry point gives one; with none, the Runner lists runs and launches nothing.

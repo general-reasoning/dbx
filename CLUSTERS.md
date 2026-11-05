@@ -294,8 +294,9 @@ journaled, so a run is found and followed again from any process, any later sess
 
 ```bash
 dbx.pprint "(p := myproject.pipelines.train('preset', n_gpus=8)).runner('lambda').build_tree().wait() and p.entry.valid()"
-dbx.pprint "myproject.pipelines.train('preset').runner().rundash()"   # its runs on every cluster
-dbx.pprint "dbx.runner('myproject.blocks.Train').rundash()"           # the runs of every Train, any hash
+dbx.pprint "myproject.pipelines.train('preset').runner().runs()"           # its runs on every cluster, as a dash
+dbx.pprint "myproject.pipelines.train('preset').runner().runs()[-1].cancel()"   # cancel the dash's last row
+dbx.pprint "dbx.runner('myproject.blocks.Train').runs()"               # the runs of every Train, any hash
 dbx.kubejobs                       # my Jobs on every cluster: status, and why a pending one waits
 dbx.kubedash -q myteam             # the clusters' Kueue queues: quota, use, pending
 ```
@@ -457,7 +458,7 @@ and the run's `cluster` and `run` (the Job's name).
 | event | note |
 |---|---|
 | `job:submit` | before the run is launched; a file holding the whole record as JSON: `executor`, `target` (its name), `target_spec` (the target itself), `id` (the Job), `method`, `command`, `expression`, `session` (the submitting command's, which the run joins), `pipeline_anchor`, `datalake`, `submitted`, and the kind's own -- kube: `cluster`, `context`, `namespace`, `image`, `revision`, `workdirs` (what was synced or packed), `manifest` (the Job itself: `kubectl create -f` it to run the same again) |
-| `job:complete` | it saw the run complete: `Run.wait`, or a `rundash` that asked the cluster |
+| `job:complete` | it saw the run complete: `Run.wait`, or a `Runs.dash` that asked the cluster |
 | `job:fail` | launching failed, or it saw the run fail (with its log tail) |
 | `job:cancel` | `Run.cancel` |
 
@@ -471,8 +472,8 @@ and the run's `cluster` and `run` (the Job's name).
 
 The two journals are one where the cluster mounts the submitter's datalake (Crusoe), and two where
 the cluster has a filesystem of its own (Lambda): there, the same path is the cluster's copy, and
-`rundash` reads the run's events from it by URL. Neither side decides for the other: each says what
-it saw, and `rundash` shows both. They agree on `(session, run)`. The run joins the submitting
+`Runs.dash` reads the run's events from it by URL. Neither side decides for the other: each says what
+it saw, and `dash` shows both. They agree on `(session, run)`. The run joins the submitting
 command's session (`DBX_SESSION`), and its Job sets `DBX_CLUSTER` and `DBX_RUN`, so every entry it
 writes -- its `job:start`/`job:end`, each datablock's `build:start`, `build:end`, its exec-journal
 row -- names the run. Which run built a datablock is in its own build entries. Entries written from
@@ -491,21 +492,27 @@ process, a later session:
 | `dbx.runner(DatablockClass)`, `dbx.runner('<anchor>')` | the same, for every datablock of the class, whatever its hash; `datalake=`, or `DBX_DATALAKE` |
 | `dbx.runner(PipelineClass)` | every pipeline's of the class, whatever its hash |
 
-- `runs(open=None, adopted=False)`: each submission as its `Run`, oldest first, closed when the
-  submitter's `job:complete`, `job:fail` or `job:cancel` is journaled (`run.closing` is that event
-  and its time). *adopted* adds the runs
+- `runs(open=None, adopted=False)`: each submission as its `Run`, oldest first, in a `Runs` -- a
+  list that prints as their dash, each row numbered as its index, so `runs()[-1].cancel()` cancels
+  the last row printed. A run is closed when the submitter's `job:complete`, `job:fail` or
+  `job:cancel` is journaled (`run.closing` is that event and its time). *adopted* adds the runs
   of the builds the datablock adopted through a specialization: those its redirection reads from.
-- `rundash(adopted=False, live=True, pod=True)`: one row per run, newest first -- `run, cluster,
-  entry (the entry's key), method, status, submitted, started, ended, observed, elapsed, outcome,
-  event`. The submitter's: `submitted`, and for a closed run its `event` and when it was `observed`.
-  The run's own (*pod*, read where it ran): `started`, `ended` and `outcome` (`ok`, or what it
-  raised). An open run's status is asked of its cluster (`gone` once the Job is deleted), and a run
-  found over is closed then: its `job:complete` or `job:fail` journaled, as `wait` would.
+  The printout's columns are `run, cluster, method, status, submitted, elapsed`; it asks the
+  cluster for each open run's status, and journals nothing.
+- `runs().dash(live=True, pod=True, close=True)`: the whole table, row `i` being `runs()[i]` -- `run,
+  cluster, entry (the entry's key), method, status, submitted, started, ended, observed, elapsed,
+  outcome, event`. The submitter's: `submitted`, and for a closed run its `event` and when it was
+  `observed`. The run's own (*pod*, read where it ran): `started`, `ended` and `outcome` (`ok`, or
+  what it raised). An open run's status is asked of its cluster (`gone` once the Job is deleted),
+  and a run found over is closed then (*close*): its `job:complete` or `job:fail` journaled, as
+  `wait` would.
 - `cancel()`: cancels the runs still pending or running, each journaled `job:cancel` where its
   `job:submit` is -- its pipeline, even when found by class (the pipeline's quote in its record is
-  evaluated again for it).
+  evaluated again for it). `runs().cancel()` and `runs()[i].cancel()` do the same for those listed.
+- A `Run`'s own repr is what is journaled -- `KubeRun(lambda, <job>, build_tree, submitted
+  2026-11-04 23:15, open)` -- without asking the cluster.
 
-`dbx.cluster.runs(what, target)` and `dbx.cluster.rundash(what, target)` are the same, as functions.
+`dbx.cluster.runs(what, target)` is the same, as a function.
 
 **The run's own record is in the datalake it ran in** (`DBX_DATALAKE` there). It runs
 `dbx.pprint --capture-output` under the submitting command's session (`DBX_SESSION`, recorded as

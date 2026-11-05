@@ -27,7 +27,7 @@ of the datalake it submitted from:
                     the target itself (`target_spec`), the run's id, the method, the command and
                     expression, the submitting session, and what the kind adds -- a Kube Job's
                     manifest, image, revision, synced workdirs
-    job:complete    when it sees it complete: `Run.wait`, or a `rundash` that asks the cluster
+    job:complete    when it sees it complete: `Run.wait`, or a `Runs.dash` that asks the cluster
     job:fail        when launching it fails, or it sees it fail (with its log tail)
     job:cancel      `Run.cancel`
 
@@ -37,12 +37,12 @@ and the run itself (`run`, what its Job evaluates), in the PipeJournal of the da
     job:end         after it: 'ok', or what it raised
 
 The two journals are one where the cluster mounts the submitter's datalake, and two otherwise (a
-cluster with a filesystem of its own): a `rundash` reads the run's from there, by URL. They agree
+cluster with a filesystem of its own): `Runs.dash` reads the run's from there, by URL. They agree
 on `(session, run)`: the run joins the submitting command's session (`DBX_SESSION`), and its Job
 sets `DBX_CLUSTER` and `DBX_RUN`, so every entry it writes -- its own `job:*`, each datablock's
 `build:*`, its exec-journal row -- names the run. A Runner -- `Pipeline.runner`, or `runner(what)`
 of a datablock, a Datablock class or anchor, or a Pipeline class -- reads them back (`runs`,
-`rundash`, `cancel`), each run as its Run, its target rebuilt from the record -- to `status`,
+which prints as their dash, and `cancel`), each run as its Run, its target rebuilt from the record -- to `status`,
 `logs`, `wait` on or `cancel` from another process, a later session. Runs journaled before
 2026-11-04 were `submit:BEGIN`, `submit:END`, `submit:ERROR`, `submit:CANCEL` -- some on the
 pipeline's entry, in its own journal -- and are read as these.
@@ -79,7 +79,7 @@ from .databits import default_datalake
 from .journals import SESSION_ENV, BuildJournal, PipeJournal, execjournal
 
 
-__all__ = ['Target', 'Run', 'Runner', 'GROUP', 'cluster', 'clusters', 'run', 'runner', 'runs', 'rundash', 'verify']
+__all__ = ['Target', 'Run', 'Runs', 'Runner', 'GROUP', 'cluster', 'clusters', 'run', 'runner', 'runs', 'verify']
 
 
 # The entry-point group naming the installed packages' clusters.
@@ -118,10 +118,22 @@ class Run:
         self.closing = None
         # A function giving what to journal its close on, when *on* is None; set by `Runner.runs`.
         self._journal_on_ = None
+        # Its `job:submit` entry's datetime; set by `Runner.runs`.
+        self._submitted_ = None
 
     def __repr__(self):
-        what = self.id or (f"skipped: {self.skipped}" if self.skipped else 'dry run')
-        return f"{type(self).__name__}({self.target.MODE}:{self.target.name}, {what})"
+        """Its cluster, id, method, when submitted, and whether closed -- what is journaled; the cluster is not asked."""
+        if self.id is None:
+            what = f"skipped: {self.skipped}" if self.skipped else 'dry run'
+            return f"{type(self).__name__}({self.target.MODE}:{self.target.name}, {what})"
+        state = _CLOSED_STATUS_.get(self.closing[0]) if self.closing else ('closed' if self._closed_ else 'open')
+        return (f"{type(self).__name__}({self.target.name}, {self.id}, {self.record.get('method') or '?'}, "
+                f"submitted {self.submitted:%Y-%m-%d %H:%M}, {state})")
+
+    @property
+    def submitted(self) -> pd.Timestamp:
+        """When it was submitted: its record's, or its `job:submit` entry's for a record without one."""
+        return pd.Timestamp(self.record.get('submitted') or self._submitted_)
 
     def status(self) -> str:
         """'pending', 'running', 'complete', 'failed'; 'skipped' or 'dry-run' when nothing was launched."""
@@ -227,6 +239,83 @@ class Run:
         raise NotImplementedError
 
 
+class Runs(list):
+    """Runs, as `Runner.runs` gives them: a list -- `runs()[-1].cancel()` -- that prints as their `dash`, each row numbered as its index.
+
+    The printout asks the cluster for each open run's status, as `dash` does, but writes nothing:
+    a run found over is closed by `dash` or `wait`, not by being printed. Its columns are
+    `COLUMNS`; `dash()` has them all, and what the run journaled where it ran.
+    """
+    COLUMNS = ['run', 'cluster', 'method', 'status', 'submitted', 'elapsed']
+
+    def __getitem__(self, i):
+        out = super().__getitem__(i)
+        return Runs(out) if isinstance(i, slice) else out
+
+    def __repr__(self):
+        if not self:
+            return 'Runs([])'
+        df = self.dash(pod=False, close=False)[self.COLUMNS]
+        return df.assign(submitted=df['submitted'].dt.strftime('%Y-%m-%d %H:%M'),
+                         elapsed=df['elapsed'].map(_hms_)).to_string()
+
+    def cancel(self) -> 'Runs':
+        """Cancel those still pending or running (asking the cluster), each journaled `job:cancel`; those cancelled.
+
+        A run whose Job is over, or gone, is left as it is.
+        """
+        out = Runs()
+        for run in self:
+            if not run._closed_ and _live_status_(run) in ('pending', 'running'):
+                run.cancel()
+                out.append(run)
+        return out
+
+    def dash(self, *, live: bool = True, pod: bool = True, close: bool = True) -> pd.DataFrame:
+        """These runs as a table, row `i` being `self[i]` -- what the submitter saw, and with *pod* what the run itself journaled.
+
+        One row per run: `run, cluster, entry, method, status, submitted, started, ended, observed,
+        elapsed, outcome, event`; `entry` is the key of the pipeline's entry it built.
+        - From the submitter's journal: `submitted` (`job:submit`), and for a closed run `event`
+          (`job:complete`, `job:fail`, `job:cancel`) and when it was `observed`. `status` is that
+          event's (`complete`, `failed`, `cancelled`); with *live*, an open run's is asked of its
+          cluster (`pending`, `running`, `complete`, `failed`, `gone` once the Job is deleted), and
+          a run found over is closed then and there -- its `job:complete` or `job:fail` journaled -- unless not
+          *close*.
+        - From the run's own journal, where it ran (*pod*: read there, by URL when the cluster has
+          a filesystem of its own): `started` and `ended` (`job:start`, `job:end`) and `outcome`,
+          'ok' or what it raised. Where the two disagree -- the run ended 'ok', the submitter saw it
+          fail (killed on its way out) -- both are shown.
+        `elapsed` is `ended - started` when the run said both, else from `submitted` to `observed`,
+        or to now while open.
+        """
+        rows = []
+        now = pd.Timestamp.now()
+        ran = _pod_events_(list(self)) if pod else {}
+        for run in self:
+            status = _CLOSED_STATUS_.get(run.closing[0]) if run.closing else (_live_status_(run) if live else 'open')
+            if close and run.closing is None and status in ('complete', 'failed'):    # Over: close it, as wait() would.
+                run._close_(COMPLETE if status == 'complete' else FAIL, f"{run._where_()} {status}, seen by dash")
+            submitted = run.submitted
+            observed = pd.Timestamp(run.closing[1]) if run.closing else None
+            started, ended, outcome = ran.get(run.id, (None, None, None))
+            if started is not None and ended is not None:
+                elapsed = ended - started
+            else:
+                until = observed if observed is not None else (now if status in ('pending', 'running', 'open') else None)
+                elapsed = until - submitted if until is not None else None
+            m = re.search(r"\.entry\.(\w+)\(|dbx\.cluster\.(verify)\(", run.record.get('expression') or '')
+            method = run.record.get('method') or ((m.group(1) or m.group(2)) if m else None)
+            rows.append(dict(run=run.id, cluster=run.target.name,
+                             entry=os.path.basename(str(getattr(run, 'entrypath', None)).rstrip('/')),
+                             method=method, status=status, submitted=submitted, started=started, ended=ended,
+                             observed=observed, elapsed=_round_(elapsed) if elapsed is not None else None,
+                             outcome=outcome, event=run.closing[0] if run.closing else None))
+        cols = ['run', 'cluster', 'entry', 'method', 'status', 'submitted', 'started', 'ended', 'observed',
+                'elapsed', 'outcome', 'event']
+        return pd.DataFrame(rows, columns=cols)
+
+
 class Runner:
     """The runs of a pipeline, a datablock or a Datablock class: what launches them, and what lists, watches and cancels them.
 
@@ -236,7 +325,8 @@ class Runner:
         r = my_pipeline('preset').runner(LAMBDA, n_gpus=8)
         r.build_tree()                          # a Run, of dbx.eval('<the quote>').entry.build_tree() there
         r.launch('try_specialize_tree', ...)    # any other method of the entry
-        r.runs(), r.rundash()                   # its runs on LAMBDA, from the entry's journal
+        r.runs()                                # its runs on LAMBDA: prints as their dash
+        r.runs()[-1].cancel(), r.runs().dash()  # cancel the last row; the whole table
         r.cancel()                              # those still pending or running
 
     `launch(method, ...)` launches `dbx.eval('<the pipeline's quote>').entry.<method>(...)` under
@@ -246,7 +336,7 @@ class Runner:
     text. `build` and `build_tree` of an entry already valid here launch nothing -- a Run `skipped`
     -- unless `force`. Only a pipeline's Runner with a target launches.
 
-    Which runs `runs`, `rundash` and `cancel` see: a pipeline's are those it launched (in the
+    Which runs `runs` and `cancel` see: a pipeline's are those it launched (in the
     `PipeJournal`, under its hash); a datablock's those whose Job wrote its build entries, and those
     of the pipelines it is the entry of; a Datablock class's or an anchor's, those of every
     datablock of it, whatever its hash; a Pipeline class's, those of every pipeline of it. With
@@ -323,70 +413,23 @@ class Runner:
         """`launch('build_tree', ...)`."""
         return self.launch('build_tree', *args, **kwargs)
 
-    def runs(self, *, open: bool | None = None, adopted: bool = False) -> list:
-        """The runs in scope (see the class), oldest first, as their Runs, from the journal; only those still open, or only those closed, by *open*.
+    def runs(self, *, open: bool | None = None, adopted: bool = False) -> 'Runs':
+        """The runs in scope (see the class), oldest first, as `Runs`, from the journal; only those still open, or only those closed, by *open*.
 
         A run whose `job:complete`, `job:fail` or `job:cancel` is journaled is closed: its
-        `wait` journals nothing more. Its target is rebuilt from its record.
+        `wait` journals nothing more. Its target is rebuilt from its record. Printed, `Runs` is
+        their dash, each row numbered as its index: `runs()[-1].cancel()` cancels the last row;
+        `runs().dash()` is the whole table.
         """
         out = [run for run, _ in self._journaled_(adopted)]
-        return out if open is None else [r for r in out if r._closed_ != open]
+        return Runs(out if open is None else [r for r in out if r._closed_ != open])
 
     def cancel(self, *, adopted: bool = False) -> list:
         """Cancel the runs in scope still pending or running (asking the cluster); the Runs cancelled.
 
         Each is journaled `job:cancel`. A run whose Job is over, or gone, is left as it is.
         """
-        out = []
-        for run in self.runs(open=True, adopted=adopted):
-            if _live_status_(run) in ('pending', 'running'):
-                run.cancel()
-                out.append(run)
-        return out
-
-    def rundash(self, *, adopted: bool = False, live: bool = True, pod: bool = True) -> pd.DataFrame:
-        """The runs in scope as a table, newest first -- what the submitter saw, and with *pod* what the run itself journaled.
-
-        One row per run: `run, cluster, entry, method, status, submitted, started, ended, observed,
-        elapsed, outcome, event`; `entry` is the key of the pipeline's entry it built.
-        - From the submitter's journal: `submitted` (`job:submit`), and for a closed run `event`
-          (`job:complete`, `job:fail`, `job:cancel`) and when it was `observed`. `status` is that
-          event's (`complete`, `failed`, `cancelled`); with *live*, an open run's is asked of its
-          cluster (`pending`, `running`, `complete`, `failed`, `gone` once the Job is deleted), and
-          a run found over is closed then and there: its `job:complete` or `job:fail` journaled.
-        - From the run's own journal, where it ran (*pod*: read there, by URL when the cluster has
-          a filesystem of its own): `started` and `ended` (`job:start`, `job:end`) and `outcome`,
-          'ok' or what it raised. Where the two disagree -- the run ended 'ok', the submitter saw it
-          fail (killed on its way out) -- both are shown.
-        `elapsed` is `ended - started` when the run said both, else from `submitted` to `observed`,
-        or to now while open.
-        """
-        rows = []
-        now = pd.Timestamp.now()
-        journaled = self._journaled_(adopted)
-        ran = _pod_events_([run for run, _ in journaled]) if pod else {}
-        for run, row in journaled:
-            status = _CLOSED_STATUS_.get(run.closing[0]) if run.closing else (_live_status_(run) if live else 'open')
-            if run.closing is None and status in ('complete', 'failed'):    # Over: close it, as wait() would.
-                run._close_(COMPLETE if status == 'complete' else FAIL, f"{run._where_()} {status}, seen by rundash")
-            submitted = pd.Timestamp(run.record.get('submitted') or row['datetime'])
-            observed = pd.Timestamp(run.closing[1]) if run.closing else None
-            started, ended, outcome = ran.get(run.id, (None, None, None))
-            if started is not None and ended is not None:
-                elapsed = ended - started
-            else:
-                until = observed if observed is not None else (now if status in ('pending', 'running', 'open') else None)
-                elapsed = until - submitted if until is not None else None
-            m = re.search(r"\.entry\.(\w+)\(|dbx\.cluster\.(verify)\(", run.record.get('expression') or '')
-            method = run.record.get('method') or ((m.group(1) or m.group(2)) if m else None)
-            rows.append(dict(run=run.id, cluster=run.target.name, entry=os.path.basename(str(run.entrypath).rstrip('/')),
-                             method=method, status=status, submitted=submitted, started=started, ended=ended,
-                             observed=observed, elapsed=_round_(elapsed) if elapsed is not None else None,
-                             outcome=outcome, event=run.closing[0] if run.closing else None))
-        cols = ['run', 'cluster', 'entry', 'method', 'status', 'submitted', 'started', 'ended', 'observed',
-                'elapsed', 'outcome', 'event']
-        df = pd.DataFrame(rows, columns=cols)
-        return df.sort_values('submitted', ascending=False).reset_index(drop=True)
+        return self.runs(open=True, adopted=adopted).cancel()
 
     # 3. Accessors --------------------------------------------------------------------------- #
 
@@ -477,6 +520,7 @@ class Runner:
             run.closing = closed[-1] if closed else None
             run._closed_ = bool(closed)
             run.entrypath = row['entrypath']
+            run._submitted_ = row['datetime']
             out.append((run, row))
         return out
 
@@ -570,7 +614,7 @@ def runner(what, target: 'str | Target | None' = None, *, mode: str | None = Non
     (its runs), or a Datablock class or anchor (the runs of every datablock of it, whatever its
     hash), whose journal is read in *datalake* -- by default `DBX_DATALAKE`:
 
-        dbx.runner('sctx.datablocks.SCQwenVLContextModelEval').rundash()
+        dbx.runner('sctx.datablocks.SCQwenVLContextModelEval').runs()
         dbx.runner(p, 'crusoe').cancel()
     """
     t = _target_of_(target, mode) if target is not None else None
@@ -581,12 +625,6 @@ def runs(what, target: 'str | Target | None' = None, *, open: bool | None = None
          datalake: str | None = None) -> list:
     """`runner(what, target, datalake=datalake).runs(open=open, adopted=adopted)`: the runs of a pipeline, a datablock, or a class or anchor."""
     return runner(what, target, datalake=datalake).runs(open=open, adopted=adopted)
-
-
-def rundash(what, target: 'str | Target | None' = None, *, adopted: bool = False, live: bool = True,
-            datalake: str | None = None) -> pd.DataFrame:
-    """`runner(what, target, datalake=datalake).rundash(...)`: the runs of a pipeline, a datablock, or a class or anchor, as a table."""
-    return runner(what, target, datalake=datalake).rundash(adopted=adopted, live=live)
 
 
 def run(pipeline, method: str, *args, **kwargs):
@@ -743,6 +781,14 @@ def _live_status_(run: Run) -> str:
         return run.status()
     except Exception as e:
         return 'gone' if 'NotFound' in str(e) or 'not found' in str(e) else f"unknown: {str(e).splitlines()[0][:80]}"
+
+
+def _hms_(td) -> str:
+    """*td* as `H:MM:SS`, hours past 24 too; '' for none."""
+    if td is None or pd.isna(td):
+        return ''
+    h, rest = divmod(int(td.total_seconds()), 3600)
+    return f"{h}:{rest // 60:02d}:{rest % 60:02d}"
 
 
 def _round_(td) -> pd.Timedelta:

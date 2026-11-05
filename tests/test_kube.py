@@ -672,7 +672,7 @@ class TestRunner:
         kubectl.deleted.add(run.id)
         assert p.runner(cluster).cancel() == [] and _pipe_events_(p) == ['job:submit']
 
-    def test_rundash(self, cluster, kubectl, tmp_path):
+    def test_dash(self, cluster, kubectl, tmp_path):
         p = Single(datalake=str(tmp_path))
         done = p.runner(cluster).build_tree()
         kubectl.conditions = ['Complete']
@@ -681,18 +681,53 @@ class TestRunner:
         cancelled = p.runner(cluster).build_tree()
         cancelled.cancel()
         running = p.runner(cluster).launch('build')
-        df = p.runner(cluster).rundash()
+        df = p.runner(cluster).runs().dash()
         assert list(df.columns) == ['run', 'cluster', 'entry', 'method', 'status', 'submitted', 'started', 'ended',
                                     'observed', 'elapsed', 'outcome', 'event']
-        assert list(df['run']) == [running.id, cancelled.id, done.id]
-        assert list(df['status']) == ['running', 'cancelled', 'complete']
-        assert list(df['method']) == ['build', 'build_tree', 'build_tree']
-        assert list(df['event'].fillna('')) == ['', 'job:cancel', 'job:complete']
+        assert list(df['run']) == [done.id, cancelled.id, running.id]
+        assert list(df['status']) == ['complete', 'cancelled', 'running']
+        assert list(df['method']) == ['build_tree', 'build_tree', 'build']
+        assert list(df['event'].fillna('')) == ['job:complete', 'job:cancel', '']
         assert set(df['entry']) == {p.entry.key} and set(df['cluster']) == {'testc'}
-        assert df['elapsed'].notna().all() and df['observed'].isna().tolist() == [True, False, False]
+        assert df['elapsed'].notna().all() and df['observed'].isna().tolist() == [False, False, True]
         assert df['started'].isna().all() and df['outcome'].isna().all()     # no run journaled its own here
-        assert list(p.runner(cluster).rundash(live=False)['status']) == ['open', 'cancelled', 'complete']
-        assert list(dbx.cluster.rundash(Leaf, datalake=str(tmp_path))['run']) == list(df['run'])
+        assert list(p.runner(cluster).runs().dash(live=False)['status']) == ['complete', 'cancelled', 'open']
+        assert list(dbx.cluster.runs(Leaf, datalake=str(tmp_path)).dash()['run']) == list(df['run'])
+
+    def test_runs_print_as_their_dash_each_row_its_index(self, cluster, kubectl, tmp_path):
+        p = Single(datalake=str(tmp_path))
+        first = p.runner(cluster).build_tree()
+        first.cancel()
+        last = p.runner(cluster).launch('build')
+        rs = p.runner(cluster).runs()
+        lines = repr(rs).splitlines()
+        assert lines[0].split() == ['run', 'cluster', 'method', 'status', 'submitted', 'elapsed']
+        assert lines[1].split()[:5] == ['0', first.id, 'testc', 'build_tree', 'cancelled']
+        assert lines[2].split()[:5] == ['1', last.id, 'testc', 'build', 'running']
+        assert rs[-1].id == last.id and isinstance(rs[:1], dbx.cluster.Runs)
+        assert _pipe_events_(p) == ['job:submit', 'job:cancel', 'job:submit']    # printing journals nothing
+        assert repr(dbx.cluster.Runs()) == 'Runs([])'
+
+    def test_runs_printed_journal_nothing_even_for_a_run_found_over(self, cluster, kubectl, tmp_path):
+        p = Single(datalake=str(tmp_path))
+        p.runner(cluster).build_tree()
+        kubectl.conditions = ['Complete']
+        assert 'complete' in repr(p.runner().runs())
+        assert _pipe_events_(p) == ['job:submit']
+
+    def test_a_runs_repr_is_what_is_journaled(self, cluster, kubectl, tmp_path):
+        p = Single(datalake=str(tmp_path))
+        run = p.runner(cluster).build_tree()
+        run.cancel()
+        r = repr(p.runner(cluster).runs()[0])
+        assert r.startswith(f"KubeRun(testc, {run.id}, build_tree, submitted ") and r.endswith(', cancelled)')
+
+    def test_cancel_a_row_by_its_index(self, cluster, kubectl, tmp_path):
+        p = Single(datalake=str(tmp_path))
+        keep = p.runner(cluster).build_tree()
+        gone = p.runner(cluster).build_tree()
+        assert [r.id for r in p.runner(cluster).runs()[-1:].cancel()] == [gone.id]
+        assert [r.id for r in p.runner(cluster).runs(open=True)] == [keep.id]
 
     def test_a_datablock_built_in_a_run_finds_the_run_through_its_build_entries(self, cluster, kubectl, tmp_path,
                                                                                   monkeypatch):
@@ -749,7 +784,7 @@ class TestRunner:
         j = PipeJournal.read(f"{PipeJournal.ANCHOR}/{p.anchor}", datalake=str(tmp_path), index=None, event='^job:')
         mine = j[j['run'] == launched.id].sort_values('datetime')
         assert list(mine['event']) == ['job:submit', 'job:start', 'job:end'] and mine['note'].iloc[-1] == 'ok'
-        df = p.runner().rundash(live=False)
+        df = p.runner().runs().dash(live=False)
         assert df['outcome'].iloc[0] == 'ok' and df['started'].notna().all() and df['ended'].notna().all()
         assert df['status'].iloc[0] == 'open'           # the run says it ended; the submitter has not seen it
 
@@ -761,13 +796,13 @@ class TestRunner:
                              event='job:end')
         assert j['note'].iloc[0].startswith('AttributeError')
 
-    def test_rundash_closes_a_run_it_finds_over(self, cluster, kubectl, tmp_path):
+    def test_dash_closes_a_run_it_finds_over(self, cluster, kubectl, tmp_path):
         p = Single(datalake=str(tmp_path))
         run = p.runner(cluster).build_tree()
         kubectl.conditions = ['Complete']
-        assert list(p.runner().rundash()['status']) == ['complete']
+        assert list(p.runner().runs().dash()['status']) == ['complete']
         assert _pipe_events_(p) == ['job:submit', 'job:complete']
-        p.runner().rundash()                                                # closed once, not twice
+        p.runner().runs().dash()                                            # closed once, not twice
         assert _pipe_events_(p) == ['job:submit', 'job:complete'] and p.runner().runs(open=False)[0].id == run.id
 
     def test_runs_journaled_under_the_old_event_names_are_read(self, cluster, kubectl, tmp_path):

@@ -51,8 +51,8 @@ def run(fn, calls, *, n_gpus=1, n_cpus=4): ...
 
 ## Renamed (2026-11-04)
 
-- dbx: the runner's and `dbx.kube.job`'s `gpus`, `cpus`, `gib` → `n_gpus`, `n_cpus`,
-  `mem_gib`; `kube.Cluster`'s `cpu_per_gpu`, `gib_per_gpu` → `n_cpus_per_gpu`,
+- dbx: the runner's and `dbx.kube.KubeCluster.job`'s `gpus`, `cpus`, `gib` → `n_gpus`, `n_cpus`,
+  `mem_gib`; `kube.KubeCluster`'s `cpu_per_gpu`, `gib_per_gpu` → `n_cpus_per_gpu`,
   `mem_gib_per_gpu`; `dbx.gpu.run`'s `num_gpus`, `num_cpus` → `n_gpus`, `n_cpus`;
   `dbx.slurm`'s `gpus`, `cpus`, `nodes` → `n_gpus`, `n_cpus`, `n_nodes` (`mem` stays:
   its value is Slurm's string, unit included).

@@ -133,7 +133,7 @@ def present() -> bool:
 
 
 def job_options() -> dict:
-    """The `dbx.kube.job` options an Anyscale image needs: its image, user, Ray, and Ray working directory."""
+    """The `dbx.kube.KubeCluster.job` options an Anyscale image needs: its image, user, Ray, and Ray working directory."""
     return dict(image=IMAGE, run_as=RUN_AS, ray_bin=RAY,
                 env={'ANYSCALE_WORKING_DIR': WORKING_DIR},
                 setup=['mkdir -p "$ANYSCALE_WORKING_DIR"'])

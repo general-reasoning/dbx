@@ -4,12 +4,12 @@ A project defines its clusters -- what kubectl calls them, their namespace, Kueu
 claims and where they mount, and the job options it always wants there -- as values, and passes one
 where it submits:
 
-    LAMBDA = dbx.kube.Cluster('lambda', namespace='kueue-team-x', queue='x-queue',
+    LAMBDA = dbx.kube.KubeCluster('lambda', namespace='kueue-team-x', queue='x-queue',
                               mounts={'/mnt/team-x': 'default-pvc-team-x'}, image=...)
-    run = dbx.kube.submit('python -m my.thing', LAMBDA, n_gpus=8)
+    run = LAMBDA.submit('python -m my.thing', n_gpus=8)
     run.wait()                      # True when the Job completes; raises with its log tail if it fails
 
-A pipeline runs its own calls (`Pipeline.runner`, `dbx.cluster`) through a `KubeRunner` on a Cluster:
+A pipeline runs its own calls (`Pipeline.runner`, `dbx.cluster`) through a `KubeRunner` on a KubeCluster:
 
     my_pipeline('preset').runner(LAMBDA).build_tree()        # a KubeRun
 
@@ -35,7 +35,7 @@ first, file by file, skipping those whose size and mtime match, keeping modes (c
 executable). Or the code is in the image (`dbx.image`).
 
 `anyscale=True` adds what an Anyscale image needs (`dbx.anyscale.job_options`): its image, its
-`ray` user, its Ray, its Ray working directory. Off Anyscale, give *image* (or `Cluster.image`).
+`ray` user, its Ray, its Ray working directory. Off Anyscale, give *image* (or `KubeCluster.image`).
 
 A pipeline's run is journaled on the pipeline (`dbx.cluster`): by the submitter in its datalake's
 PipeJournal -- `job:submit`, its note the whole record (cluster, Job, expression, image, revision,
@@ -46,9 +46,9 @@ finish, `job:cancel` -- and by the run in the PipeJournal of the datalake it run
 Watching: `Run.status()`, `Run.logs(follow=True)`, `KubeRun.reason()` (why Kueue has not
 admitted it), `Run.wait()`, `Run.cancel()` -- and, from another process, a `Runner`'s `runs`
 (printed, their dash) and `cancel` (`Pipeline.runner`, `dbx.runner`) for the Runs journaled on a datablock, or
-on every datablock of a class. `jobs` (console `dbx.kubejobs`) is the Jobs of one or more
-clusters as a table, a pending one with Kueue's reason; `kubedash` (console `dbx.kubedash`) is
-their Kueue queues.
+on every datablock of a class. `KubeCluster.jobs` is a cluster's Jobs as a table, a pending one with
+Kueue's reason, and `KubeCluster.queues` its Kueue queues; `jobs` and `queues` (consoles `dbx.kubejobs`,
+`dbx.kubequeues`) are the same over several clusters.
 """
 import argparse
 import contextlib
@@ -74,16 +74,15 @@ import tqdm
 
 from . import anyscale
 from . import cluster as _cluster_
-from .cluster import Run, Runner, Target
+from .cluster import Run, Runner
 from .databits import dbx_repos, dbx_revisions
 
 
-__all__ = ['Cluster', 'KubeRun', 'KubeRunner', 'cluster', 'clusters', 'job', 'submit', 'sync', 'jobs',
-           'kubedash']
+__all__ = ['KubeCluster', 'KubeRun', 'KubeRunner', 'cluster', 'clusters', 'jobs', 'queues']
 
 
 @dataclasses.dataclass
-class Cluster(Target):
+class KubeCluster(_cluster_.Cluster):
     """A Kubernetes cluster with Kueue, as a project submits to it.
 
     *mounts* maps a path in the Job to the volume claim mounted there, *readonly* names the ones
@@ -93,6 +92,9 @@ class Cluster(Target):
     returning one, for options that are not data (an SSH socket, an auth strategy) and so cannot be
     journaled as the cluster's record. *options* are `job` options always given on this cluster
     (`anyscale`, `venv`, `ray`, ...).
+
+    What runs here: `submit` (a shell command, as a Job; a pipeline's call is `Pipeline.runner`),
+    `job` (its manifest), `sync` (a tree onto the cluster's storage); what is here: `jobs`, `queues`.
     """
     name: str
     context: str | None = None                  # kubectl's name for it; *name* by default
@@ -115,6 +117,98 @@ class Cluster(Target):
         self.context = self.context or self.name
 
     # 2. Declared API ------------------------------------------------------------------------ #
+
+    def job(self, command: str, **options) -> dict:
+        """The Job running *command* here: a `batch/v1` manifest, its name set.
+
+        *options* (see the module doc and `_manifest_`) are over the cluster's own `options`; `env`
+        and `setup` add to the cluster's.
+        """
+        merged = {**self.options, **options}
+        for k in ('env', 'setup'):
+            if k in self.options and k in options:
+                merged[k] = ({**self.options[k], **options[k]} if k == 'env' else [*self.options[k], *options[k]])
+        return _manifest_(command, self, **merged)
+
+    def submit(self, command: str, *, block=None, expression: str | None = None, **options) -> 'KubeRun':
+        """Create the Job running *command* here (`job` for *options*, and `dry_run`); its `KubeRun`.
+
+        *workdirs* are synced first. With *block*, the submission is journaled on it (`dbx.cluster`):
+        `job:submit` before the Job is created, its note the whole record, the manifest among it, and
+        `job:fail` if creating it fails. *expression* is recorded as what *command* evaluates.
+        *dry_run*: True submits nothing and contacts nothing; `'server'` has the API server validate the
+        Job, and creates nothing. Neither syncs or journals.
+        """
+        return KubeRunner(None, self, **options)._launch_(command, on=block, expression=expression)
+
+    def sync(self, src: str, dst: str | None = None, *, progress: bool | None = None) -> dict:
+        """Copy the tree *src* to path *dst* (default *src*) as the cluster sees it; `{'files', 'bytes', 'skipped'}`.
+
+        On a cluster with `storage`, *dst* is reached at its `url`, with `fsspec_options`; on one that
+        mounts what this process sees, it is that path, and *src* onto itself copies nothing. Files
+        whose size and mtime (to the second) match are skipped; nothing there is deleted (`_sync_`).
+        """
+        dst = os.path.abspath(dst or src)
+        if not self.storage and dst == os.path.abspath(src):
+            return dict(files=0, bytes=0, skipped=None)
+        return _sync_(src, self.url(dst), storage_options=self.fsspec_options(), progress=progress)
+
+    def jobs(self, *, user: str | None = None, all_users: bool = False, status: str | None = None) -> pd.DataFrame:
+        """The Jobs in the cluster's namespace, as a table, newest first; raises when kubectl cannot reach it.
+
+        One row per Job: `cluster, job, status, n_gpus, created, started, ended, command`, and `reason`,
+        Kueue's message for a pending one. Only *user*'s (default the cluster's `user`, else $USER),
+        unless *all_users*; only those of *status* ('pending', 'running', 'complete', 'failed') when given.
+        """
+        who = _slug_(user or self.user or os.environ.get('USER') or 'dbx', 16)
+        items = json.loads(_kubectl_(self.context, '-n', self.namespace, 'get', 'job', '-o', 'json'))['items']
+        reasons = _workload_reasons_(self)
+        rows = []
+        for j in items:
+            md, st = j['metadata'], j.get('status', {})
+            if not all_users and not (md.get('labels', {}).get('dbx/user') == who or md['name'].startswith(f"{who}-")):
+                continue
+            s = _job_status_(j)
+            if status and s != status:
+                continue
+            cont = j['spec']['template']['spec']['containers'][0]
+            command = md.get('annotations', {}).get('dbx/command') or md.get('annotations', {}).get('sctx/command') or ''
+            expression = {e.get('name'): e.get('value') for e in cont.get('env', [])}.get('DBX_SUBMIT_EXPRESSION')
+            rows.append(dict(cluster=self.name, job=md['name'], status=s,
+                             n_gpus=cont.get('resources', {}).get('requests', {}).get('nvidia.com/gpu', '0'),
+                             created=md.get('creationTimestamp'), started=st.get('startTime'),
+                             ended=st.get('completionTime'), command=(expression or command)[:120],
+                             reason=reasons.get(md['name']) if s == 'pending' else None))
+        df = pd.DataFrame(rows, columns=_JOB_COLUMNS_)
+        return df.sort_values('created', ascending=False, na_position='first').reset_index(drop=True)
+
+    def queues(self, *, resource: str = 'nvidia.com/gpu', queues: str | None = None, all: bool = False) -> pd.DataFrame:
+        """The Kueue ClusterQueues the cluster's context sees: their *resource* quota, use and workloads; raises when kubectl cannot reach it.
+
+        One row per queue: `cluster, queue, cohort, quota, used, free, borrowed, pending, admitted`, the
+        quantities *resource*'s summed over the queue's flavors (memory in GiB). *queues* is a regex the
+        queue name must match; queues with no quota, no use and no workloads are left out unless *all*.
+        """
+        items = json.loads(_kubectl_(self.context, 'get', 'clusterqueue', '-o', 'json'))['items']
+        rows = []
+        for q in items:
+            name = q['metadata']['name']
+            if queues and not re.search(queues, name):
+                continue
+            spec, status = q.get('spec', {}), q.get('status', {})
+            quota = sum(_quantity_(r.get('nominalQuota'), resource) for g in spec.get('resourceGroups', [])
+                        for f in g.get('flavors', []) for r in f.get('resources', []) if r['name'] == resource)
+            used = sum(_quantity_(r.get('total'), resource) for f in status.get('flavorsUsage', [])
+                       for r in f.get('resources', []) if r['name'] == resource)
+            borrowed = sum(_quantity_(r.get('borrowed'), resource) for f in status.get('flavorsUsage', [])
+                           for r in f.get('resources', []) if r['name'] == resource)
+            pending, admitted = status.get('pendingWorkloads', 0), status.get('admittedWorkloads', 0)
+            if not all and not (quota or used or pending or admitted):
+                continue
+            rows.append(dict(cluster=self.name, queue=name, cohort=spec.get('cohortName', spec.get('cohort')),
+                             quota=quota, used=used, free=max(quota - used, 0), borrowed=borrowed,
+                             pending=pending, admitted=admitted))
+        return _integral_(pd.DataFrame(rows, columns=_QUEUE_COLUMNS_))
 
     def url(self, path: str) -> str:
         """Where *path* is on the cluster: its URL under `storage`, or *path* itself when the cluster mounts it."""
@@ -201,7 +295,7 @@ class KubeRun(Run):
 
 
 class KubeRunner(Runner):
-    """A Runner whose runs are Kueue Jobs on a `Cluster`; its options are `job`'s, and `dry_run`.
+    """A Runner whose runs are Kueue Jobs on a `KubeCluster`; its options are `job`'s, and `dry_run`.
 
     `dry_run=True` contacts nothing; `dry_run='server'` has the API server validate the Job and
     create nothing. *workdirs* are synced in `_stage_`, after a dry run would have stopped.
@@ -225,7 +319,7 @@ class KubeRunner(Runner):
             # Planned here, so the Job unpacks what _stage_ will send: each tree's digest names its archive.
             workdirs = {**c.options.get('workdirs', {}), **(options.get('workdirs') or {})}
             options = dict(options, packs=[_pack_plan_(c, src, target, options) for src, target in workdirs.items()])
-        manifest = job(command, c, **options)
+        manifest = c.job(command, **options)
         container = manifest['spec']['template']['spec']['containers'][0]
         return dict(id=manifest['metadata']['name'], job=manifest['metadata']['name'], cluster=c.name,
                     context=c.context, namespace=c.namespace, image=container['image'],
@@ -249,15 +343,15 @@ class KubeRunner(Runner):
         _kubectl_(self._target_.context, 'create', '-f', '-', '-o', 'name', input=json.dumps(record['manifest']))
 
 
-Cluster.MODE, Cluster.RUNNER = 'kube', KubeRunner
+KubeCluster.MODE, KubeCluster.RUNNER = 'kube', KubeRunner
 
 
 # --------------------------------------------------------------------------------------------- #
-# Clusters, Jobs, workdirs
+# Clusters, and what is on them
 # --------------------------------------------------------------------------------------------- #
 
-def cluster(c: 'str | Cluster') -> Cluster:
-    """*c* itself when a Cluster, else the one of that name among the `dbx.clusters` entry points'."""
+def cluster(c: 'str | KubeCluster') -> KubeCluster:
+    """*c* itself when a KubeCluster, else the one of that name among the `dbx.clusters` entry points'."""
     return _cluster_.cluster(c, 'kube')
 
 
@@ -266,150 +360,18 @@ def clusters() -> dict:
     return _cluster_.clusters('kube')
 
 
-def job(command: str, c: 'str | Cluster', **options) -> dict:
-    """The Job running *command* on cluster *c*: a `batch/v1` manifest, its name set.
-
-    *options* (see the module doc and `_manifest_`) are over the cluster's own `options`; `env`
-    and `setup` add to the cluster's.
-    """
-    c = cluster(c)
-    merged = {**c.options, **options}
-    for k in ('env', 'setup'):
-        if k in c.options and k in options:
-            merged[k] = ({**c.options[k], **options[k]} if k == 'env' else [*c.options[k], *options[k]])
-    return _manifest_(command, c, **merged)
-
-
-def submit(command: str, c: 'str | Cluster', *, block=None, expression: str | None = None, **options) -> KubeRun:
-    """Create the Job running *command* on cluster *c* (`job` for *options*, and `dry_run`); its `KubeRun`.
-
-    *workdirs* are synced first. With *block*, the submission is journaled on it (`dbx.cluster`):
-    `job:submit` before the Job is created, its note the whole record, the manifest among it, and
-    `job:fail` if creating it fails. *expression* is recorded as what *command* evaluates.
-    *dry_run*: True submits nothing and contacts nothing; `'server'` has the API server validate the
-    Job, and creates nothing. Neither syncs or journals.
-    """
-    return KubeRunner(None, c, **options)._launch_(command, on=block, expression=expression)
-
-
-def sync(src: str, url: str, *, storage_options: dict | None = None, progress: bool | None = None) -> dict:
-    """Copy the tree *src* to *url*, skipping files whose size and mtime (to the second) match; `{'files', 'bytes', 'skipped'}`.
-
-    Modes and mtimes are kept where the filesystem lets them be set (local, sftp), and symlinks are
-    made as symlinks there. Nothing at *url* is deleted. *progress* shows a bar of the bytes to copy
-    (within a file, too, over sftp), on stderr; by default when stderr is a terminal. A sync killed
-    midway resumes: what was copied is skipped, and a file cut short is copied again (its size differs).
-    """
-    progress = sys.stderr.isatty() if progress is None else progress
-    name = os.path.basename(os.path.normpath(src))
-    fs, root = fsspec.core.url_to_fs(url, **(storage_options or {}))
-    if progress:
-        print(f"[sync] {name}: listing {url}", file=sys.stderr, flush=True)
-    try:
-        there = {p: i for p, i in fs.find(root, detail=True, withdirs=False).items()}
-    except FileNotFoundError:
-        there = {}
-    sftp = getattr(fs, 'ftp', None)
-    local = isinstance(fs, fsspec.implementations.local.LocalFileSystem)
-    stats = dict(files=0, bytes=0, skipped=0)
-    # What to do, before doing it: the bar's total is what there is to copy.
-    links, copies = [], []
-    for dirpath, dirnames, filenames in os.walk(src):
-        rel = os.path.relpath(dirpath, src)
-        rdir = root if rel == '.' else f"{root.rstrip('/')}/{rel}"
-        for n in filenames + [d for d in dirnames if os.path.islink(os.path.join(dirpath, d))]:
-            path, rpath = os.path.join(dirpath, n), f"{rdir.rstrip('/')}/{n}"
-            st = os.lstat(path)
-            if os.path.islink(path):
-                if rpath not in there and (sftp or local):
-                    links.append((path, rpath, rdir))
-                continue
-            info = there.get(rpath) or there.get(rpath.lstrip('/'))
-            if info and info.get('size') == st.st_size and _mtime_(info) is not None \
-                    and int(_mtime_(info)) == int(st.st_mtime):
-                stats['skipped'] += 1
-                continue
-            copies.append((path, rpath, rdir, st))
-    bar = tqdm.tqdm(total=sum(st.st_size for *_, st in copies), unit='B', unit_scale=True, unit_divisor=1024,
-                    desc=f"[sync] {name}", disable=not progress, dynamic_ncols=True,
-                    postfix=dict(files=f"0/{len(copies)}", skipped=stats['skipped']))
-    made = set()
-
-    def ensure(rdir):
-        if rdir not in made:
-            fs.makedirs(rdir, exist_ok=True)
-            made.add(rdir)
-
-    with bar:
-        for path, rpath, rdir in links:
-            ensure(rdir)
-            try:
-                (sftp.symlink if sftp else os.symlink)(os.readlink(path), rpath)
-            except OSError:
-                pass  # Already there, as a link the listing does not show.
-        for k, (path, rpath, rdir, st) in enumerate(copies):
-            ensure(rdir)
-            if sftp:
-                sent = [0]
-
-                def advance(done, total, sent=sent):
-                    bar.update(done - sent[0])
-                    sent[0] = done
-                sftp.put(path, rpath, callback=advance)
-                bar.update(st.st_size - sent[0])
-                sftp.chmod(rpath, st.st_mode & 0o7777)
-                sftp.utime(rpath, (st.st_atime, st.st_mtime))
-            else:
-                fs.put_file(path, rpath)
-                bar.update(st.st_size)
-                if local:
-                    os.chmod(rpath, st.st_mode & 0o7777)
-                    os.utime(rpath, (st.st_atime, st.st_mtime))
-            stats['files'] += 1
-            stats['bytes'] += st.st_size
-            bar.set_postfix(files=f"{k + 1}/{len(copies)}", skipped=stats['skipped'], refresh=False)
-    return stats
-
-
 # --------------------------------------------------------------------------------------------- #
-# Watching: kubejobs, kubedash
+# Watching: jobs and queues, over clusters
 # --------------------------------------------------------------------------------------------- #
 
 def jobs(clusters_: list | None = None, *, user: str | None = None, all_users: bool = False,
          status: str | None = None) -> pd.DataFrame:
-    """The Jobs in each cluster's namespace -- of *clusters_* (Clusters, or their names; default every `dbx.clusters` one) -- as a table, newest first.
+    """`KubeCluster.jobs` of each of *clusters_* (Clusters, or their names; default every `dbx.clusters` one), as one table, newest first.
 
-    One row per Job: `cluster, job, status, n_gpus, created, started, ended, command`, and `reason`,
-    Kueue's message for a pending one. Only *user*'s (default each cluster's `user`, else $USER),
-    unless *all_users*; only those of *status* ('pending', 'running', 'complete', 'failed') when given.
+    A cluster that cannot be reached is a row with its error.
     """
     cs = [cluster(n) for n in clusters_] if clusters_ else list(clusters().values())
-    rows = []
-    for c in cs:
-        who = _slug_(user or c.user or os.environ.get('USER') or 'dbx', 16)
-        try:
-            items = json.loads(_kubectl_(c.context, '-n', c.namespace, 'get', 'job', '-o', 'json'))['items']
-            reasons = _workload_reasons_(c)
-        except Exception as e:
-            rows.append(dict(cluster=c.name, error=str(e).splitlines()[0][:200]))
-            continue
-        for j in items:
-            md, st = j['metadata'], j.get('status', {})
-            if not all_users and not (md.get('labels', {}).get('dbx/user') == who or md['name'].startswith(f"{who}-")):
-                continue
-            s = _job_status_(j)
-            if status and s != status:
-                continue
-            cont = j['spec']['template']['spec']['containers'][0]
-            command = md.get('annotations', {}).get('dbx/command') or md.get('annotations', {}).get('sctx/command') or ''
-            expression = {e.get('name'): e.get('value') for e in cont.get('env', [])}.get('DBX_SUBMIT_EXPRESSION')
-            rows.append(dict(cluster=c.name, job=md['name'], status=s,
-                             n_gpus=cont.get('resources', {}).get('requests', {}).get('nvidia.com/gpu', '0'),
-                             created=md.get('creationTimestamp'), started=st.get('startTime'),
-                             ended=st.get('completionTime'), command=(expression or command)[:120],
-                             reason=reasons.get(md['name']) if s == 'pending' else None))
-    cols = ['cluster', 'job', 'status', 'n_gpus', 'created', 'started', 'ended', 'reason', 'command']
-    df = pd.DataFrame(rows, columns=cols + (['error'] if any('error' in r for r in rows) else []))
+    df = _across_(cs, lambda c: c.jobs(user=user, all_users=all_users, status=status), _JOB_COLUMNS_)
     return df.sort_values('created', ascending=False, na_position='first').reset_index(drop=True)
 
 
@@ -427,62 +389,29 @@ def jobs_main(argv: list | None = None) -> None:
         print(df.to_string(index=False))
 
 
-def kubedash(clusters_: list | None = None, *, resource: str = 'nvidia.com/gpu', queues: str | None = None,
-             all: bool = False) -> pd.DataFrame:
-    """The Kueue ClusterQueues each cluster sees -- of *clusters_* (Clusters, or their names; default every `dbx.clusters` one) -- their *resource* quota, use and workloads.
+def queues(clusters_: list | None = None, *, resource: str = 'nvidia.com/gpu', queues: str | None = None,
+           all: bool = False) -> pd.DataFrame:
+    """`KubeCluster.queues` of each of *clusters_* (Clusters, or their names; default every `dbx.clusters` one), as one table.
 
-    One row per queue: `cluster, queue, cohort, quota, used, free, borrowed, pending, admitted`, the
-    quantities *resource*'s summed over the queue's flavors (memory in GiB). Clusters sharing a
-    kubectl context are queried once, under the first one's name. *queues* is a regex the queue name
-    must match; queues with no quota, no use and no workloads are left out unless *all*. A cluster
-    that cannot be reached is a row with its error.
+    Clusters sharing a kubectl context are queried once, under the first one's name. A cluster that
+    cannot be reached is a row with its error.
     """
     cs = [cluster(n) for n in clusters_] if clusters_ else list(clusters().values())
-    rows, seen = [], set()
-    for c in cs:
-        if c.context in seen:
-            continue
-        seen.add(c.context)
-        try:
-            items = json.loads(_kubectl_(c.context, 'get', 'clusterqueue', '-o', 'json'))['items']
-        except Exception as e:
-            rows.append(dict(cluster=c.name, queue=None, error=str(e).splitlines()[0][:200]))
-            continue
-        for q in items:
-            name = q['metadata']['name']
-            if queues and not re.search(queues, name):
-                continue
-            spec, status = q.get('spec', {}), q.get('status', {})
-            quota = sum(_quantity_(r.get('nominalQuota'), resource) for g in spec.get('resourceGroups', [])
-                        for f in g.get('flavors', []) for r in f.get('resources', []) if r['name'] == resource)
-            used = sum(_quantity_(r.get('total'), resource) for f in status.get('flavorsUsage', [])
-                       for r in f.get('resources', []) if r['name'] == resource)
-            borrowed = sum(_quantity_(r.get('borrowed'), resource) for f in status.get('flavorsUsage', [])
-                           for r in f.get('resources', []) if r['name'] == resource)
-            pending, admitted = status.get('pendingWorkloads', 0), status.get('admittedWorkloads', 0)
-            if not all and not (quota or used or pending or admitted):
-                continue
-            rows.append(dict(cluster=c.name, queue=name, cohort=spec.get('cohortName', spec.get('cohort')),
-                             quota=quota, used=used, free=max(quota - used, 0), borrowed=borrowed,
-                             pending=pending, admitted=admitted))
-    df = pd.DataFrame(rows, columns=['cluster', 'queue', 'cohort', 'quota', 'used', 'free', 'borrowed',
-                                     'pending', 'admitted'] + (['error'] if any('error' in r for r in rows) else []))
-    for col in ('quota', 'used', 'free', 'borrowed'):
-        if df[col].dropna().apply(lambda x: float(x).is_integer()).all():
-            df[col] = df[col].astype('Int64')
-    return df
+    cs = list({c.context: c for c in reversed(cs)}.values())[::-1]
+    df = _across_(cs, lambda c: c.queues(resource=resource, queues=queues, all=all), _QUEUE_COLUMNS_)
+    return _integral_(df)
 
 
-def kubedash_main(argv: list | None = None) -> None:
-    """`dbx.kubedash [CLUSTER ...] [-r RESOURCE] [-q REGEX] [-a]`: print `kubedash`'s table (`kubedash` returns it)."""
-    p = argparse.ArgumentParser(prog='dbx.kubedash', description=kubedash.__doc__.split('\n')[0])
+def queues_main(argv: list | None = None) -> None:
+    """`dbx.kubequeues [CLUSTER ...] [-r RESOURCE] [-q REGEX] [-a]`: print `queues`' table (`queues` returns it)."""
+    p = argparse.ArgumentParser(prog='dbx.kubequeues', description=queues.__doc__.split('\n')[0])
     p.add_argument('clusters', nargs='*', help="clusters to query, by name (default: every one the dbx.clusters entry points name)")
     p.add_argument('-r', '--resource', default='nvidia.com/gpu',
                    help="the resource to tabulate: nvidia.com/gpu (default), cpu, memory, ...")
     p.add_argument('-q', '--queues', help="only the queues whose name matches this regex")
     p.add_argument('-a', '--all', action='store_true', help="include queues with no quota, use or workloads")
     a = p.parse_args(argv)
-    df = kubedash(a.clusters, resource=a.resource, queues=a.queues, all=a.all)
+    df = queues(a.clusters, resource=a.resource, queues=a.queues, all=a.all)
     with pd.option_context('display.max_rows', None, 'display.max_columns', None, 'display.width', 200):
         print(df.to_string(index=False))
 
@@ -491,12 +420,16 @@ def kubedash_main(argv: list | None = None) -> None:
 # Helpers
 # --------------------------------------------------------------------------------------------- #
 
+# The columns of `KubeCluster.jobs` and `KubeCluster.queues`.
+_JOB_COLUMNS_ = ['cluster', 'job', 'status', 'n_gpus', 'created', 'started', 'ended', 'reason', 'command']
+_QUEUE_COLUMNS_ = ['cluster', 'queue', 'cohort', 'quota', 'used', 'free', 'borrowed', 'pending', 'admitted']
+
 # Size suffixes of a Kubernetes quantity, in bytes.
 _BYTES_ = {'k': 1e3, 'M': 1e6, 'G': 1e9, 'T': 1e12, 'P': 1e15, 'Ki': 2 ** 10, 'Mi': 2 ** 20, 'Gi': 2 ** 30,
            'Ti': 2 ** 40, 'Pi': 2 ** 50}
 
 
-def _manifest_(command: str, c: Cluster, *, name: str = 'dbx', n_gpus: int = 0, n_cpus: int | None = None,
+def _manifest_(command: str, c: KubeCluster, *, name: str = 'dbx', n_gpus: int = 0, n_cpus: int | None = None,
                mem_gib: int | None = None, image: str | None = None, venv: str | None = None, cwd: str | None = None,
                revision=None, pin_source=None, env: dict | None = None, setup: list | None = None,
                anyscale: bool = False, ray: bool = False, ray_bin: str = 'ray', run_as: tuple | None = None,
@@ -519,7 +452,7 @@ def _manifest_(command: str, c: Cluster, *, name: str = 'dbx', n_gpus: int = 0, 
         setup = a['setup'] + setup
     image = image or c.image
     if image is None:
-        raise ValueError(f"No image for the Job on {c.name!r}: pass image=, set Cluster.image, or anyscale=True "
+        raise ValueError(f"No image for the Job on {c.name!r}: pass image=, set KubeCluster.image, or anyscale=True "
                          f"in an Anyscale workspace")
     cpu = n_cpus or (c.n_cpus_per_gpu * n_gpus if n_gpus else 8)
     mem = mem_gib or (c.mem_gib_per_gpu * n_gpus if n_gpus else 32)
@@ -634,7 +567,107 @@ def _kubectl_(context: str, *args, input: str | None = None) -> str:
     return p.stdout
 
 
-def _sync_workdirs_(c: Cluster, workdirs: dict) -> dict:
+def _sync_(src: str, url: str, *, storage_options: dict | None = None, progress: bool | None = None) -> dict:
+    """Copy the tree *src* to *url*, skipping files whose size and mtime (to the second) match; `{'files', 'bytes', 'skipped'}`.
+
+    Modes and mtimes are kept where the filesystem lets them be set (local, sftp), and symlinks are
+    made as symlinks there. Nothing at *url* is deleted. *progress* shows a bar of the bytes to copy
+    (within a file, too, over sftp), on stderr; by default when stderr is a terminal. A sync killed
+    midway resumes: what was copied is skipped, and a file cut short is copied again (its size differs).
+    """
+    progress = sys.stderr.isatty() if progress is None else progress
+    name = os.path.basename(os.path.normpath(src))
+    fs, root = fsspec.core.url_to_fs(url, **(storage_options or {}))
+    if progress:
+        print(f"[sync] {name}: listing {url}", file=sys.stderr, flush=True)
+    try:
+        there = {p: i for p, i in fs.find(root, detail=True, withdirs=False).items()}
+    except FileNotFoundError:
+        there = {}
+    sftp = getattr(fs, 'ftp', None)
+    local = isinstance(fs, fsspec.implementations.local.LocalFileSystem)
+    stats = dict(files=0, bytes=0, skipped=0)
+    # What to do, before doing it: the bar's total is what there is to copy.
+    links, copies = [], []
+    for dirpath, dirnames, filenames in os.walk(src):
+        rel = os.path.relpath(dirpath, src)
+        rdir = root if rel == '.' else f"{root.rstrip('/')}/{rel}"
+        for n in filenames + [d for d in dirnames if os.path.islink(os.path.join(dirpath, d))]:
+            path, rpath = os.path.join(dirpath, n), f"{rdir.rstrip('/')}/{n}"
+            st = os.lstat(path)
+            if os.path.islink(path):
+                if rpath not in there and (sftp or local):
+                    links.append((path, rpath, rdir))
+                continue
+            info = there.get(rpath) or there.get(rpath.lstrip('/'))
+            if info and info.get('size') == st.st_size and _mtime_(info) is not None \
+                    and int(_mtime_(info)) == int(st.st_mtime):
+                stats['skipped'] += 1
+                continue
+            copies.append((path, rpath, rdir, st))
+    bar = tqdm.tqdm(total=sum(st.st_size for *_, st in copies), unit='B', unit_scale=True, unit_divisor=1024,
+                    desc=f"[sync] {name}", disable=not progress, dynamic_ncols=True,
+                    postfix=dict(files=f"0/{len(copies)}", skipped=stats['skipped']))
+    made = set()
+
+    def ensure(rdir):
+        if rdir not in made:
+            fs.makedirs(rdir, exist_ok=True)
+            made.add(rdir)
+
+    with bar:
+        for path, rpath, rdir in links:
+            ensure(rdir)
+            try:
+                (sftp.symlink if sftp else os.symlink)(os.readlink(path), rpath)
+            except OSError:
+                pass  # Already there, as a link the listing does not show.
+        for k, (path, rpath, rdir, st) in enumerate(copies):
+            ensure(rdir)
+            if sftp:
+                sent = [0]
+
+                def advance(done, total, sent=sent):
+                    bar.update(done - sent[0])
+                    sent[0] = done
+                sftp.put(path, rpath, callback=advance)
+                bar.update(st.st_size - sent[0])
+                sftp.chmod(rpath, st.st_mode & 0o7777)
+                sftp.utime(rpath, (st.st_atime, st.st_mtime))
+            else:
+                fs.put_file(path, rpath)
+                bar.update(st.st_size)
+                if local:
+                    os.chmod(rpath, st.st_mode & 0o7777)
+                    os.utime(rpath, (st.st_atime, st.st_mtime))
+            stats['files'] += 1
+            stats['bytes'] += st.st_size
+            bar.set_postfix(files=f"{k + 1}/{len(copies)}", skipped=stats['skipped'], refresh=False)
+    return stats
+
+
+def _across_(cs: list, table, columns: list) -> pd.DataFrame:
+    """*table* of each cluster of *cs*, as one table of *columns*; a cluster *table* raises on is a row with its error."""
+    frames, errors = [], []
+    for c in cs:
+        try:
+            frames.append(table(c))
+        except Exception as e:
+            errors.append(dict(cluster=c.name, error=str(e).splitlines()[0][:200]))
+    frames = [f for f in frames if len(f)] + ([pd.DataFrame(errors)] if errors else [])
+    df = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame(columns=columns)
+    return df.reindex(columns=columns + (['error'] if errors else []))
+
+
+def _integral_(df: pd.DataFrame) -> pd.DataFrame:
+    """*df* with its quantity columns as integers where every value is one."""
+    for col in ('quota', 'used', 'free', 'borrowed'):
+        if df[col].dropna().apply(lambda x: float(x).is_integer()).all():
+            df[col] = df[col].astype('Int64')
+    return df
+
+
+def _sync_workdirs_(c: KubeCluster, workdirs: dict) -> dict:
     """Make each workdir `{src: target}` the cluster's: synced where it has `storage`, checked where it mounts ours."""
     done = {}
     for src, target in workdirs.items():
@@ -645,7 +678,7 @@ def _sync_workdirs_(c: Cluster, workdirs: dict) -> dict:
                                  f"there already, at {src}, not {target}")
             done[src] = dict(target=target, files=0, bytes=0, skipped=None)
             continue
-        done[src] = dict(target=target, **sync(src, c.url(target), storage_options=c.fsspec_options()))
+        done[src] = dict(target=target, **c.sync(src, target))
     return done
 
 
@@ -654,7 +687,7 @@ _PACK_SKIP_ = ('__pycache__',)
 _PACK_SKIP_SUFFIXES_ = ('.pyc',)
 
 
-def _pack_plan_(c: Cluster, src: str, target: str, options: dict) -> dict:
+def _pack_plan_(c: KubeCluster, src: str, target: str, options: dict) -> dict:
     """What packing workdir *src* for *target* on *c* is: its digest, the archive's name and where the Job finds it.
 
     The digest is of every file's relative path, size, mtime, mode and link target -- not its bytes --
@@ -676,7 +709,7 @@ def _pack_plan_(c: Cluster, src: str, target: str, options: dict) -> dict:
     return dict(src=src, target=target, digest=digest, archive=f"{os.path.dirname(target)}/.dbx-packs/{name}")
 
 
-def _send_pack_(c: Cluster, plan: dict) -> dict:
+def _send_pack_(c: KubeCluster, plan: dict) -> dict:
     """Pack *plan*'s tree and upload it, unless the cluster has its archive already; what was done."""
     fs, rpath = fsspec.core.url_to_fs(c.url(plan['archive']), **c.fsspec_options())
     if fs.exists(rpath):
@@ -757,7 +790,7 @@ def _mtime_(info) -> float | None:
     return float(t) if t is not None else None
 
 
-def _workload_reasons_(c: Cluster) -> dict:
+def _workload_reasons_(c: KubeCluster) -> dict:
     """`{job name: Kueue's message}` for each Job of the cluster's namespace whose Workload is not admitted."""
     items = json.loads(_kubectl_(c.context, '-n', c.namespace, 'get', 'workload', '-o', 'json'))['items']
     out = {}

@@ -320,7 +320,7 @@ That puts two requirements on the definition:
   project's env module (above), not from the submitting shell's state.
   `runner(..., dry_run='cluster')` checks exactly this: same hash there as here.
 - **The project defines its targets, not the pipeline.** Clusters are values
-  (`dbx.kube.Cluster`) in a module of their own, passed at call time
+  (`dbx.kube.KubeCluster`) in a module of their own, passed at call time
   (`p.runner(LAMBDA)`); nothing is registered. For names in one-liners, the
   module's dict of them is a `dbx.clusters` entry point in the project's
   packaging. A pipeline module never defines or names a cluster.

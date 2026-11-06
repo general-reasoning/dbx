@@ -156,14 +156,15 @@ class Pipeline(Datablock):
             r.runs()[-1].cancel(), r.cancel()        # cancel the last row; all still pending or running
             p.runner().runs().dash()                 # its runs on every target, the whole table
 
-        *target* is where (`dbx.cluster`): a value, e.g. a `dbx.kube.Cluster`, or the name a
+        *target* is where (`dbx.cluster`): a value, e.g. a `dbx.kube.KubeCluster`, or the name a
         `dbx.clusters` entry point gives one; with none, the Runner lists runs and launches nothing.
         *mode*, when given, is the kind it must be ('kube'). *options* are the kind's --
-        `dbx.kube.job`'s for 'kube' -- refused here when it does not take them: among them the pod's
+        `dbx.kube.KubeCluster.job`'s for 'kube' -- refused here when it does not take them: among them the pod's
         `n_gpus` (by default the pipeline's `n_gpus`, or 0), `n_cpus` and `mem_gib`; `venv`;
         `workdirs={src: target}` (sent, or packed, before the Job); and `env={name: value}`, the
-        Job's environment: over the runner's own `DBX_*` (the datalake, the session, the call),
-        which are over the cluster's own `env`. *force* launches `build`/`build_tree` of an entrypoint
+        Job's environment, over the cluster's own `env`, and over the runner's own `DBX_*` (the
+        session, the call). The run's `DBX_DATALAKE` is this pipeline's datalake if it was given one,
+        else env's, else the cluster's (`dbx.cluster.Runner._run_datalake_`). *force* launches `build`/`build_tree` of an entrypoint
         that is valid here.
         """
         return _cluster_.runner(self, target, mode=mode, force=force, **options)

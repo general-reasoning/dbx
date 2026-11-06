@@ -2,7 +2,7 @@
 
     ref = dbx.image.build('/path/to/venv', repo='registry.example.com/team/proj', anyscale=True,
                           extra={'/path/to/checkout': 'checkout'}, login=dbx.image.acr_login)
-    dbx.kube.submit('python -m my.thing', LAMBDA, image=ref)
+    LAMBDA.submit('python -m my.thing', image=ref)
 
 The layer holds, under *prefix*:
 - `src/`: every package *venv* has installed in editable mode, as it is on disk now;

@@ -37,10 +37,10 @@ pipelines
     `pipejournal`.
 cluster, kube, gpu, image, anyscale
     `dbx.cluster`: a pipeline's call (`Pipeline.runner`) run on a
-    target, and journaled; `dbx.runner`, the runs of a pipeline, a
-    datablock or a whole Datablock class. `dbx.kube`: the target a Kueue cluster
-    is, `dbx.kube.Cluster`, its Jobs, and `kubedash`, its queues as a
-    table. `dbx.gpu`: a function on GPUs through Ray, one task per
+    `Cluster`, and journaled; `dbx.runner`, the runs of a pipeline, a
+    datablock or a whole Datablock class. `dbx.kube`: a Kueue cluster,
+    `dbx.kube.KubeCluster` -- its `submit`, `jobs` and `queues` -- and
+    `jobs` and `queues` over several clusters, as tables. `dbx.gpu`: a function on GPUs through Ray, one task per
     call. `dbx.image`: an image of a venv's code, for a Job.
     `dbx.anyscale`: what a Job or an image needs on Anyscale. Imported
     as modules, not into `dbx`.

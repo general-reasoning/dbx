@@ -1,8 +1,9 @@
-"""dbx.kube: the Job a command or a pipeline's call becomes, its submission journaled, and kubedash.
+"""dbx.kube: the Job a command or a pipeline's call becomes, its submission journaled, and its jobs and queues.
 
 kubectl is never run: `dbx.kube._kubectl_` is replaced by a fake that records what it is handed and
 answers as the cluster would.
 """
+import ast
 import json
 import os
 import subprocess
@@ -20,7 +21,7 @@ from dbx.pipelines import Pipeline
 
 @pytest.fixture
 def cluster():
-    return kube.Cluster('testc', context='ctx', namespace='ns', queue='gpu-q', cpu_queue='cpu-q',
+    return kube.KubeCluster('testc', context='ctx', namespace='ns', queue='gpu-q', cpu_queue='cpu-q',
                         priority='normal', mounts={'/mnt/team': 'team-pvc', '/mnt/data': 'data-pvc'},
                         readonly=('/mnt/data',), n_cpus_per_gpu=10, mem_gib_per_gpu=100, image='img:1', user='me')
 
@@ -99,7 +100,7 @@ def _env_(manifest):
 
 class TestTheJob:
     def test_a_gpu_job_is_sized_by_the_clusters_share_and_queued_suspended(self, cluster):
-        m = kube.job('echo hi', cluster, n_gpus=2, name='My Thing')
+        m = cluster.job('echo hi', n_gpus=2, name='My Thing')
         res = _container_(m)['resources']['requests']
         assert (res['cpu'], res['memory'], res['nvidia.com/gpu']) == ('20', '200Gi', '2')
         assert m['metadata']['labels']['kueue.x-k8s.io/queue-name'] == 'gpu-q'
@@ -109,26 +110,26 @@ class TestTheJob:
         assert _env_(m)['DBX_KUBE_COMMAND'] == 'echo hi' and m['metadata']['annotations']['dbx/command'] == 'echo hi'
 
     def test_a_job_without_gpus_goes_to_the_cpu_queue(self, cluster):
-        m = kube.job('echo hi', cluster)
+        m = cluster.job('echo hi')
         assert m['metadata']['labels']['kueue.x-k8s.io/queue-name'] == 'cpu-q'
         assert _container_(m)['resources']['requests']['nvidia.com/gpu'] == '0'
 
     def test_the_claims_mount_where_the_cluster_says_read_only_where_it_says(self, cluster):
-        m = kube.job('true', cluster)
+        m = cluster.job('true')
         mounts = {v['mountPath']: v for v in _container_(m)['volumeMounts']}
         claims = {v['name']: v for v in m['spec']['template']['spec']['volumes']}
         assert claims[mounts['/mnt/team']['name']]['persistentVolumeClaim']['claimName'] == 'team-pvc'
         assert mounts['/mnt/data'].get('readOnly') and not mounts['/mnt/team'].get('readOnly')
 
     def test_off_anyscale_nothing_of_anyscales_is_assumed(self, cluster):
-        m = kube.job('true', cluster, ray=True)
+        m = cluster.job('true', ray=True)
         script = _container_(m)['command'][2]
         assert 'securityContext' not in m['spec']['template']['spec']
         assert not any(k.startswith('ANYSCALE') for k in _env_(m))
         assert '\nray start --head' in script and '/home/ray' not in script
 
     def test_anyscale_adds_its_user_its_ray_and_its_working_dir(self, cluster):
-        m = kube.job('true', cluster, anyscale=True, ray=True)
+        m = cluster.job('true', anyscale=True, ray=True)
         script = _container_(m)['command'][2]
         assert m['spec']['template']['spec']['securityContext'] == {'runAsUser': 1000, 'runAsGroup': 100}
         assert _env_(m)['ANYSCALE_WORKING_DIR'] == dbx.anyscale.WORKING_DIR
@@ -137,17 +138,17 @@ class TestTheJob:
     def test_no_image_is_an_error_that_says_where_one_comes_from(self, cluster):
         cluster.image = None
         with pytest.raises(ValueError, match='image='):
-            kube.job('true', cluster)
+            cluster.job('true')
 
     def test_the_venv_is_activated_and_the_command_runs_last(self, cluster):
-        script = _container_(kube.job('true', cluster, venv='/mnt/team/venv', setup=['echo setup']))['command'][2]
+        script = _container_(cluster.job('true', venv='/mnt/team/venv', setup=['echo setup']))['command'][2]
         lines = script.splitlines()
         assert lines.index('echo setup') < lines.index('source /mnt/team/venv/bin/activate')
         assert lines[-1] == 'exec bash -c "$DBX_KUBE_COMMAND"'
 
     def test_the_clusters_options_are_defaults_and_its_env_is_added_to(self, cluster):
         cluster.options = {'venv': '/v', 'env': {'A': '1'}, 'n_gpus': 1}
-        m = kube.job('true', cluster, env={'B': '2'}, n_gpus=4)
+        m = cluster.job('true', env={'B': '2'}, n_gpus=4)
         assert _env_(m)['A'] == '1' and _env_(m)['B'] == '2'
         assert 'source /v/bin/activate' in _container_(m)['command'][2]
         assert _container_(m)['resources']['requests']['nvidia.com/gpu'] == '4'
@@ -171,7 +172,7 @@ class TestRevision:
         return subprocess.run(['git', '-C', repo, 'rev-parse', 'HEAD'], capture_output=True, text=True).stdout.strip()
 
     def test_both_repos_are_cloned_at_their_commits_dbx_first_on_the_path(self, cluster, repos):
-        m = kube.job('true', cluster, revision='HEAD:HEAD')
+        m = cluster.job('true', revision='HEAD:HEAD')
         script = _container_(m)['command'][2]
         dsha, psha = self._sha_(repos[0]), self._sha_(repos[1])
         assert f"checkout --quiet {dsha}" in script and f"checkout --quiet {psha}" in script
@@ -184,7 +185,7 @@ class TestRevision:
             f.write('x')
         subprocess.run(['git', '-C', repos[1], 'add', 'f'], check=True)
         with pytest.raises(ValueError, match='commit first'):
-            kube.job('true', cluster, revision=True)
+            cluster.job('true', revision=True)
 
 
 # --------------------------------------------------------------------------------------------- #
@@ -206,6 +207,8 @@ class TestWorkdirs:
         cluster.storage_options = 'tests.test_kube:_sftp_options_'
         assert cluster.fsspec_options() == {'username': 'from-a-function'}
         assert dbxcluster._rebuild_({'target_spec': dbxcluster._spec_(cluster)}) == cluster
+        old = dbxcluster._spec_(cluster) | {'class': 'dbx.kube:Cluster'}    # as journaled before the rename
+        assert dbxcluster._rebuild_({'target_spec': old}) == cluster
 
     def test_fsspec_defaults_hold_only_while_inside(self, cluster):
         import fsspec
@@ -217,10 +220,10 @@ class TestWorkdirs:
 
     def test_a_synced_workdir_is_opened_with_the_clusters_options(self, cluster, kubectl, monkeypatch, tmp_path):
         seen = []
-        monkeypatch.setattr(kube, 'sync', lambda src, url, *, storage_options: seen.append((url, storage_options)) or
+        monkeypatch.setattr(kube, '_sync_', lambda src, url, *, storage_options, progress=None: seen.append((url, storage_options)) or
                             dict(files=0, bytes=0, skipped=0))
         cluster.storage, cluster.storage_options = {'/mnt/team': 'sftp://host/data'}, {'username': 'u'}
-        kube.submit('true', cluster, workdirs={str(tmp_path): '/mnt/team/code'})
+        cluster.submit('true', workdirs={str(tmp_path): '/mnt/team/code'})
         assert seen == [('sftp://host/data/code', {'username': 'u'})]
 
     def test_sync_copies_what_changed_keeps_modes_and_links(self, tmp_path):
@@ -230,23 +233,30 @@ class TestWorkdirs:
         os.chmod(src / 'bin' / 'tool', 0o755)
         (src / 'data.txt').write_text('abc')
         os.symlink('data.txt', src / 'link')
-        first = kube.sync(str(src), f"file://{dst}")
+        first = kube._sync_(str(src), f"file://{dst}")
         assert first['files'] == 2 and os.stat(dst / 'bin' / 'tool').st_mode & 0o777 == 0o755
         assert os.readlink(dst / 'link') == 'data.txt'
-        assert kube.sync(str(src), f"file://{dst}") == dict(files=0, bytes=0, skipped=2)
+        assert kube._sync_(str(src), f"file://{dst}") == dict(files=0, bytes=0, skipped=2)
         (src / 'data.txt').write_text('abcd')
-        assert kube.sync(str(src), f"file://{dst}")['files'] == 1 and (dst / 'data.txt').read_text() == 'abcd'
+        assert kube._sync_(str(src), f"file://{dst}")['files'] == 1 and (dst / 'data.txt').read_text() == 'abcd'
+
+    def test_a_clusters_sync_goes_to_its_storage_url_or_nowhere_when_it_mounts_ours(self, tmp_path):
+        (tmp_path / 'src').mkdir()
+        (tmp_path / 'src' / 'a.txt').write_text('a')
+        stored = kube.KubeCluster('s', image='i', storage={str(tmp_path / 'src'): f"file://{tmp_path / 'there'}"})
+        assert stored.sync(str(tmp_path / 'src'))['files'] == 1 and (tmp_path / 'there' / 'a.txt').read_text() == 'a'
+        assert kube.KubeCluster('m', image='i').sync(str(tmp_path / 'src')) == dict(files=0, bytes=0, skipped=None)
 
     def test_a_cluster_that_mounts_our_paths_takes_a_workdir_only_where_it_is(self, cluster, kubectl, tmp_path):
-        kube.submit('true', cluster, workdirs={str(tmp_path): str(tmp_path)})
+        cluster.submit('true', workdirs={str(tmp_path): str(tmp_path)})
         with pytest.raises(ValueError, match='there already'):
-            kube.submit('true', cluster, workdirs={str(tmp_path): '/mnt/team/x'})
+            cluster.submit('true', workdirs={str(tmp_path): '/mnt/team/x'})
 
     def test_a_cluster_with_its_own_storage_is_synced_before_the_job(self, cluster, kubectl, tmp_path):
         (tmp_path / 'src').mkdir()
         (tmp_path / 'src' / 'f').write_text('x')
         cluster.storage = {'/mnt/team': f"file://{tmp_path / 'remote'}"}
-        run = kube.submit('true', cluster, workdirs={str(tmp_path / 'src'): '/mnt/team/code'})
+        run = cluster.submit('true', workdirs={str(tmp_path / 'src'): '/mnt/team/code'})
         assert (tmp_path / 'remote' / 'code' / 'f').read_text() == 'x'
         assert run.record['workdirs'][str(tmp_path / 'src')]['files'] == 1
 
@@ -272,7 +282,7 @@ class TestPackedWorkdirs:
         return tmp_path / 'remote'
 
     def test_the_tree_goes_as_one_archive_the_job_unpacks_first(self, cluster, kubectl, tree, remote):
-        run = kube.submit('true', cluster, workdirs={str(tree): '/mnt/team/code'}, pack=True)
+        run = cluster.submit('true', workdirs={str(tree): '/mnt/team/code'}, pack=True)
         [(src, done)] = run.record['workdirs'].items()
         assert src == str(tree) and done['uploaded'] and done['archive'].startswith('/mnt/team/.dbx-packs/src-')
         assert (remote / '.dbx-packs' / os.path.basename(done['archive'])).exists()
@@ -281,18 +291,18 @@ class TestPackedWorkdirs:
         assert script.index(f"dbx_unpack {done['archive']} /mnt/team/code {done['digest']}") < script.index('exec bash')
 
     def test_an_unchanged_tree_is_not_sent_again_and_a_change_is(self, cluster, kubectl, tree, remote):
-        first = kube.submit('true', cluster, workdirs={str(tree): '/mnt/team/code'}, pack=True)
-        again = kube.submit('true', cluster, workdirs={str(tree): '/mnt/team/code'}, pack=True)
+        first = cluster.submit('true', workdirs={str(tree): '/mnt/team/code'}, pack=True)
+        again = cluster.submit('true', workdirs={str(tree): '/mnt/team/code'}, pack=True)
         (tree / '__pycache__' / 'y.pyc').write_text('more bytecode')          # left out: no new archive
-        cached = kube.submit('true', cluster, workdirs={str(tree): '/mnt/team/code'}, pack=True)
+        cached = cluster.submit('true', workdirs={str(tree): '/mnt/team/code'}, pack=True)
         (tree / 'data.txt').write_text('abcd')
-        changed = kube.submit('true', cluster, workdirs={str(tree): '/mnt/team/code'}, pack=True)
+        changed = cluster.submit('true', workdirs={str(tree): '/mnt/team/code'}, pack=True)
         d = [r.record['workdirs'][str(tree)] for r in (first, again, cached, changed)]
         assert [x['uploaded'] for x in d] == [True, False, False, True]
         assert d[0]['digest'] == d[1]['digest'] == d[2]['digest'] != d[3]['digest']
 
     def test_the_unpack_makes_the_target_the_tree_once(self, cluster, kubectl, tree, remote, tmp_path):
-        run = kube.submit('true', cluster, workdirs={str(tree): '/mnt/team/code'}, pack=True)
+        run = cluster.submit('true', workdirs={str(tree): '/mnt/team/code'}, pack=True)
         p = run.record['workdirs'][str(tree)]
         target = tmp_path / 'there' / 'code'
         target.mkdir(parents=True)
@@ -310,19 +320,19 @@ class TestPackedWorkdirs:
 
     def test_a_cluster_may_pack_by_default_and_a_call_may_not(self, cluster, kubectl, tree, remote):
         cluster.options = {'pack': True}
-        packed = kube.submit('true', cluster, workdirs={str(tree): '/mnt/team/code'})
-        synced = kube.submit('true', cluster, workdirs={str(tree): '/mnt/team/code'}, pack=False)
+        packed = cluster.submit('true', workdirs={str(tree): '/mnt/team/code'})
+        synced = cluster.submit('true', workdirs={str(tree): '/mnt/team/code'}, pack=False)
         assert packed.record['workdirs'][str(tree)]['uploaded'] and 'files' in synced.record['workdirs'][str(tree)]
 
     def test_a_target_holding_a_mount_or_the_datalake_is_refused(self, cluster, kubectl, tree, remote, monkeypatch):
         with pytest.raises(ValueError, match='would be replaced'):
-            kube.submit('true', cluster, workdirs={str(tree): '/mnt/team'}, pack=True)
+            cluster.submit('true', workdirs={str(tree): '/mnt/team'}, pack=True)
         monkeypatch.setenv('DBX_DATALAKE', '/mnt/team/me/datalake')
         with pytest.raises(ValueError, match='would be replaced'):
-            kube.submit('true', cluster, workdirs={str(tree): '/mnt/team/me'}, pack=True)
+            cluster.submit('true', workdirs={str(tree): '/mnt/team/me'}, pack=True)
 
     def test_a_cluster_mounting_our_paths_is_not_packed(self, cluster, kubectl, tmp_path):
-        run = kube.submit('true', cluster, workdirs={str(tmp_path): str(tmp_path)}, pack=True)
+        run = cluster.submit('true', workdirs={str(tmp_path): str(tmp_path)}, pack=True)
         assert 'dbx_unpack' not in _container_(kubectl.created[0])['command'][2]
         assert run.record['workdirs'][str(tmp_path)]['skipped'] is None
 
@@ -383,13 +393,13 @@ def _events_(dblk):
 class TestSubmit:
     def test_a_dry_run_contacts_nothing_and_journals_nothing(self, cluster, kubectl, tmp_path):
         b = Leaf(datalake=str(tmp_path))
-        run = kube.submit('true', cluster, block=b, dry_run=True)
+        run = cluster.submit('true', block=b, dry_run=True)
         assert kubectl.calls == [] and run.job is None and run.status() == 'dry-run'
         assert _events_(b) == [] and run.record['manifest']['kind'] == 'Job'
 
     def test_a_submission_is_journaled_with_its_whole_record(self, cluster, kubectl, tmp_path):
         b = Leaf(datalake=str(tmp_path))
-        run = kube.submit('echo hi', cluster, block=b, n_gpus=1)
+        run = cluster.submit('echo hi', block=b, n_gpus=1)
         assert kubectl.created[0]['metadata']['name'] == run.job
         j = b.buildjournal()
         [row] = j[j['event'] == 'job:submit'].to_dict('records')
@@ -400,13 +410,13 @@ class TestSubmit:
 
     def test_wait_journals_the_end_once(self, cluster, kubectl, tmp_path):
         b = Leaf(datalake=str(tmp_path))
-        run = kube.submit('true', cluster, block=b)
+        run = cluster.submit('true', block=b)
         kubectl.conditions = ['Complete']
         assert run.wait(poll=0) and run.wait(poll=0)
         assert _events_(b) == ['job:submit', 'job:complete']
 
     def test_wait_says_what_changes(self, cluster, kubectl, tmp_path, capsys):
-        run = kube.submit('true', cluster, block=Leaf(datalake=str(tmp_path)))
+        run = cluster.submit('true', block=Leaf(datalake=str(tmp_path)))
         kubectl.conditions = ['Pending']
         run._say_(run.status(), 0, said := {})
         run._say_(run.status(), 60, said)                    # nothing changed: nothing said
@@ -420,7 +430,7 @@ class TestSubmit:
 
     def test_a_failed_job_raises_with_its_log_and_journals_the_error(self, cluster, kubectl, tmp_path):
         b = Leaf(datalake=str(tmp_path))
-        run = kube.submit('true', cluster, block=b)
+        run = cluster.submit('true', block=b)
         kubectl.conditions = ['Failed']
         with pytest.raises(RuntimeError, match='boom'):
             run.wait(poll=0)
@@ -430,11 +440,11 @@ class TestSubmit:
         monkeypatch.setattr(kube, '_kubectl_', FakeKubectl(fail_create=True))
         b = Leaf(datalake=str(tmp_path))
         with pytest.raises(RuntimeError, match='forbidden'):
-            kube.submit('true', cluster, block=b)
+            cluster.submit('true', block=b)
         assert _events_(b) == ['job:submit', 'job:fail']
 
     def test_status_reads_the_jobs_conditions(self, cluster, kubectl):
-        run = kube.submit('true', cluster)
+        run = cluster.submit('true')
         assert run.status() == 'running'
         kubectl.conditions = ['Complete']
         assert run.status() == 'complete'
@@ -442,17 +452,54 @@ class TestSubmit:
     def test_a_name_is_looked_up_among_the_entry_points_each_time(self, entry_points):
         with pytest.raises(KeyError, match="pass the cluster itself"):
             kube.cluster('fromep')
-        entry_points.append({'fromep': kube.Cluster('fromep', image='i')})
+        entry_points.append({'fromep': kube.KubeCluster('fromep', image='i')})
         assert kube.cluster('fromep').name == 'fromep' and list(kube.clusters()) == ['fromep']
         entry_points.clear()
         assert kube.clusters() == {}
 
     def test_an_entry_point_may_name_one_target_or_a_list(self, entry_points):
-        entry_points.extend([kube.Cluster('one', image='i'), [kube.Cluster('two', image='i'), 'not a target']])
+        entry_points.extend([kube.KubeCluster('one', image='i'), [kube.KubeCluster('two', image='i'), 'not a target']])
         assert sorted(kube.clusters()) == ['one', 'two']
 
 
 class TestPipelineRunner:
+    def test_the_runs_datalake_is_the_runners_else_the_clusters_else_the_entrys(self, cluster, kubectl, tmp_path,
+                                                                                 monkeypatch):
+        monkeypatch.setenv('DBX_DATALAKE', str(tmp_path / 'here'))
+        p = Single(spec={'n': 5})                                    # its datalake: this machine's
+        lake = lambda: _env_(kubectl.created[-1])['DBX_DATALAKE']
+        p.runner(cluster).build_tree()
+        assert lake() == str(tmp_path / 'here')
+        cluster.options = {'env': {'DBX_DATALAKE': '/mnt/team/lake'}}
+        p.runner(cluster).build_tree()
+        assert lake() == '/mnt/team/lake'
+        run = p.runner(cluster, env={'DBX_DATALAKE': '/mnt/team/me/lake'}).build_tree()
+        assert lake() == '/mnt/team/me/lake' == run.record['datalake']
+
+    def test_a_pipeline_given_its_datalake_keeps_it_and_its_quote_ships_as_is(self, cluster, kubectl, tmp_path):
+        p = Single(spec={'n': 6}, datalake=str(tmp_path))
+        cluster.options = {'env': {'DBX_DATALAKE': '/mnt/team/lake'}}
+        p.runner(cluster, env={'DBX_DATALAKE': '/mnt/team/me/lake'}).build_tree()
+        env = _env_(kubectl.created[-1])
+        assert env['DBX_DATALAKE'] == str(tmp_path) and repr(p.quote()) in env['DBX_SUBMIT_EXPRESSION']
+
+    def test_a_pipeline_that_was_not_resolves_the_runs_datalake_there(self, cluster, kubectl, tmp_path, monkeypatch):
+        monkeypatch.setenv('DBX_DATALAKE', str(tmp_path))
+        p = Single(spec={'n': 8})
+        cluster.options = {'env': {'DBX_DATALAKE': '/mnt/team/lake'}}
+        p.runner(cluster).build_tree()
+        expression = _env_(kubectl.created[-1])['DBX_SUBMIT_EXPRESSION']
+        monkeypatch.setenv('DBX_DATALAKE', '/mnt/team/lake')      # as the run's environment has it
+        there = dbx.eval(ast.literal_eval(expression.split('dbx.eval(', 1)[1].rsplit('), ', 1)[0]))
+        assert there.entry.datalake == '/mnt/team/lake' and there.entry.hash == p.entry.hash
+
+    def test_valid_here_skips_only_when_the_run_builds_here(self, cluster, kubectl, tmp_path, monkeypatch):
+        monkeypatch.setenv('DBX_DATALAKE', str(tmp_path))
+        p = Single(spec={'n': 7})
+        p.entry.build()
+        assert p.runner(cluster).build_tree().skipped
+        assert not p.runner(cluster, env={'DBX_DATALAKE': '/mnt/team/lake'}).build_tree().skipped
+
     def test_a_call_ships_the_pipelines_quote_and_the_datalake(self, cluster, kubectl, tmp_path):
         p = Single(spec={'n': 3}, datalake=str(tmp_path), n_gpus=2)
         run = p.runner(cluster).build_tree()
@@ -528,6 +575,16 @@ class TestWatching:
         assert run.command()['cluster'] == 'testc' 
         assert dict(run.command(datalake=str(tmp_path)))['success'] in (True, 'True')
         assert 'from the job' in _printed_(run.command().output)
+        assert 'from the job' in _printed_(run.output)
+
+    def test_a_run_on_a_cluster_with_storage_reads_its_output_there(self, tmp_path):
+        session = '11111111-2222-3333-4444-555555555555'
+        stored = kube.KubeCluster('s', image='i', storage={'/mnt/team': f"file://{tmp_path}"})
+        run = kube.KubeRun(stored, 'job-y', dict(session=session, datalake='/mnt/team/lake'))
+        env = {**os.environ, 'DBX_DATALAKE': str(tmp_path / 'lake'), 'DBX_SESSION': session, 'DBX_RUN': 'job-y'}
+        subprocess.run([sys.executable, '-c', 'import dbx; dbx.pprint()', '--capture-output',
+                        "print('on its own disk') or 1"], env=env, check=True, capture_output=True)
+        assert 'on its own disk' in _printed_(run.output)
 
     def test_the_output_is_read_where_the_journal_is_read_not_where_it_was_written(self, cluster, tmp_path):
         import shutil
@@ -571,15 +628,16 @@ class TestWatching:
         assert run.record['target_spec']['fields']['queue'] == 'gpu-q' and kubectl.created
 
     def test_a_pending_job_says_why(self, cluster, kubectl):
-        run = kube.submit('true', cluster)
+        run = cluster.submit('true')
         kubectl.conditions = ['Pending']
         assert run.status() == 'pending' and run.reason() == 'insufficient quota for cpu'
         df = kube.jobs([cluster])
         assert list(df['job']) == [run.id] and df['reason'].iloc[0] == 'insufficient quota for cpu'
         assert df['command'].iloc[0] == 'true'
+        assert list(cluster.jobs()['job']) == [run.id]      # the one cluster's, by its method
 
     def test_jobs_are_the_users_unless_all_users(self, cluster, kubectl, monkeypatch):
-        kube.submit('true', cluster)
+        cluster.submit('true')
         cluster.user = 'someone-else'
         assert len(kube.jobs([cluster])) == 0 and len(kube.jobs([cluster], all_users=True)) == 1
 
@@ -589,7 +647,7 @@ class TestRunner:
 
     @pytest.fixture
     def other(self, cluster):
-        return kube.Cluster('otherc', context='ctx2', namespace='ns', queue='q', image='img:1', user='me')
+        return kube.KubeCluster('otherc', context='ctx2', namespace='ns', queue='q', image='img:1', user='me')
 
     def test_every_submit_entry_names_its_cluster_and_run(self, cluster, kubectl, tmp_path):
         p = Single(datalake=str(tmp_path))
@@ -630,7 +688,7 @@ class TestRunner:
         assert [r.id for r in p.runner(cluster).runs()] == [here.id]
         assert [r.id for r in p.runner(other).runs()] == [there.id]
         assert [r.id for r in p.runner().runs()] == [here.id, there.id]
-        assert type(p.runner().runs()[1].target) is kube.Cluster and p.runner().runs()[1].target.name == 'otherc'
+        assert type(p.runner().runs()[1].target) is kube.KubeCluster and p.runner().runs()[1].target.name == 'otherc'
 
     def test_open_and_closed(self, cluster, kubectl, tmp_path):
         p = Single(datalake=str(tmp_path))
@@ -748,7 +806,7 @@ class TestRunner:
 
     def test_runs_journaled_on_the_entry_before_are_still_found(self, cluster, kubectl, tmp_path):
         p = Single(datalake=str(tmp_path))
-        old = kube.submit('true', cluster, block=p.entry)    # the layout of before: submit:* on the entry
+        old = cluster.submit('true', block=p.entry)    # the layout of before: submit:* on the entry
         new = p.runner(cluster).build_tree()
         assert [r.id for r in p.runner().runs()] == [old.id, new.id]
         assert [r.id for r in dbx.runner(Leaf, datalake=str(tmp_path)).runs()] == [old.id, new.id]
@@ -847,7 +905,7 @@ class TestClusterDryRun:
 
 
 # --------------------------------------------------------------------------------------------- #
-# kubedash
+# queues
 # --------------------------------------------------------------------------------------------- #
 
 def _queue_(name, quota, used, *, cohort='co', pending=0, admitted=0, resource='nvidia.com/gpu'):
@@ -858,10 +916,10 @@ def _queue_(name, quota, used, *, cohort='co', pending=0, admitted=0, resource='
                        'pendingWorkloads': pending, 'admittedWorkloads': admitted}}
 
 
-class TestKubedash:
+class TestQueues:
     @pytest.fixture
     def queues(self, monkeypatch, entry_points):
-        entry_points.append({n: kube.Cluster(n, image='i') for n in ('a', 'b', 'gone')})
+        entry_points.append({n: kube.KubeCluster(n, image='i') for n in ('a', 'b', 'gone')})
         answers = {'a': [_queue_('team-q', '24', '20', admitted=2), _queue_('idle-q', '0', '0'),
                          _queue_('mem-q', '187Gi', '93.5Gi', resource='memory')],
                    'b': [_queue_('team-q', '48', '32', pending=1)]}
@@ -873,30 +931,35 @@ class TestKubedash:
         monkeypatch.setattr(kube, '_kubectl_', fake)
 
     def test_one_row_per_queue_with_quota_or_use(self, queues):
-        df = kube.kubedash(['a', 'b'])
+        df = kube.queues(['a', 'b'])
         assert list(df['queue']) == ['team-q', 'team-q']
         row = df[df['cluster'] == 'b'].iloc[0]
         assert (row['quota'], row['used'], row['free'], row['pending']) == (48, 32, 16, 1)
 
     def test_all_and_a_queue_filter(self, queues):
-        assert 'idle-q' in set(kube.kubedash(['a'], all=True)['queue'])
-        assert list(kube.kubedash(['a', 'b'], queues='^team')['cluster']) == ['a', 'b']
+        assert 'idle-q' in set(kube.queues(['a'], all=True)['queue'])
+        assert list(kube.queues(['a', 'b'], queues='^team')['cluster']) == ['a', 'b']
 
     def test_memory_is_in_gib_and_cpu_in_cores(self, queues):
-        assert kube.kubedash(['a'], resource='memory', queues='mem')['used'].iloc[0] == 93.5
-        assert kube.kubedash(['a'], resource='cpu', queues='team')['quota'].iloc[0] == 0.5
+        assert kube.queues(['a'], resource='memory', queues='mem')['used'].iloc[0] == 93.5
+        assert kube.queues(['a'], resource='cpu', queues='team')['quota'].iloc[0] == 0.5
 
     def test_an_unreachable_cluster_is_a_row_with_its_error(self, queues):
-        df = kube.kubedash(['a', 'gone'])
+        df = kube.queues(['a', 'gone'])
         assert 'Unable to connect' in df[df['cluster'] == 'gone']['error'].iloc[0]
 
+    def test_one_clusters_queues_by_its_method_raising_when_unreachable(self, queues):
+        assert list(kube.cluster('b').queues()['quota']) == [48]
+        with pytest.raises(RuntimeError, match='Unable to connect'):
+            kube.cluster('gone').queues()
+
     def test_the_console_script_prints_the_table(self, queues, capsys):
-        assert kube.kubedash_main(['b', '-q', 'team']) is None
+        assert kube.queues_main(['b', '-q', 'team']) is None
         assert 'team-q' in capsys.readouterr().out
 
     def test_by_default_every_entry_point_cluster_and_a_shared_context_once(self, queues, entry_points):
-        entry_points.append([kube.Cluster('a-cpu', context='a', image='i')])
-        df = kube.kubedash()
+        entry_points.append([kube.KubeCluster('a-cpu', context='a', image='i')])
+        df = kube.queues()
         assert sorted(df['cluster']) == ['a', 'b', 'gone'] and list(df['queue'].dropna()) == ['team-q', 'team-q']
 
 

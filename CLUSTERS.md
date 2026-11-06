@@ -554,7 +554,7 @@ work serially: one SFTP connection cannot serve several threads at once.
 | `run.command()` | the run's exec-journal row; `.output()` prints what it printed (section 5) |
 | `dbx.cluster.runs(block)` | the Runs of every submission of a block, from its journal |
 | `dbx.kubejobs [CLUSTER ...] [-s STATUS] [-u USER \| -A]` | my Jobs (`-A`: everyone's) on the `dbx.clusters` entry points' clusters (or those named), newest first: status, GPUs, times, the expression, and Kueue's reason for a pending one. `dbx.kube.jobs(...)` returns the DataFrame. |
-| `dbx.kubedash [CONTEXT ...] [-r RESOURCE] [-q REGEX] [-a]` | each cluster's Kueue queues: quota, used, free, borrowed, pending, admitted; `-r cpu` / `-r memory` (GiB). Contexts default to the `dbx.clusters` entry points' clusters', else kubectl's, one per cluster. `dbx.kube.kubedash(...)` returns the DataFrame. |
+| `dbx.kubedash [CLUSTER ...] [-r RESOURCE] [-q REGEX] [-a]` | the Kueue queues of the `dbx.clusters` entry points' clusters (or those named): quota, used, free, borrowed, pending, admitted; `-r cpu` / `-r memory` (GiB). Clusters sharing a kubectl context are queried once. `dbx.kube.kubedash(...)` returns the DataFrame. |
 
 kubectl itself, for what these do not cover: `kubectl --context C -n NS describe job/<id>`,
 `get workload`, `describe workload <name>`, `get events --sort-by=.lastTimestamp`.
@@ -579,3 +579,66 @@ the journal, `wait`, `runs`, `command` -- the same for every kind.
 - Resources declared by the blocks (`EXECUTORS.md` section 3): today `n_gpus` comes from the pipeline's `n_gpus`.
 - Fan-out: one run per tree.
 - `UNSAFE_copy_from` given the source's storage options, rather than `fsspec_defaults`.
+
+## Appendix: cheatsheet
+
+`dbx`, `dbx.exec` and `dbx.pprint` evaluate their argument as Python statements and return the last one's
+value (`dbx.pprint` prints it). A dotted name is imported first, so `dbx.cluster.clusters()` works, but a
+bare name must already be defined: `dbx clusters` fails with `NameError: name 'clusters' is not defined`.
+`dbx.clusters` is the entry-point group targets are registered under (section 1), not a command.
+
+Set `P` once to a pipeline's expression; the examples below expand it inside their double quotes:
+
+```bash
+P="myproject.pipelines.train('preset')"
+```
+
+**Targets** (`dbx.cluster`: every kind; `dbx.kube`: the Kube ones only).
+
+```bash
+dbx.pprint "dbx.cluster.clusters()"              # every target the dbx.clusters entry points name, by name
+dbx.pprint "dbx.cluster.clusters('kube')"        # of one kind only; = dbx.kube.clusters()
+dbx.pprint "dbx.cluster.cluster('lambda')"       # one Target
+```
+
+**Running a pipeline** (a pipeline's `.runner(target, **options)` is a `Runner`; what it launches is a `Run`, a
+`KubeRun` on Kube).
+
+```bash
+dbx.pprint "$P.runner('lambda', n_gpus=8).build_tree().wait() and $P.entry.valid()"
+dbx.pprint "$P.runner('lambda', dry_run='cluster').build_tree()"    # CPU-only check: imports, code hash
+dbx.pprint "$P.runner('lambda', n_gpus=0, n_cpus=30).launch('<method>', <args>)"   # any entry method
+dbx.pprint "$P.runner('lambda', workdirs={'/mnt/team-x/code': '/mnt/team-x/code'}, venv='/mnt/team-x/venv').build()"
+```
+
+Common options: `n_gpus`, `n_cpus`, `mem_gib`, `venv`, `workdirs`, `env`, `image`, `name`, and `dry_run`
+(`True`: the record only; `'cluster'`: the check above). Sections 2-4.
+
+**Watching and cancelling** (section 6). `runs()` prints as a table whose row `i` is `runs()[i]`.
+
+```bash
+dbx.pprint "$P.runner().runs()"                   # its runs on every target, oldest first
+dbx.pprint "$P.runner('lambda').runs(open=True)"  # only those not complete, failed or cancelled
+dbx.pprint "$P.runner().runs().dash()"            # every column, with the pod and what the run journaled
+dbx.pprint "$P.runner().runs()[-1].status()"      # also .logs(tail=200), .reason(), .wait(), .cancel()
+dbx.pprint "$P.runner().runs()[-1].command().output()"   # what it printed (section 5)
+dbx.pprint "$P.runner('lambda').cancel()"         # every open run there
+dbx.pprint "dbx.runner('myproject.blocks.Train').runs()"   # every Train's, whatever its hash
+dbx.pprint "dbx.cluster.runs($P, 'lambda', open=True)"      # = $P.runner('lambda').runs(open=True)
+```
+
+**Kube Jobs directly** (`dbx.kube`).
+
+```bash
+dbx.kubejobs                                     # my Jobs on every cluster, with why a pending one waits
+dbx.kubejobs lambda -s failed                    # one cluster; -s pending|running|complete|failed
+dbx.kubejobs lambda -A                           # every user's (-u NAME: one other user's)
+dbx.kubedash                                     # every queue's GPU quota and use
+dbx.kubedash lambda -q myteam -r memory          # queues matching a regex; -r cpu|memory; -a every queue
+dbx.pprint "dbx.kube.jobs(['lambda'], status='running')"            # dbx.kubejobs as a DataFrame
+dbx.pprint "dbx.kube.submit('nvidia-smi', 'lambda', n_gpus=1, name='smi')"   # a shell command as a Job
+dbx.pprint "dbx.kube.job('nvidia-smi', 'lambda', n_gpus=1)"         # its manifest, not submitted
+dbx.pprint "dbx.kube.sync('/mnt/team-x/code', 'sftp://myhost/data/code', storage_options={...})"   # copy a tree; workdirs= does this for a run
+```
+
+`dbx.kube.submit` returns a `KubeRun` but journals nothing: it is a shell command, not a pipeline run.

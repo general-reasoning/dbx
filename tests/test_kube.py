@@ -860,7 +860,8 @@ def _queue_(name, quota, used, *, cohort='co', pending=0, admitted=0, resource='
 
 class TestKubedash:
     @pytest.fixture
-    def queues(self, monkeypatch):
+    def queues(self, monkeypatch, entry_points):
+        entry_points.append({n: kube.Cluster(n, image='i') for n in ('a', 'b', 'gone')})
         answers = {'a': [_queue_('team-q', '24', '20', admitted=2), _queue_('idle-q', '0', '0'),
                          _queue_('mem-q', '187Gi', '93.5Gi', resource='memory')],
                    'b': [_queue_('team-q', '48', '32', pending=1)]}
@@ -874,24 +875,29 @@ class TestKubedash:
     def test_one_row_per_queue_with_quota_or_use(self, queues):
         df = kube.kubedash(['a', 'b'])
         assert list(df['queue']) == ['team-q', 'team-q']
-        row = df[df['context'] == 'b'].iloc[0]
+        row = df[df['cluster'] == 'b'].iloc[0]
         assert (row['quota'], row['used'], row['free'], row['pending']) == (48, 32, 16, 1)
 
     def test_all_and_a_queue_filter(self, queues):
         assert 'idle-q' in set(kube.kubedash(['a'], all=True)['queue'])
-        assert list(kube.kubedash(['a', 'b'], queues='^team')['context']) == ['a', 'b']
+        assert list(kube.kubedash(['a', 'b'], queues='^team')['cluster']) == ['a', 'b']
 
     def test_memory_is_in_gib_and_cpu_in_cores(self, queues):
         assert kube.kubedash(['a'], resource='memory', queues='mem')['used'].iloc[0] == 93.5
         assert kube.kubedash(['a'], resource='cpu', queues='team')['quota'].iloc[0] == 0.5
 
-    def test_an_unreachable_context_is_a_row_with_its_error(self, queues):
+    def test_an_unreachable_cluster_is_a_row_with_its_error(self, queues):
         df = kube.kubedash(['a', 'gone'])
-        assert 'Unable to connect' in df[df['context'] == 'gone']['error'].iloc[0]
+        assert 'Unable to connect' in df[df['cluster'] == 'gone']['error'].iloc[0]
 
     def test_the_console_script_prints_the_table(self, queues, capsys):
         assert kube.kubedash_main(['b', '-q', 'team']) is None
         assert 'team-q' in capsys.readouterr().out
+
+    def test_by_default_every_entry_point_cluster_and_a_shared_context_once(self, queues, entry_points):
+        entry_points.append([kube.Cluster('a-cpu', context='a', image='i')])
+        df = kube.kubedash()
+        assert sorted(df['cluster']) == ['a', 'b', 'gone'] and list(df['queue'].dropna()) == ['team-q', 'team-q']
 
 
 def _sftp_options_():

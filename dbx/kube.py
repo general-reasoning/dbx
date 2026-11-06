@@ -427,24 +427,26 @@ def jobs_main(argv: list | None = None) -> None:
         print(df.to_string(index=False))
 
 
-def kubedash(contexts: list | None = None, *, resource: str = 'nvidia.com/gpu', queues: str | None = None,
+def kubedash(clusters_: list | None = None, *, resource: str = 'nvidia.com/gpu', queues: str | None = None,
              all: bool = False) -> pd.DataFrame:
-    """The Kueue ClusterQueues of each kubectl context in *contexts*: their *resource* quota, use and workloads.
+    """The Kueue ClusterQueues each cluster sees -- of *clusters_* (Clusters, or their names; default every `dbx.clusters` one) -- their *resource* quota, use and workloads.
 
-    One row per queue: `context, queue, cohort, quota, used, free, borrowed, pending, admitted`, the
-    quantities *resource*'s summed over the queue's flavors (memory in GiB). *contexts* default to
-    the `dbx.clusters` entry points' clusters', else kubectl's, one per cluster. *queues* is a regex
-    the queue name must match; queues with no quota, no use and no workloads are left out unless
-    *all*. A context that cannot be reached is a row with its error.
+    One row per queue: `cluster, queue, cohort, quota, used, free, borrowed, pending, admitted`, the
+    quantities *resource*'s summed over the queue's flavors (memory in GiB). Clusters sharing a
+    kubectl context are queried once, under the first one's name. *queues* is a regex the queue name
+    must match; queues with no quota, no use and no workloads are left out unless *all*. A cluster
+    that cannot be reached is a row with its error.
     """
-    if not contexts:
-        contexts = sorted({c.context for c in clusters().values()}) or _contexts_()
-    rows = []
-    for ctx in contexts:
+    cs = [cluster(n) for n in clusters_] if clusters_ else list(clusters().values())
+    rows, seen = [], set()
+    for c in cs:
+        if c.context in seen:
+            continue
+        seen.add(c.context)
         try:
-            items = json.loads(_kubectl_(ctx, 'get', 'clusterqueue', '-o', 'json'))['items']
+            items = json.loads(_kubectl_(c.context, 'get', 'clusterqueue', '-o', 'json'))['items']
         except Exception as e:
-            rows.append(dict(context=ctx, queue=None, error=str(e).splitlines()[0][:200]))
+            rows.append(dict(cluster=c.name, queue=None, error=str(e).splitlines()[0][:200]))
             continue
         for q in items:
             name = q['metadata']['name']
@@ -460,10 +462,10 @@ def kubedash(contexts: list | None = None, *, resource: str = 'nvidia.com/gpu', 
             pending, admitted = status.get('pendingWorkloads', 0), status.get('admittedWorkloads', 0)
             if not all and not (quota or used or pending or admitted):
                 continue
-            rows.append(dict(context=ctx, queue=name, cohort=spec.get('cohortName', spec.get('cohort')),
+            rows.append(dict(cluster=c.name, queue=name, cohort=spec.get('cohortName', spec.get('cohort')),
                              quota=quota, used=used, free=max(quota - used, 0), borrowed=borrowed,
                              pending=pending, admitted=admitted))
-    df = pd.DataFrame(rows, columns=['context', 'queue', 'cohort', 'quota', 'used', 'free', 'borrowed',
+    df = pd.DataFrame(rows, columns=['cluster', 'queue', 'cohort', 'quota', 'used', 'free', 'borrowed',
                                      'pending', 'admitted'] + (['error'] if any('error' in r for r in rows) else []))
     for col in ('quota', 'used', 'free', 'borrowed'):
         if df[col].dropna().apply(lambda x: float(x).is_integer()).all():
@@ -472,15 +474,15 @@ def kubedash(contexts: list | None = None, *, resource: str = 'nvidia.com/gpu', 
 
 
 def kubedash_main(argv: list | None = None) -> None:
-    """`dbx.kubedash [CONTEXT ...] [-r RESOURCE] [-q REGEX] [-a]`: print `kubedash`'s table (`kubedash` returns it)."""
+    """`dbx.kubedash [CLUSTER ...] [-r RESOURCE] [-q REGEX] [-a]`: print `kubedash`'s table (`kubedash` returns it)."""
     p = argparse.ArgumentParser(prog='dbx.kubedash', description=kubedash.__doc__.split('\n')[0])
-    p.add_argument('contexts', nargs='*', help="kubectl contexts to query (default: kubectl's, one per cluster)")
+    p.add_argument('clusters', nargs='*', help="clusters to query, by name (default: every one the dbx.clusters entry points name)")
     p.add_argument('-r', '--resource', default='nvidia.com/gpu',
                    help="the resource to tabulate: nvidia.com/gpu (default), cpu, memory, ...")
     p.add_argument('-q', '--queues', help="only the queues whose name matches this regex")
     p.add_argument('-a', '--all', action='store_true', help="include queues with no quota, use or workloads")
     a = p.parse_args(argv)
-    df = kubedash(a.contexts, resource=a.resource, queues=a.queues, all=a.all)
+    df = kubedash(a.clusters, resource=a.resource, queues=a.queues, all=a.all)
     with pd.option_context('display.max_rows', None, 'display.max_columns', None, 'display.width', 200):
         print(df.to_string(index=False))
 
@@ -792,13 +794,3 @@ def _quantity_(q, resource: str = '') -> float:
     if unit == 'm':
         return n / 1000
     return n / 2 ** 30 if resource in ('memory', 'ephemeral-storage') else n
-
-
-def _contexts_() -> list:
-    """kubectl's contexts, one per cluster -- the first by name of those naming the same one."""
-    cfg = json.loads(subprocess.run(['kubectl', 'config', 'view', '-o', 'json'], capture_output=True, text=True,
-                                    check=True).stdout)
-    first = {}
-    for ctx in sorted(cfg.get('contexts') or [], key=lambda x: x['name']):
-        first.setdefault(ctx['context'].get('cluster'), ctx['name'])
-    return sorted(first.values())

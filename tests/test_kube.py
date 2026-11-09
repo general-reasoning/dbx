@@ -206,7 +206,7 @@ class TestWorkdirs:
         assert cluster.fsspec_options() == {'username': 'u'}
         cluster.storage_options = 'tests.test_kube:_sftp_options_'
         assert cluster.fsspec_options() == {'username': 'from-a-function'}
-        assert dbxcluster._rebuild_({'target_spec': dbxcluster._spec_(cluster)}) == cluster
+        assert dbxcluster._rebuild_({'cluster_spec': dbxcluster._spec_(cluster)}) == cluster
         old = dbxcluster._spec_(cluster) | {'class': 'dbx.kube:Cluster'}    # as journaled before the rename
         assert dbxcluster._rebuild_({'target_spec': old}) == cluster
 
@@ -457,8 +457,8 @@ class TestSubmit:
         entry_points.clear()
         assert kube.clusters() == {}
 
-    def test_an_entry_point_may_name_one_target_or_a_list(self, entry_points):
-        entry_points.extend([kube.KubeCluster('one', image='i'), [kube.KubeCluster('two', image='i'), 'not a target']])
+    def test_an_entry_point_may_name_one_cluster_or_a_list(self, entry_points):
+        entry_points.extend([kube.KubeCluster('one', image='i'), [kube.KubeCluster('two', image='i'), 'not a cluster']])
         assert sorted(kube.clusters()) == ['one', 'two']
 
 
@@ -522,7 +522,7 @@ class TestPipelineRunner:
             Single(datalake=str(tmp_path)).runner(cluster).build(object())
         assert kubectl.calls == []
 
-    def test_the_runner_is_of_the_targets_kind_and_refuses_options_it_does_not_take(self, cluster, tmp_path):
+    def test_the_runner_is_of_the_clusters_kind_and_refuses_options_it_does_not_take(self, cluster, tmp_path):
         p = Single(datalake=str(tmp_path))
         assert type(p.runner(cluster)) is kube.KubeRunner
         with pytest.raises(TypeError, match='no option partition'):
@@ -535,7 +535,7 @@ class TestPipelineRunner:
         with pytest.raises(AttributeError, match='no method'):
             Single(datalake=str(tmp_path)).runner(cluster).launch('no_such_method')
 
-    def test_a_runner_with_no_target_launches_nothing(self, kubectl, tmp_path):
+    def test_a_runner_with_no_cluster_launches_nothing(self, kubectl, tmp_path):
         with pytest.raises(TypeError, match='launches nothing'):
             Single(datalake=str(tmp_path)).runner().build_tree()
         assert kubectl.calls == []
@@ -615,17 +615,17 @@ class TestWatching:
         runs[1].wait(poll=0)
         assert _pipe_events_(p) == ['job:submit', 'job:complete', 'job:submit', 'job:complete']
 
-    def test_a_runs_target_comes_back_from_its_record_not_by_its_name(self, cluster, kubectl, entry_points, tmp_path):
+    def test_a_runs_cluster_comes_back_from_its_record_not_by_its_name(self, cluster, kubectl, entry_points, tmp_path):
         p = Single(datalake=str(tmp_path))
         p.runner(cluster).build_tree()
         assert kube.clusters() == {}            # nothing to look 'testc' up in
         (run,) = dbx.cluster.runs(p)
-        assert run.target == cluster and run.target is not cluster
+        assert run.cluster == cluster and run.cluster is not cluster
 
-    def test_a_name_submits_to_the_entry_points_target(self, cluster, kubectl, entry_points, tmp_path):
+    def test_a_name_submits_to_the_entry_points_cluster(self, cluster, kubectl, entry_points, tmp_path):
         entry_points.append({'testc': cluster})
         run = Single(datalake=str(tmp_path)).runner('testc').build_tree()
-        assert run.record['target_spec']['fields']['queue'] == 'gpu-q' and kubectl.created
+        assert run.record['cluster_spec']['fields']['queue'] == 'gpu-q' and kubectl.created
 
     def test_a_pending_job_says_why(self, cluster, kubectl):
         run = cluster.submit('true')
@@ -643,7 +643,7 @@ class TestWatching:
 
 
 class TestRunner:
-    """A Runner's runs: scoped by hash, by target, or (by class or anchor) not at all; listed, tabled and cancelled."""
+    """A Runner's runs: scoped by hash, by cluster, or (by class or anchor) not at all; listed, tabled and cancelled."""
 
     @pytest.fixture
     def other(self, cluster):
@@ -682,13 +682,13 @@ class TestRunner:
         assert [r.id for r in dbx.runner(Leaf, datalake=str(tmp_path)).runs()] == everyone
         assert [r.id for r in dbx.runner(two.entry.anchor, datalake=str(tmp_path)).runs()] == everyone
 
-    def test_runs_on_a_target_are_those_on_it(self, cluster, other, kubectl, tmp_path):
+    def test_runs_on_a_cluster_are_those_on_it(self, cluster, other, kubectl, tmp_path):
         p = Single(datalake=str(tmp_path))
         here, there = p.runner(cluster).build_tree(), p.runner(other).build_tree()
         assert [r.id for r in p.runner(cluster).runs()] == [here.id]
         assert [r.id for r in p.runner(other).runs()] == [there.id]
         assert [r.id for r in p.runner().runs()] == [here.id, there.id]
-        assert type(p.runner().runs()[1].target) is kube.KubeCluster and p.runner().runs()[1].target.name == 'otherc'
+        assert type(p.runner().runs()[1].cluster) is kube.KubeCluster and p.runner().runs()[1].cluster.name == 'otherc'
 
     def test_open_and_closed(self, cluster, kubectl, tmp_path):
         p = Single(datalake=str(tmp_path))

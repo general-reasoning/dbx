@@ -260,7 +260,7 @@ class KubeRun(Run):
         """The Job's pod log: the last *tail* lines, all when -1; with *follow*, printed as it grows, until the pod ends."""
         if not follow or self.id is None:
             return super().logs(tail)
-        subprocess.run(['kubectl', '--context', self.target.context, '-n', self.target.namespace, 'logs', '-f',
+        subprocess.run(['kubectl', '--context', self.cluster.context, '-n', self.cluster.namespace, 'logs', '-f',
                         f"job/{self.id}", f"--tail={tail}"])
         return ''
 
@@ -268,7 +268,7 @@ class KubeRun(Run):
         """Why the Job is not running yet: Kueue's message on its Workload (e.g. a quota it waits on); None once admitted."""
         if self.id is None:
             return None
-        return _workload_reasons_(self.target).get(self.id)
+        return _workload_reasons_(self.cluster).get(self.id)
 
     # 3. Accessors --------------------------------------------------------------------------- #
 
@@ -288,10 +288,10 @@ class KubeRun(Run):
         self._kubectl_('delete', f"job/{self.id}", '--cascade=background')
 
     def _where_(self) -> str:
-        return f"kube:{self.target.name} job/{self.id}"
+        return f"kube:{self.cluster.name} job/{self.id}"
 
     def _kubectl_(self, *args) -> str:
-        return _kubectl_(self.target.context, '-n', self.target.namespace, *args)
+        return _kubectl_(self.cluster.context, '-n', self.cluster.namespace, *args)
 
 
 class KubeRunner(Runner):
@@ -314,7 +314,7 @@ class KubeRunner(Runner):
         return dict(n_gpus=0, n_cpus=2, mem_gib=8, ray=False)
 
     def _prepare_(self, command: str, **options) -> dict:
-        c = self._target_
+        c = self._cluster_
         if options.get('pack', c.options.get('pack')) and c.storage:
             # Planned here, so the Job unpacks what _stage_ will send: each tree's digest names its archive.
             workdirs = {**c.options.get('workdirs', {}), **(options.get('workdirs') or {})}
@@ -329,18 +329,18 @@ class KubeRunner(Runner):
 
     def _dry_run_(self, record: dict, dry_run) -> None:
         if dry_run == 'server':
-            _kubectl_(self._target_.context, 'create', '-f', '-', '--dry-run=server', '-o', 'name',
+            _kubectl_(self._cluster_.context, 'create', '-f', '-', '--dry-run=server', '-o', 'name',
                       input=json.dumps(record['manifest']))
 
     def _stage_(self, record: dict, **options) -> dict:
         packs = json.loads(record['manifest']['metadata']['annotations'].get('dbx/packs', '[]'))
         if packs:
-            return dict(workdirs={p['src']: _send_pack_(self._target_, p) for p in packs})
-        workdirs = {**self._target_.options.get('workdirs', {}), **(options.get('workdirs') or {})}
-        return dict(workdirs=_sync_workdirs_(self._target_, workdirs) if workdirs else {})
+            return dict(workdirs={p['src']: _send_pack_(self._cluster_, p) for p in packs})
+        workdirs = {**self._cluster_.options.get('workdirs', {}), **(options.get('workdirs') or {})}
+        return dict(workdirs=_sync_workdirs_(self._cluster_, workdirs) if workdirs else {})
 
     def _create_(self, record: dict) -> None:
-        _kubectl_(self._target_.context, 'create', '-f', '-', '-o', 'name', input=json.dumps(record['manifest']))
+        _kubectl_(self._cluster_.context, 'create', '-f', '-', '-o', 'name', input=json.dumps(record['manifest']))
 
 
 KubeCluster.MODE, KubeCluster.RUNNER = 'kube', KubeRunner

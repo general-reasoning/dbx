@@ -146,17 +146,17 @@ class Pipeline(Datablock):
         explicit = set(self.__explicit_params__())
         return {k: getattr(self, k) for k in self.parameters if k not in explicit and k != 'log'}
 
-    def runner(self, target=None, *, mode: str | None = None, force: bool = False, **options) -> 'Runner':
-        """This pipeline's runs on *target*: a `dbx.cluster.Runner` of the target's kind, which launches, lists, watches and cancels them.
+    def runner(self, cluster=None, *, mode: str | None = None, force: bool = False, **options) -> 'Runner':
+        """This pipeline's runs on *cluster*: a `dbx.cluster.Runner` of the cluster's kind, which launches, lists, watches and cancels them.
 
             r = p.runner(LAMBDA, n_gpus=8)
             r.build_tree()                           # a Run -- here a dbx.kube.KubeRun
             r.launch('try_specialize_tree', ...)
             r.runs()                                 # its runs on LAMBDA: prints as their dash
             r.runs()[-1].cancel(), r.cancel()        # cancel the last row; all still pending or running
-            p.runner().runs().dash()                 # its runs on every target, the whole table
+            p.runner().runs().dash()                 # its runs on every cluster, the whole table
 
-        *target* is where (`dbx.cluster`): a value, e.g. a `dbx.kube.KubeCluster`, or the name a
+        *cluster* is where (`dbx.cluster`): a value, e.g. a `dbx.kube.KubeCluster`, or the name a
         `dbx.clusters` entry point gives one; with none, the Runner lists runs and launches nothing.
         *mode*, when given, is the kind it must be ('kube'). *options* are the kind's --
         `dbx.kube.KubeCluster.job`'s for 'kube' -- refused here when it does not take them: among them the pod's
@@ -167,7 +167,7 @@ class Pipeline(Datablock):
         else env's, else the cluster's (`dbx.cluster.Runner._run_datalake_`). *force* launches `build`/`build_tree` of an entrypoint
         that is valid here.
         """
-        return _cluster_.runner(self, target, mode=mode, force=force, **options)
+        return _cluster_.runner(self, cluster, mode=mode, force=force, **options)
 
 
 class PipelineFromEntrypointFn(Pipeline):

@@ -1,6 +1,6 @@
 """Running on a cluster: a pipeline's call, or a shell command, run somewhere else, and journaled here.
 
-A run goes to a *cluster* -- its *target*: a Kubernetes cluster with Kueue (`dbx.kube.KubeCluster`), and
+A run goes to a *cluster*: a Kubernetes cluster with Kueue (`dbx.kube.KubeCluster`), and
 later a Slurm partition of one (`SlurmCluster`); every kind subclasses `Cluster`. It is a value, passed where it is
 used -- nothing is registered:
 
@@ -14,8 +14,8 @@ looks it up, each time, among the clusters the installed packages name as entry 
     [project.entry-points."dbx.clusters"]
     myproject = "myproject.clusters:CLUSTERS"
 
-`Pipeline.runner(target, **options)` hands out the pipeline's runs as a `Runner` of the target's
-kind -- `target.RUNNER`, e.g. `dbx.kube.KubeRunner` -- whose `build_tree()` (or `launch('<method>',
+`Pipeline.runner(cluster, **options)` hands out the pipeline's runs as a `Runner` of the cluster's
+kind -- `cluster.RUNNER`, e.g. `dbx.kube.KubeRunner` -- whose `build_tree()` (or `launch('<method>',
 ...)`) runs there: `dbx.eval('<the pipeline's quote>').entry.<method>(...)`, under `dbx.pprint`,
 in the pipeline's own datalake if it was given one, else the runner's `env`'s `DBX_DATALAKE`, else the cluster's. It returns a `Run`: `status`, `wait`, `logs`,
 `cancel`.
@@ -25,7 +25,7 @@ pipeline's `entrypath` and the run's `cluster` and `run` (its id). The submitter
 of the datalake it submitted from:
 
     job:submit      before it is launched; its note (a file) the whole record, as JSON: the kind and
-                    the target itself (`target_spec`), the run's id, the method, the command and
+                    the cluster itself (`cluster_spec`), the run's id, the method, the command and
                     expression, the submitting session, and what the kind adds -- a Kube Job's
                     manifest, image, revision, synced workdirs
     job:complete    when it sees it complete: `Run.wait`, or a `Runs.dash` that asks the cluster
@@ -43,7 +43,7 @@ on `(session, run)`: the run joins the submitting command's session (`DBX_SESSIO
 sets `DBX_CLUSTER` and `DBX_RUN`, so every entry it writes -- its own `job:*`, each datablock's
 `build:*`, its exec-journal row -- names the run. A Runner -- `Pipeline.runner`, or `runner(what)`
 of a datablock, a Datablock class or anchor, or a Pipeline class -- reads them back (`runs`,
-which prints as their dash, and `cancel`), each run as its Run, its target rebuilt from the record -- to `status`,
+which prints as their dash, and `cancel`), each run as its Run, its cluster rebuilt from the record -- to `status`,
 `logs`, `wait` on or `cancel` from another process, a later session. Runs journaled before
 2026-11-04 were `submit:BEGIN`, `submit:END`, `submit:ERROR`, `submit:CANCEL` -- some on the
 pipeline's entry, in its own journal -- and are read as these.
@@ -58,7 +58,7 @@ cluster that mounts it, on the cluster's own machines otherwise, or by URL (`Kub
 
 `dry_run`, an option of every kind: True prepares the record and launches nothing; a kind may check
 more without launching (`'server'`: Kube's API server validates the Job); `'cluster'` launches a
-small run on the target that only evaluates the pipeline's quote there and `verify`s the entry --
+small run on the cluster that only evaluates the pipeline's quote there and `verify`s the entry --
 every import, the venv, the revision, the workdirs, the datalake, the same hash -- and builds nothing.
 """
 import ast
@@ -114,8 +114,8 @@ class Run:
     A kind implements `_status_` -- 'pending', 'running', 'complete', 'failed' -- `_logs_` and `_cancel_`.
     """
 
-    def __init__(self, target: Cluster, id: str | None, record: dict, *, on=None, skipped: str | None = None):
-        self.target, self.id, self.record, self.on, self.skipped = target, id, record, on, skipped
+    def __init__(self, cluster: Cluster, id: str | None, record: dict, *, on=None, skipped: str | None = None):
+        self.cluster, self.id, self.record, self.on, self.skipped = cluster, id, record, on, skipped
         self._closed_ = False
         # The journaled `(event, datetime)` that closed it, or None; set by `Runner.runs`.
         self.closing = None
@@ -128,9 +128,9 @@ class Run:
         """Its cluster, id, method, when submitted, and whether closed -- what is journaled; the cluster is not asked."""
         if self.id is None:
             what = f"skipped: {self.skipped}" if self.skipped else 'dry run'
-            return f"{type(self).__name__}({self.target.MODE}:{self.target.name}, {what})"
+            return f"{type(self).__name__}({self.cluster.MODE}:{self.cluster.name}, {what})"
         state = _CLOSED_STATUS_.get(self.closing[0]) if self.closing else ('closed' if self._closed_ else 'open')
-        return (f"{type(self).__name__}({self.target.name}, {self.id}, {self.record.get('method') or '?'}, "
+        return (f"{type(self).__name__}({self.cluster.name}, {self.id}, {self.record.get('method') or '?'}, "
                 f"submitted {self.submitted:%Y-%m-%d %H:%M}, {state})")
 
     @property
@@ -233,13 +233,13 @@ class Run:
         return execjournal(iloc=0, **where)
 
     def _where_(self) -> str:
-        return f"{self.target.MODE}:{self.target.name} {self.id}"
+        return f"{self.cluster.MODE}:{self.cluster.name} {self.id}"
 
     def _close_(self, event: str, note: str) -> None:
         if self.on is None and self._journal_on_ is not None and not self._closed_:
             self.on = self._journal_on_()
         if self.on is not None and not self._closed_:
-            _journal_(self.on, event, note=note, inline_note=True, cluster=self.target.name, run=self.id)
+            _journal_(self.on, event, note=note, inline_note=True, cluster=self.cluster.name, run=self.id)
             self.closing = (event, datetime.datetime.now().isoformat())
         self._closed_ = True
 
@@ -320,7 +320,7 @@ class Runs(list):
                 elapsed = until - submitted if until is not None else None
             m = re.search(r"\.entry\.(\w+)\(|dbx\.cluster\.(verify)\(", run.record.get('expression') or '')
             method = run.record.get('method') or ((m.group(1) or m.group(2)) if m else None)
-            rows.append(dict(run=run.id, cluster=run.target.name,
+            rows.append(dict(run=run.id, cluster=run.cluster.name,
                              entry=os.path.basename(str(getattr(run, 'entrypath', None)).rstrip('/')),
                              method=method, status=status, submitted=submitted, started=started, ended=ended,
                              observed=observed, elapsed=_round_(elapsed) if elapsed is not None else None,
@@ -333,8 +333,8 @@ class Runs(list):
 class Runner:
     """The runs of a pipeline, a datablock or a Datablock class: what launches them, and what lists, watches and cancels them.
 
-    `Pipeline.runner(target, **options)` hands out the pipeline's, of the target's kind --
-    `target.RUNNER`, e.g. `dbx.kube.KubeRunner` -- and `runner(what, target)` anyone's:
+    `Pipeline.runner(cluster, **options)` hands out the pipeline's, of the cluster's kind --
+    `cluster.RUNNER`, e.g. `dbx.kube.KubeRunner` -- and `runner(what, cluster)` anyone's:
 
         r = my_pipeline('preset').runner(LAMBDA, n_gpus=8)
         r.build_tree()                          # a Run, of dbx.eval('<the quote>').entry.build_tree() there
@@ -348,14 +348,14 @@ class Runner:
     the same hashes, the same operational kwargs -- so the run builds the very datablocks a call
     here would. The arguments must be literals (`ast.literal_eval(repr(x)) == x`): they travel as
     text. `build` and `build_tree` of an entry already valid here launch nothing -- a Run `skipped`
-    -- unless `force`. Only a pipeline's Runner with a target launches.
+    -- unless `force`. Only a pipeline's Runner with a cluster launches.
 
     Which runs `runs` and `cancel` see: a pipeline's are those it launched (in the
     `PipeJournal`, under its hash); a datablock's those whose Job wrote its build entries, and those
     of the pipelines it is the entry of; a Datablock class's or an anchor's, those of every
     datablock of it, whatever its hash; a Pipeline class's, those of every pipeline of it. With
     *adopted*, a pipeline's and a datablock's add the runs of the builds it adopted through a
-    specialization. Only those on the target, when there is one.
+    specialization. Only those on the cluster, when there is one.
 
     A kind subclasses it: `_check_` refuses options it does not take, at construction; `_prepare_`
     makes the record (the run's id among it); `_stage_` gets what the run needs in place;
@@ -367,31 +367,31 @@ class Runner:
 
     # 1. Protocol ---------------------------------------------------------------------------- #
 
-    def __init__(self, what=None, target: 'str | Cluster | None' = None, *, mode: str | None = None,
+    def __init__(self, what=None, cluster: 'str | Cluster | None' = None, *, mode: str | None = None,
                  force: bool = False, datalake: str | None = None, **options):
         from .pipelines import Pipeline  # pipelines imports this module
         self._what_, self._force_ = what, force
-        self._target_ = _target_of_(target, mode) if target is not None else None
+        self._cluster_ = _cluster_of_(cluster, mode) if cluster is not None else None
         self._pipeline_ = what if isinstance(what, Pipeline) else None
         self._dblk_ = what.entry if self._pipeline_ is not None else (
             what if what is not None and not isinstance(what, (str, type)) else None)
         self._datalake_ = datalake or getattr(self._dblk_, 'datalake', None)
-        if self._target_ is not None:
+        if self._cluster_ is not None:
             self._check_(options)
         self._options_ = options
 
     def __repr__(self):
         what = self._pipeline_.quote() if self._pipeline_ is not None else (
             self._dblk_.anchorkeypath if self._dblk_ is not None else self._anchor_())
-        return f"{type(self).__name__}({what!r}, {self.target.name if self.target else None!r})"
+        return f"{type(self).__name__}({what!r}, {self.cluster.name if self.cluster else None!r})"
 
     # 2. Declared API ------------------------------------------------------------------------ #
 
     def launch(self, method: str, *args, **kwargs) -> Run:
-        """Launch `entry.<method>(*args, **kwargs)` on the target; its Run."""
-        if self._pipeline_ is None or self._target_ is None:
-            raise TypeError(f"{self!r} launches nothing: only a pipeline's Runner with a target does "
-                            f"(`Pipeline.runner(target)`)")
+        """Launch `entry.<method>(*args, **kwargs)` on the cluster; its Run."""
+        if self._pipeline_ is None or self._cluster_ is None:
+            raise TypeError(f"{self!r} launches nothing: only a pipeline's Runner with a cluster does "
+                            f"(`Pipeline.runner(cluster)`)")
         entry = self._pipeline_.entry
         if not callable(getattr(type(entry), method, None)):
             raise AttributeError(f"{type(entry).__name__} has no method {method!r} to ship")
@@ -404,7 +404,7 @@ class Runner:
         datalake = self._run_datalake_(options.get('env') or {})
         if method in ('build', 'build_tree') and not self._force_ and not check \
                 and datalake == self._pipeline_.datalake and entry.valid():
-            return self.RUN(self._target_, None, {}, on=self._pipeline_, skipped=f"{entry.anchorkeypath} is valid here")
+            return self.RUN(self._cluster_, None, {}, on=self._pipeline_, skipped=f"{entry.anchorkeypath} is valid here")
         shipped = self._pipeline_.quote()
         call = ''.join([f", {a!r}" for a in args] + [f", {k}={v!r}" for k, v in kwargs.items()])
         expression = f"dbx.cluster.run(dbx.eval({shipped!r}), {method!r}{call})"
@@ -434,7 +434,7 @@ class Runner:
         """The runs in scope (see the class), oldest first, as `Runs`, from the journal; only those still open, or only those closed, by *open*.
 
         A run whose `job:complete`, `job:fail` or `job:cancel` is journaled is closed: its
-        `wait` journals nothing more. Its target is rebuilt from its record. Printed, `Runs` is
+        `wait` journals nothing more. Its cluster is rebuilt from its record. Printed, `Runs` is
         their dash, each row numbered as its index: `runs()[-1].cancel()` cancels the last row;
         `runs().dash()` is the whole table.
         """
@@ -461,8 +461,9 @@ class Runner:
         return self._dblk_
 
     @property
-    def target(self) -> 'Cluster | None':
-        return self._target_
+    def cluster(self) -> 'Cluster | None':
+        """The cluster this Runner launches on -- its `jobs()`, `queues()` -- or None for one listing every cluster's runs."""
+        return self._cluster_
 
     # 4. Helpers ----------------------------------------------------------------------------- #
 
@@ -476,7 +477,7 @@ class Runner:
         """
         if self._pipeline_._datalake_ is not None:
             return self._pipeline_.datalake
-        cluster_env = (getattr(self._target_, 'options', None) or {}).get('env') or {}
+        cluster_env = (getattr(self._cluster_, 'options', None) or {}).get('env') or {}
         return env.get('DBX_DATALAKE') or cluster_env.get('DBX_DATALAKE') or self._pipeline_.datalake
 
     def _launch_(self, command: str, *, on=None, expression: str | None = None, method: str | None = None,
@@ -485,16 +486,16 @@ class Runner:
         options = {**self._options_, **options}
         dry_run = options.pop('dry_run', False)
         dry_run = False if dry_run == 'cluster' else dry_run  # A check is a run: launch made it one.
-        record = dict(executor=self._target_.MODE, target=self._target_.name, target_spec=_spec_(self._target_),
+        record = dict(executor=self._cluster_.MODE, cluster=self._cluster_.name, cluster_spec=_spec_(self._cluster_),
                       command=command, expression=expression, method=method, session=_session_(),
                       pipeline_anchor=getattr(on, 'anchor', None) if _is_pipeline_(on) else None,
                       submitted=datetime.datetime.now().isoformat())
         record.update(self._prepare_(command, **options))
         if dry_run:
             self._dry_run_(record, dry_run)
-            return self.RUN(self._target_, None, record)
+            return self.RUN(self._cluster_, None, record)
         record.update(self._stage_(record, **options))
-        where = dict(cluster=self._target_.name, run=record['id'])
+        where = dict(cluster=self._cluster_.name, run=record['id'])
         if on is not None:
             _journal_(on, SUBMIT, note=json.dumps(record, indent=1, default=str), **where)
         try:
@@ -502,10 +503,10 @@ class Runner:
         except Exception as e:
             if on is not None:
                 _journal_(on, FAIL, inline_note=True,
-                          note=f"{self._target_.MODE}:{self._target_.name} {record.get('id')} not launched: {e}",
+                          note=f"{self._cluster_.MODE}:{self._cluster_.name} {record.get('id')} not launched: {e}",
                           **where)
             raise
-        return self.RUN(self._target_, record['id'], record, on=on)
+        return self.RUN(self._cluster_, record['id'], record, on=on)
 
     def _journaled_(self, adopted: bool) -> list:
         """The runs in scope, oldest first, each as `(Run, its job:submit row)`; a Run's `closing` is `(event, datetime)` or None.
@@ -523,8 +524,8 @@ class Runner:
         rows = self._submit_rows_(adopted)
         if rows.empty:
             return []
-        if self._target_ is not None:
-            rows = rows[rows['cluster'].isna() | (rows['cluster'] == self._target_.name)]
+        if self._cluster_ is not None:
+            rows = rows[rows['cluster'].isna() | (rows['cluster'] == self._cluster_.name)]
         rows = rows.assign(event=rows['event'].replace(_JOURNALED_AS_))
         rows = rows[rows['event'].isin((SUBMIT, COMPLETE, FAIL, CANCEL))].sort_values('datetime')
         begins, closings = rows[rows['event'] == SUBMIT], rows[rows['event'] != SUBMIT]
@@ -532,7 +533,7 @@ class Runner:
         for _, row in begins.drop_duplicates('id').iterrows():
             with open(row['note']) as f:
                 record = json.load(f)
-            if self._target_ is not None and record.get('target') != self._target_.name:
+            if self._cluster_ is not None and _cluster_name_(record) != self._cluster_.name:
                 continue
             t = _rebuild_(record)
             if self._pipeline_ is not None and row['origin'] == 'pipe' and row['hash'] == self._pipeline_.hash:
@@ -636,9 +637,9 @@ def cluster(t: 'str | Cluster', mode: str | None = None) -> Cluster:
     return t
 
 
-def runner(what, target: 'str | Cluster | None' = None, *, mode: str | None = None, force: bool = False,
+def runner(what, cluster: 'str | Cluster | None' = None, *, mode: str | None = None, force: bool = False,
            datalake: str | None = None, **options) -> Runner:
-    """The `Runner` of *what* on *target* -- of the target's kind, or a plain one with no target.
+    """The `Runner` of *what* on *cluster* -- of the cluster's kind, or a plain one with no cluster.
 
     *what* is a Pipeline (its entry's runs, and what launches them: `Pipeline.runner`), a datablock
     (its runs), or a Datablock class or anchor (the runs of every datablock of it, whatever its
@@ -647,14 +648,14 @@ def runner(what, target: 'str | Cluster | None' = None, *, mode: str | None = No
         dbx.runner('sctx.datablocks.SCQwenVLContextModelEval').runs()
         dbx.runner(p, 'crusoe').cancel()
     """
-    t = _target_of_(target, mode) if target is not None else None
+    t = _cluster_of_(cluster, mode) if cluster is not None else None
     return (t.RUNNER if t is not None else Runner)(what, t, force=force, datalake=datalake, **options)
 
 
-def runs(what, target: 'str | Cluster | None' = None, *, open: bool | None = None, adopted: bool = False,
+def runs(what, cluster: 'str | Cluster | None' = None, *, open: bool | None = None, adopted: bool = False,
          datalake: str | None = None) -> list:
-    """`runner(what, target, datalake=datalake).runs(open=open, adopted=adopted)`: the runs of a pipeline, a datablock, or a class or anchor."""
-    return runner(what, target, datalake=datalake).runs(open=open, adopted=adopted)
+    """`runner(what, cluster, datalake=datalake).runs(open=open, adopted=adopted)`: the runs of a pipeline, a datablock, or a class or anchor."""
+    return runner(what, cluster, datalake=datalake).runs(open=open, adopted=adopted)
 
 
 def run(pipeline, method: str, *args, **kwargs):
@@ -693,8 +694,8 @@ def verify(block, hash: str) -> dict:
 _CLOSED_STATUS_ = {COMPLETE: 'complete', FAIL: 'failed', CANCEL: 'cancelled'}
 
 
-def _target_of_(t, mode=None) -> Cluster:
-    # For Runner and runner, whose argument named target is where the run goes.
+def _cluster_of_(t, mode=None) -> Cluster:
+    # For Runner and runner, whose argument named cluster shadows the function.
     return cluster(t, mode)
 
 
@@ -832,10 +833,15 @@ def _flatten_(obj) -> list:
 
 def _lake_of_(run: Run) -> tuple:
     """`(url, storage_options)` of the datalake *run* ran in, from here: its record's, by the cluster's `url` when it has `storage`."""
-    lake, target = run.record.get('datalake'), run.target
-    if lake and getattr(target, 'storage', None):
-        return target.url(lake), target.fsspec_options()
+    lake, c = run.record.get('datalake'), run.cluster
+    if lake and getattr(c, 'storage', None):
+        return c.url(lake), c.fsspec_options()
     return lake, None
+
+
+def _cluster_name_(record: dict) -> str | None:
+    """The name of the cluster a journaled record ran on: `cluster`, or `target` in a record from before 2026-11-09."""
+    return record.get('cluster') or record.get('target')
 
 
 def _spec_(t: Cluster) -> dict | None:
@@ -847,10 +853,13 @@ def _spec_(t: Cluster) -> dict | None:
 
 
 def _rebuild_(record: dict) -> Cluster:
-    """The target a journaled record ran on: from its `target_spec`, else (an older record) by its name."""
-    spec = record.get('target_spec')
+    """The cluster a journaled record ran on: from its `cluster_spec`, else (an older record) by its name.
+
+    Records journaled before 2026-11-09 name it `target` and `target_spec`: read as these.
+    """
+    spec = record.get('cluster_spec') or record.get('target_spec')
     if not spec:
-        return cluster(record['target'])
+        return cluster(_cluster_name_(record))
     module, qualname = _RECORDED_AS_.get(spec['class'], spec['class']).split(':')
     cls = functools.reduce(getattr, qualname.split('.'), importlib.import_module(module))
     fields = {f.name: f for f in dataclasses.fields(cls)}

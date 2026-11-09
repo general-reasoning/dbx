@@ -301,13 +301,13 @@ dbx.kubejobs                       # my Jobs on every cluster: status, and why a
 dbx.kubequeues -q myteam           # the clusters' Kueue queues: quota, use, pending
 ```
 
-Modules: `dbx/cluster.py` (targets, `Runner`, `Run`, the journal), `dbx/kube.py` (Kubernetes),
+Modules: `dbx/cluster.py` (clusters, `Runner`, `Run`, the journal), `dbx/kube.py` (Kubernetes),
 `dbx/image.py` (an image of a venv's code), `dbx/gpu.py` (a function on a node's GPUs, through Ray),
 `dbx/anyscale.py` (what a Job or an image needs on Anyscale; also a workspace as a datalake, above). `EXECUTORS.md` is the earlier proposal.
 
 ### 1. Clusters: values, passed where they are used
 
-A run goes to a **cluster**, its *target*: a `dbx.kube.KubeCluster`, and later a `SlurmCluster`, each kind a
+A run goes to a **cluster**: a `dbx.kube.KubeCluster`, and later a `SlurmCluster`, each kind a
 subclass of `dbx.cluster.Cluster`. dbx defines none, and keeps none: a cluster is a value, defined
 in the project and passed at call time. Nothing is registered.
 
@@ -348,9 +348,9 @@ each call and keeps nothing: what a name means is a function of the installed pa
 what this process happened to import. `dbx.cluster.clusters()` lists them. (sctx: `sctx/clusters.py`,
 `LAMBDA` and `CRUSOE`; entry point `sctx = "sctx.clusters:CLUSTERS"`.)
 
-**A journaled run carries its target.** `job:submit`'s record holds the target itself as
-`target_spec` -- its class and its fields -- so a `Runner`'s `runs()` rebuilds each run's target
-from its record, with no lookup: a run submitted to a target defined in a notebook is still
+**A journaled run carries its cluster.** `job:submit`'s record holds the cluster itself as
+`cluster_spec` -- its class and its fields -- so a `Runner`'s `runs()` rebuilds each run's cluster
+from its record, with no lookup: a run submitted to a cluster defined in a notebook is still
 followed from another process, and a later change to a project's `LAMBDA` does not rewrite where an
 earlier run went.
 
@@ -359,8 +359,8 @@ choice of image and venv.
 
 ### 2. Submitting
 
-`Pipeline.runner(target, *, mode=None, force=False, **options)` hands out the pipeline's runs on
-*target*: a `Runner` of the target's kind (`target.RUNNER`: `dbx.kube.KubeRunner` for a KubeCluster). It
+`Pipeline.runner(cluster, *, mode=None, force=False, **options)` hands out the pipeline's runs on
+*cluster*: a `Runner` of the cluster's kind (`cluster.RUNNER`: `dbx.kube.KubeRunner` for a KubeCluster). It
 launches -- `.build_tree()`, `.build()`, `.launch('<method>', ...)` for any other method of the
 entrypoint -- and lists, tables and cancels the runs (section 5). A call runs there as:
 
@@ -384,7 +384,7 @@ says nothing.
 - **Arguments** must be literals (`ast.literal_eval(repr(x)) == x`): they travel as text.
 - **Already built:** `build` and `build_tree` of an entrypoint valid here launch nothing -- a Run
   `skipped` -- unless `force=True`.
-- **`mode`** ('kube'), when given, must be the target's kind: a check, not a choice.
+- **`mode`** ('kube'), when given, must be the cluster's kind: a check, not a choice.
 - **Options** are the kind's, and are refused at `runner(...)` when it does not take them -- a
   misspelling fails before anything is sent. `n_gpus` defaults to the pipeline's `n_gpus`, or 0.
 - **A shell command:** `LAMBDA.submit(command, **options)`, the same Job without a
@@ -453,7 +453,7 @@ call, each with its own log; on a Kube Job that needs `ray=True`, the Job's own 
 |---|---|---|
 | `True` | the record and the Job's manifest are made (`Run.record['manifest']`); nothing is contacted | no |
 | `'server'` | kube: the API server validates the Job (`kubectl create --dry-run=server`), creating nothing | no |
-| `'cluster'` | a small real run on the target (kube: no GPUs, 2 CPUs, 8 GiB, no Ray) that only evaluates the pipeline's quote there and `dbx.cluster.verify`s the entry: every import, the venv, the revision, the workdirs, the datalake, and the same hash as here. It builds nothing; the call it stands for is in its env as `DBX_SUBMIT_CALL`. `run.wait(); run.output()` shows the entry's anchorkeypath, whether it is valid there, and which dbx it imported. A hash that differs there is a ValueError: the code or its configuration is not the same. | yes |
+| `'cluster'` | a small real run on the cluster (kube: no GPUs, 2 CPUs, 8 GiB, no Ray) that only evaluates the pipeline's quote there and `dbx.cluster.verify`s the entry: every import, the venv, the revision, the workdirs, the datalake, and the same hash as here. It builds nothing; the call it stands for is in its env as `DBX_SUBMIT_CALL`. `run.wait(); run.output()` shows the entry's anchorkeypath, whether it is valid there, and which dbx it imported. A hash that differs there is a ValueError: the code or its configuration is not the same. | yes |
 
 ### 5. The journal, the run, and its output
 
@@ -466,7 +466,7 @@ and the run's `cluster` and `run` (the Job's name).
 
 | event | note |
 |---|---|
-| `job:submit` | before the run is launched; a file holding the whole record as JSON: `executor`, `target` (its name), `target_spec` (the target itself), `id` (the Job), `method`, `command`, `expression`, `session` (the submitting command's, which the run joins), `pipeline_anchor`, `datalake`, `submitted`, and the kind's own -- kube: `cluster`, `context`, `namespace`, `image`, `revision`, `workdirs` (what was synced or packed), `manifest` (the Job itself: `kubectl create -f` it to run the same again) |
+| `job:submit` | before the run is launched; a file holding the whole record as JSON: `executor`, `cluster` (its name), `cluster_spec` (the cluster itself; `target` and `target_spec` in records from before 2026-11-09, read as these), `id` (the Job), `method`, `command`, `expression`, `session` (the submitting command's, which the run joins), `pipeline_anchor`, `datalake`, `submitted`, and the kind's own -- kube: `cluster`, `context`, `namespace`, `image`, `revision`, `workdirs` (what was synced or packed), `manifest` (the Job itself: `kubectl create -f` it to run the same again) |
 | `job:complete` | it saw the run complete: `Run.wait`, or a `Runs.dash` that asked the cluster |
 | `job:fail` | launching failed, or it saw the run fail (with its log tail) |
 | `job:cancel` | `Run.cancel` |
@@ -496,7 +496,7 @@ process, a later session:
 
 | | whose runs |
 |---|---|
-| `p.runner(target)`, `p.runner()` | the pipeline's (its hash), on *target* or on every target |
+| `p.runner(cluster)`, `p.runner()` | the pipeline's (its hash), on *cluster* or on every cluster |
 | `dbx.runner(dblk)` | those whose Job built the datablock (its build entries' `run`), and those of the pipelines it is the entry of |
 | `dbx.runner(DatablockClass)`, `dbx.runner('<anchor>')` | the same, for every datablock of the class, whatever its hash; `datalake=`, or `DBX_DATALAKE` |
 | `dbx.runner(PipelineClass)` | every pipeline's of the class, whatever its hash |
@@ -521,7 +521,7 @@ process, a later session:
 - A `Run`'s own repr is what is journaled -- `KubeRun(lambda, <job>, build_tree, submitted
   2026-11-04 23:15, open)` -- without asking the cluster.
 
-`dbx.cluster.runs(what, target)` is the same, as a function.
+`dbx.cluster.runs(what, cluster)` is the same, as a function.
 
 **The run's own record is in the datalake it ran in** (`DBX_DATALAKE` there). It runs
 `dbx.pprint --capture-output` under the submitting command's session (`DBX_SESSION`, recorded as
@@ -597,7 +597,7 @@ the journal, `wait`, `runs`, `command` -- the same for every kind.
 `dbx`, `dbx.exec` and `dbx.pprint` evaluate their argument as Python statements and return the last one's
 value (`dbx.pprint` prints it). A dotted name is imported first, so `dbx.cluster.clusters()` works, but a
 bare name must already be defined: `dbx clusters` fails with `NameError: name 'clusters' is not defined`.
-`dbx.clusters` is the entry-point group targets are registered under (section 1), not a command.
+`dbx.clusters` is the entry-point group clusters are registered under (section 1), not a command.
 
 Set `P` once to a pipeline's expression; the examples below expand it inside their double quotes:
 
@@ -608,12 +608,12 @@ P="myproject.pipelines.train('preset')"
 **Clusters** (`dbx.cluster`: every kind; `dbx.kube`: the Kube ones only).
 
 ```bash
-dbx.pprint "dbx.cluster.clusters()"              # every target the dbx.clusters entry points name, by name
+dbx.pprint "dbx.cluster.clusters()"              # every cluster the dbx.clusters entry points name, by name
 dbx.pprint "dbx.cluster.clusters('kube')"        # of one kind only; = dbx.kube.clusters()
 dbx.pprint "dbx.cluster.cluster('lambda')"       # one Cluster
 ```
 
-**Running a pipeline** (a pipeline's `.runner(target, **options)` is a `Runner`; what it launches is a `Run`, a
+**Running a pipeline** (a pipeline's `.runner(cluster, **options)` is a `Runner`; what it launches is a `Run`, a
 `KubeRun` on Kube).
 
 ```bash
@@ -629,7 +629,7 @@ Common options: `n_gpus`, `n_cpus`, `mem_gib`, `venv`, `workdirs`, `env`, `image
 **Watching and cancelling** (section 6). `runs()` prints as a table whose row `i` is `runs()[i]`.
 
 ```bash
-dbx.pprint "$P.runner().runs()"                   # its runs on every target, oldest first
+dbx.pprint "$P.runner().runs()"                   # its runs on every cluster, oldest first
 dbx.pprint "$P.runner('lambda').runs(open=True)"  # only those not complete, failed or cancelled
 dbx.pprint "$P.runner().runs().dash()"            # every column, with the pod and what the run journaled
 dbx.pprint "$P.runner().runs()[-1].status()"      # also .logs(tail=200), .reason(), .wait(), .cancel()
@@ -637,6 +637,7 @@ dbx.pprint "$P.runner().runs()[-1].output()"     # what it printed, once it ende
 dbx.pprint "$P.runner('lambda').cancel()"         # every open run there
 dbx.pprint "dbx.runner('myproject.blocks.Train').runs()"   # every Train's, whatever its hash
 dbx.pprint "dbx.cluster.runs($P, 'lambda', open=True)"      # = $P.runner('lambda').runs(open=True)
+dbx.pprint "$P.runner('lambda').cluster.jobs()"             # every Job of yours there, any pipeline: = dbx.kubejobs lambda
 ```
 
 **What is on a cluster, and running a command there** (methods of `dbx.kube.KubeCluster`; `C` is one).

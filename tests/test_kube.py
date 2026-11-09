@@ -636,6 +636,12 @@ class TestWatching:
         assert df['command'].iloc[0] == 'true'
         assert list(cluster.jobs()['job']) == [run.id]      # the one cluster's, by its method
 
+    def test_a_jobs_gpus_are_all_its_pods(self, cluster, kubectl):
+        cluster.submit('true', n_gpus=8)
+        kubectl.created[-1]['spec']['parallelism'] = 3          # an indexed Job of three 8-GPU pods
+        row = cluster.jobs().iloc[0]
+        assert (row['n_gpus'], row['n_pods']) == (24, 3)
+
     def test_jobs_are_the_users_unless_all_users(self, cluster, kubectl, monkeypatch):
         cluster.submit('true')
         cluster.user = 'someone-else'
@@ -927,6 +933,8 @@ class TestQueues:
         def fake(context, *args, input=None):
             if context not in answers:
                 raise RuntimeError(f"Unable to connect to the server: {context}")
+            if 'localqueue' in args:
+                return json.dumps({'items': [{'metadata': {'name': 'lq'}, 'spec': {'clusterQueue': 'team-q'}}]})
             return json.dumps({'items': answers[context]})
         monkeypatch.setattr(kube, '_kubectl_', fake)
 
@@ -934,22 +942,27 @@ class TestQueues:
         df = kube.queues(['a', 'b'])
         assert list(df['queue']) == ['team-q', 'team-q']
         row = df[df['cluster'] == 'b'].iloc[0]
-        assert (row['quota'], row['used'], row['free'], row['pending']) == (48, 32, 16, 1)
+        assert (row['n_gpus_quota'], row['n_gpus_used'], row['n_gpus_free'], row['n_workloads_pending']) == (48, 32, 16, 1)
 
     def test_all_and_a_queue_filter(self, queues):
         assert 'idle-q' in set(kube.queues(['a'], all=True)['queue'])
         assert list(kube.queues(['a', 'b'], queues='^team')['cluster']) == ['a', 'b']
 
     def test_memory_is_in_gib_and_cpu_in_cores(self, queues):
-        assert kube.queues(['a'], resource='memory', queues='mem')['used'].iloc[0] == 93.5
-        assert kube.queues(['a'], resource='cpu', queues='team')['quota'].iloc[0] == 0.5
+        assert kube.queues(['a'], resource='memory', queues='mem')['mem_gib_used'].iloc[0] == 93.5
+        assert kube.queues(['a'], resource='cpu', queues='team')['n_cpus_quota'].iloc[0] == 0.5
 
     def test_an_unreachable_cluster_is_a_row_with_its_error(self, queues):
         df = kube.queues(['a', 'gone'])
         assert 'Unable to connect' in df[df['cluster'] == 'gone']['error'].iloc[0]
 
+    def test_mine_is_the_queue_the_namespace_feeds_and_the_cohort_quota_its_ceiling(self, queues):
+        df = kube.cluster('a').queues(all=True).set_index('queue')
+        assert df.loc['team-q', 'mine'] and not df.loc['idle-q', 'mine']
+        assert df.loc['team-q', 'n_gpus_cohort'] == 24 and df.loc['team-q', 'n_gpus_quota'] == 24
+
     def test_one_clusters_queues_by_its_method_raising_when_unreachable(self, queues):
-        assert list(kube.cluster('b').queues()['quota']) == [48]
+        assert list(kube.cluster('b').queues()['n_gpus_quota']) == [48]
         with pytest.raises(RuntimeError, match='Unable to connect'):
             kube.cluster('gone').queues()
 

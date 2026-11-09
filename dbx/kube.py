@@ -156,7 +156,7 @@ class KubeCluster(_cluster_.Cluster):
     def jobs(self, *, user: str | None = None, all_users: bool = False, status: str | None = None) -> pd.DataFrame:
         """The Jobs in the cluster's namespace, as a table, newest first; raises when kubectl cannot reach it.
 
-        One row per Job: `cluster, job, status, n_gpus, created, started, ended, command`, and `reason`,
+        One row per Job: `cluster, job, status, n_gpus` (all its pods'), `n_pods`, `created, started, ended, command`, and `reason`,
         Kueue's message for a pending one. Only *user*'s (default the cluster's `user`, else $USER),
         unless *all_users*; only those of *status* ('pending', 'running', 'complete', 'failed') when given.
         """
@@ -174,8 +174,9 @@ class KubeCluster(_cluster_.Cluster):
             cont = j['spec']['template']['spec']['containers'][0]
             command = md.get('annotations', {}).get('dbx/command') or md.get('annotations', {}).get('sctx/command') or ''
             expression = {e.get('name'): e.get('value') for e in cont.get('env', [])}.get('DBX_SUBMIT_EXPRESSION')
-            rows.append(dict(cluster=self.name, job=md['name'], status=s,
-                             n_gpus=cont.get('resources', {}).get('requests', {}).get('nvidia.com/gpu', '0'),
+            n_pods = int(j['spec'].get('parallelism') or 1)
+            per_pod = int(float(cont.get('resources', {}).get('requests', {}).get('nvidia.com/gpu', 0)))
+            rows.append(dict(cluster=self.name, job=md['name'], status=s, n_gpus=per_pod * n_pods, n_pods=n_pods,
                              created=md.get('creationTimestamp'), started=st.get('startTime'),
                              ended=st.get('completionTime'), command=(expression or command)[:120],
                              reason=reasons.get(md['name']) if s == 'pending' else None))
@@ -185,19 +186,37 @@ class KubeCluster(_cluster_.Cluster):
     def queues(self, *, resource: str = 'nvidia.com/gpu', queues: str | None = None, all: bool = False) -> pd.DataFrame:
         """The Kueue ClusterQueues the cluster's context sees: their *resource* quota, use and workloads; raises when kubectl cannot reach it.
 
-        One row per queue: `cluster, queue, cohort, quota, used, free, borrowed, pending, admitted`, the
-        quantities *resource*'s summed over the queue's flavors (memory in GiB). *queues* is a regex the
-        queue name must match; queues with no quota, no use and no workloads are left out unless *all*.
+        One row per queue: `cluster, queue, mine, cohort`; *resource*'s `quota, used, free, borrowed, cohort`, summed over
+        the queue's flavors and named for it (`n_gpus_quota` for nvidia.com/gpu, `n_cpus_...` for cpu, `mem_gib_...` for
+        memory: `_resource_prefix_`); and the workloads -- one per Job -- `n_workloads_pending, n_workloads_admitted`.
+        `borrowed` is borrowed BY the queue: what it uses beyond its own quota, from what others in its cohort leave idle, so `used` is
+        `quota + borrowed` when it is over its quota (a lender shows only its own low `used`). `mine`: the queue
+        a LocalQueue of the cluster's namespace feeds -- where its Jobs go -- or None when the LocalQueues cannot
+        be read; `..._cohort`: the quota of the queue's whole cohort, what it can grow to by borrowing what the
+        others leave idle (its own quota without a cohort). *queues* is a regex the queue name must match;
+        queues with no quota, no use and no workloads are left out unless *all*.
         """
         items = json.loads(_kubectl_(self.context, 'get', 'clusterqueue', '-o', 'json'))['items']
+        try:
+            local = json.loads(_kubectl_(self.context, '-n', self.namespace, 'get', 'localqueue', '-o', 'json'))['items']
+            mine = {lq.get('spec', {}).get('clusterQueue') for lq in local}
+        except Exception:
+            mine = None
+        quota_of = {q['metadata']['name']: sum(_quantity_(r.get('nominalQuota'), resource)
+                                               for g in q.get('spec', {}).get('resourceGroups', [])
+                                               for f in g.get('flavors', []) for r in f.get('resources', [])
+                                               if r['name'] == resource) for q in items}
+        cohort_of = {q['metadata']['name']: q.get('spec', {}).get('cohortName', q.get('spec', {}).get('cohort'))
+                     for q in items}
         rows = []
         for q in items:
             name = q['metadata']['name']
             if queues and not re.search(queues, name):
                 continue
             spec, status = q.get('spec', {}), q.get('status', {})
-            quota = sum(_quantity_(r.get('nominalQuota'), resource) for g in spec.get('resourceGroups', [])
-                        for f in g.get('flavors', []) for r in f.get('resources', []) if r['name'] == resource)
+            quota = quota_of[name]
+            cohort_quota = (sum(v for k, v in quota_of.items() if cohort_of[k] == cohort_of[name])
+                            if cohort_of[name] else quota)
             used = sum(_quantity_(r.get('total'), resource) for f in status.get('flavorsUsage', [])
                        for r in f.get('resources', []) if r['name'] == resource)
             borrowed = sum(_quantity_(r.get('borrowed'), resource) for f in status.get('flavorsUsage', [])
@@ -205,10 +224,12 @@ class KubeCluster(_cluster_.Cluster):
             pending, admitted = status.get('pendingWorkloads', 0), status.get('admittedWorkloads', 0)
             if not all and not (quota or used or pending or admitted):
                 continue
-            rows.append(dict(cluster=self.name, queue=name, cohort=spec.get('cohortName', spec.get('cohort')),
-                             quota=quota, used=used, free=max(quota - used, 0), borrowed=borrowed,
-                             pending=pending, admitted=admitted))
-        return _integral_(pd.DataFrame(rows, columns=_QUEUE_COLUMNS_))
+            r = _resource_prefix_(resource)
+            rows.append({'cluster': self.name, 'queue': name, 'mine': name in mine if mine is not None else None,
+                         'cohort': cohort_of[name], f"{r}_quota": quota, f"{r}_used": used,
+                         f"{r}_free": max(quota - used, 0), f"{r}_borrowed": borrowed, f"{r}_cohort": cohort_quota,
+                         'n_workloads_pending': pending, 'n_workloads_admitted': admitted})
+        return _integral_(pd.DataFrame(rows, columns=_queue_columns_(resource)))
 
     def url(self, path: str) -> str:
         """Where *path* is on the cluster: its URL under `storage`, or *path* itself when the cluster mounts it."""
@@ -398,7 +419,7 @@ def queues(clusters_: list | None = None, *, resource: str = 'nvidia.com/gpu', q
     """
     cs = [cluster(n) for n in clusters_] if clusters_ else list(clusters().values())
     cs = list({c.context: c for c in reversed(cs)}.values())[::-1]
-    df = _across_(cs, lambda c: c.queues(resource=resource, queues=queues, all=all), _QUEUE_COLUMNS_)
+    df = _across_(cs, lambda c: c.queues(resource=resource, queues=queues, all=all), _queue_columns_(resource))
     return _integral_(df)
 
 
@@ -421,8 +442,22 @@ def queues_main(argv: list | None = None) -> None:
 # --------------------------------------------------------------------------------------------- #
 
 # The columns of `KubeCluster.jobs` and `KubeCluster.queues`.
-_JOB_COLUMNS_ = ['cluster', 'job', 'status', 'n_gpus', 'created', 'started', 'ended', 'reason', 'command']
-_QUEUE_COLUMNS_ = ['cluster', 'queue', 'cohort', 'quota', 'used', 'free', 'borrowed', 'pending', 'admitted']
+_JOB_COLUMNS_ = ['cluster', 'job', 'status', 'n_gpus', 'n_pods', 'created', 'started', 'ended', 'reason', 'command']
+# The quantity columns of `KubeCluster.queues`, by the resource they count: a count, or a quantity with its unit.
+_RESOURCE_PREFIXES_ = {'nvidia.com/gpu': 'n_gpus', 'cpu': 'n_cpus', 'memory': 'mem_gib'}
+_QUANTITIES_ = ('quota', 'used', 'free', 'borrowed', 'cohort')
+
+
+def _resource_prefix_(resource: str) -> str:
+    """What *resource*'s columns are named with: `n_gpus`, `n_cpus`, `mem_gib`, or the resource's own name."""
+    return _RESOURCE_PREFIXES_.get(resource, re.sub(r'\W+', '_', resource))
+
+
+def _queue_columns_(resource: str) -> list:
+    """The columns of `KubeCluster.queues` of *resource*."""
+    r = _resource_prefix_(resource)
+    return ['cluster', 'queue', 'mine', 'cohort', *(f"{r}_{q}" for q in _QUANTITIES_), 'n_workloads_pending',
+            'n_workloads_admitted']
 
 # Size suffixes of a Kubernetes quantity, in bytes.
 _BYTES_ = {'k': 1e3, 'M': 1e6, 'G': 1e9, 'T': 1e12, 'P': 1e15, 'Ki': 2 ** 10, 'Mi': 2 ** 20, 'Gi': 2 ** 30,
@@ -661,7 +696,7 @@ def _across_(cs: list, table, columns: list) -> pd.DataFrame:
 
 def _integral_(df: pd.DataFrame) -> pd.DataFrame:
     """*df* with its quantity columns as integers where every value is one."""
-    for col in ('quota', 'used', 'free', 'borrowed'):
+    for col in [c for c in df.columns if c.endswith(tuple(f"_{q}" for q in _QUANTITIES_))]:
         if df[col].dropna().apply(lambda x: float(x).is_integer()).all():
             df[col] = df[col].astype('Int64')
     return df

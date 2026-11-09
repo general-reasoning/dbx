@@ -563,8 +563,8 @@ work serially: one SFTP connection cannot serve several threads at once.
 | `run.cancel()` | deletes the Job and its pod; journals CANCEL |
 | `run.command()` | the run's exec-journal row; `.output()` prints what it printed (section 5) |
 | `dbx.cluster.runs(block)` | the Runs of every submission of a block, from its journal |
-| `LAMBDA.jobs(user=, all_users=, status=)` | the cluster's Jobs, mine by default, newest first: status, GPUs, times, the expression, and Kueue's reason for a pending one |
-| `LAMBDA.queues(resource=, queues=, all=)` | the Kueue queues the cluster sees: quota, used, free, borrowed, pending, admitted, of `nvidia.com/gpu`, `cpu` or `memory` (GiB) |
+| `LAMBDA.jobs(user=, all_users=, status=)` | the cluster's Jobs, mine by default, newest first: status, GPUs (all its pods'), pods, times, the expression, and Kueue's reason for a pending one |
+| `LAMBDA.queues(resource=, queues=, all=)` | the Kueue queues the cluster sees: `n_gpus_quota, _used, _free, _borrowed, _cohort` (`n_cpus_...` for `cpu`, `mem_gib_...` for `memory`), and `n_workloads_pending, n_workloads_admitted` (one workload per Job). `borrowed` is borrowed *by* the queue, beyond its quota, so `used` = `quota + borrowed` when over it; `mine` marks the queues your namespace's LocalQueues feed; `_cohort` is the cohort's quota, what borrowing can take the queue to |
 | `dbx.kubejobs [CLUSTER ...] [-s STATUS] [-u USER \| -A]` | `jobs` of the `dbx.clusters` entry points' clusters (or those named), as one table; `dbx.kube.jobs(...)` returns it |
 | `dbx.kubequeues [CLUSTER ...] [-r RESOURCE] [-q REGEX] [-a]` | `queues` of those clusters, as one table, a kubectl context shared by two queried once; `dbx.kube.queues(...)` returns it |
 

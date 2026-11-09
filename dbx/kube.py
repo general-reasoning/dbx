@@ -153,13 +153,16 @@ class KubeCluster(_cluster_.Cluster):
             return dict(files=0, bytes=0, skipped=None)
         return _sync_(src, self.url(dst), storage_options=self.fsspec_options(), progress=progress)
 
-    def jobs(self, *, user: str | None = None, all_users: bool = False, status: str | None = None) -> pd.DataFrame:
+    def jobs(self, *, user: str | None = None, all_users: bool = False, status: str = 'running') -> pd.DataFrame:
         """The Jobs in the cluster's namespace, as a table, newest first; raises when kubectl cannot reach it.
 
         One row per Job: `cluster, job, status, n_gpus` (all its pods'), `n_pods`, `created, started, ended, command`, and `reason`,
-        Kueue's message for a pending one. Only *user*'s (default the cluster's `user`, else $USER),
-        unless *all_users*; only those of *status* ('pending', 'running', 'complete', 'failed') when given.
+        Kueue's message for a pending one. Only *user*'s (default the cluster's `user`, else $USER; a Job is a user's
+        by its `dbx/user` label or its name's `<user>-` prefix), unless *all_users*; only those of *status* --
+        'running' by default; 'pending', 'complete', 'failed'; 'all' for every status.
         """
+        if status not in _JOB_STATUSES_:
+            raise ValueError(f"status {status!r}: one of {', '.join(_JOB_STATUSES_)}")
         who = _slug_(user or self.user or os.environ.get('USER') or 'dbx', 16)
         items = json.loads(_kubectl_(self.context, '-n', self.namespace, 'get', 'job', '-o', 'json'))['items']
         reasons = _workload_reasons_(self)
@@ -169,7 +172,7 @@ class KubeCluster(_cluster_.Cluster):
             if not all_users and not (md.get('labels', {}).get('dbx/user') == who or md['name'].startswith(f"{who}-")):
                 continue
             s = _job_status_(j)
-            if status and s != status:
+            if status != 'all' and s != status:
                 continue
             cont = j['spec']['template']['spec']['containers'][0]
             command = md.get('annotations', {}).get('dbx/command') or md.get('annotations', {}).get('sctx/command') or ''
@@ -386,7 +389,7 @@ def clusters() -> dict:
 # --------------------------------------------------------------------------------------------- #
 
 def jobs(clusters_: list | None = None, *, user: str | None = None, all_users: bool = False,
-         status: str | None = None) -> pd.DataFrame:
+         status: str = 'running') -> pd.DataFrame:
     """`KubeCluster.jobs` of each of *clusters_* (Clusters, or their names; default every `dbx.clusters` one), as one table, newest first.
 
     A cluster that cannot be reached is a row with its error.
@@ -397,10 +400,11 @@ def jobs(clusters_: list | None = None, *, user: str | None = None, all_users: b
 
 
 def jobs_main(argv: list | None = None) -> None:
-    """`dbx.kubejobs [CLUSTER ...] [-s STATUS] [-u USER | -A]`: print `jobs`' table (`jobs` returns it)."""
+    """`dbx.kubejobs [CLUSTER ...] [-s STATUS|all] [-u USER | -A]`: print `jobs`' table (`jobs` returns it); running by default."""
     p = argparse.ArgumentParser(prog='dbx.kubejobs', description=jobs.__doc__.split('\n')[0])
     p.add_argument('clusters', nargs='*', help="clusters to list, by name (default: every one the dbx.clusters entry points name)")
-    p.add_argument('-s', '--status', choices=['pending', 'running', 'complete', 'failed'])
+    p.add_argument('-s', '--status', choices=_JOB_STATUSES_, default='running',
+                   help="only the Jobs of this status (default: running); all: every status")
     p.add_argument('-u', '--user', help="whose Jobs (default: the cluster's user, else $USER)")
     p.add_argument('-A', '--all-users', action='store_true', help="every user's Jobs in the namespace")
     a = p.parse_args(argv)
@@ -441,6 +445,8 @@ def queues_main(argv: list | None = None) -> None:
 # Helpers
 # --------------------------------------------------------------------------------------------- #
 
+# What `KubeCluster.jobs` can be asked for: a Job's status, or every one.
+_JOB_STATUSES_ = ('running', 'pending', 'complete', 'failed', 'all')
 # The columns of `KubeCluster.jobs` and `KubeCluster.queues`.
 _JOB_COLUMNS_ = ['cluster', 'job', 'status', 'n_gpus', 'n_pods', 'created', 'started', 'ended', 'reason', 'command']
 # The quantity columns of `KubeCluster.queues`, by the resource they count: a count, or a quantity with its unit.

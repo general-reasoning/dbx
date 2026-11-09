@@ -297,7 +297,7 @@ dbx.pprint "(p := myproject.pipelines.train('preset', n_gpus=8)).runner('lambda'
 dbx.pprint "myproject.pipelines.train('preset').runner().runs()"           # its runs on every cluster, as a dash
 dbx.pprint "myproject.pipelines.train('preset').runner().runs()[-1].cancel()"   # cancel the dash's last row
 dbx.pprint "dbx.runner('myproject.blocks.Train').runs()"               # the runs of every Train, any hash
-dbx.kubejobs                       # my Jobs on every cluster: status, and why a pending one waits
+dbx.kubejobs                       # every user's running Jobs on every cluster (-m: mine; -s all: every status)
 dbx.kubequeues -q myteam           # the clusters' Kueue queues: quota, use, pending
 ```
 
@@ -563,9 +563,9 @@ work serially: one SFTP connection cannot serve several threads at once.
 | `run.cancel()` | deletes the Job and its pod; journals CANCEL |
 | `run.command()` | the run's exec-journal row; `.output()` prints what it printed (section 5) |
 | `dbx.cluster.runs(block)` | the Runs of every submission of a block, from its journal |
-| `LAMBDA.jobs(user=, all_users=, status=)` | the cluster's Jobs, mine and running by default (`status='all'`: every status; `user=` another's, `all_users=True` everyone's), newest first: status, GPUs (all its pods'), pods, times, the expression, and Kueue's reason for a pending one |
+| `LAMBDA.jobs(user=, mine_only=, status=)` | the cluster's Jobs, every user's and running by default (`user=` one user's, `mine_only=True` mine, over any `user=`; `status='all'`, 'pending', 'complete', 'failed'), newest first: status, GPUs (all its pods'), pods, times, the expression, and Kueue's reason for a pending one |
 | `LAMBDA.queues(resource=, queues=, all=)` | the Kueue queues the cluster sees: `n_gpus_quota, _used, _free, _borrowed, _cohort` (`n_cpus_...` for `cpu`, `mem_gib_...` for `memory`), and `n_workloads_pending, n_workloads_admitted` (one workload per Job). `borrowed` is borrowed *by* the queue, beyond its quota, so `used` = `quota + borrowed` when over it; `mine` marks the queues your namespace's LocalQueues feed; `_cohort` is the cohort's quota, what borrowing can take the queue to |
-| `dbx.kubejobs [CLUSTER ...] [-s STATUS\|all] [-u USER \| -A]` | `jobs` of the `dbx.clusters` entry points' clusters (or those named), as one table; `dbx.kube.jobs(...)` returns it |
+| `dbx.kubejobs [CLUSTER ...] [-s STATUS\|all] [-u USER \| -m]` | `jobs` of the `dbx.clusters` entry points' clusters (or those named), as one table; `dbx.kube.jobs(...)` returns it |
 | `dbx.kubequeues [CLUSTER ...] [-r RESOURCE] [-q REGEX] [-a]` | `queues` of those clusters, as one table, a kubectl context shared by two queried once; `dbx.kube.queues(...)` returns it |
 
 kubectl itself, for what these do not cover: `kubectl --context C -n NS describe job/<id>`,
@@ -637,17 +637,17 @@ dbx.pprint "$P.runner().runs()[-1].output()"     # what it printed, once it ende
 dbx.pprint "$P.runner('lambda').cancel()"         # every open run there
 dbx.pprint "dbx.runner('myproject.blocks.Train').runs()"   # every Train's, whatever its hash
 dbx.pprint "dbx.cluster.runs($P, 'lambda', open=True)"      # = $P.runner('lambda').runs(open=True)
-dbx.pprint "$P.runner('lambda').cluster.jobs()"             # every Job of yours there, any pipeline: = dbx.kubejobs lambda
+dbx.pprint "$P.runner('lambda').cluster.jobs()"             # the running Jobs there, anyone's, any pipeline: = dbx.kubejobs lambda
 ```
 
 **What is on a cluster, and running a command there** (methods of `dbx.kube.KubeCluster`; `C` is one).
 
 ```bash
 C="dbx.cluster.cluster('lambda')"
-dbx.pprint "$C.jobs()"                           # my running Jobs there
-dbx.pprint "$C.jobs(status='all')"              # every status; why a pending one waits
+dbx.pprint "$C.jobs()"                           # every user's running Jobs there
+dbx.pprint "$C.jobs(mine_only=True, status='all')"    # mine, every status; why a pending one waits
 dbx.pprint "$C.user"                             # who "my" is: the cluster's user (else $USER), my Jobs' name prefix
-dbx.pprint "$C.jobs(status='failed', all_users=True)"
+dbx.pprint "$C.jobs(user='hank', status='failed')"   # one user's
 dbx.pprint "$C.queues(queues='myteam', resource='memory')"   # its Kueue queues; resource cpu|memory|nvidia.com/gpu
 dbx.pprint "$C.submit('nvidia-smi', n_gpus=1, name='smi')"   # a shell command as a Job: a KubeRun
 dbx.pprint "$C.job('nvidia-smi', n_gpus=1)"                  # its manifest, not submitted
@@ -659,9 +659,9 @@ dbx.pprint "$C.sync('/mnt/team-x/code')"         # a tree onto the cluster's sto
 **Over several clusters** (`dbx.kube`; consoles too).
 
 ```bash
-dbx.kubejobs                                     # my running Jobs on every cluster
+dbx.kubejobs                                     # every user's running Jobs on every cluster
 dbx.kubejobs lambda -s failed                    # one cluster; -s running|pending|complete|failed|all
-dbx.kubejobs lambda -A                           # every user's (-u NAME: one other user's)
+dbx.kubejobs lambda -m -s all                    # mine, every status (-u NAME: one user's)
 dbx.kubequeues                                   # every queue's GPU quota and use
 dbx.kubequeues lambda -q myteam -r memory        # queues matching a regex; -r cpu|memory; -a every queue
 dbx.pprint "dbx.kube.jobs(['lambda'], status='running')"     # dbx.kubejobs as a DataFrame

@@ -631,11 +631,12 @@ class TestWatching:
         run = cluster.submit('true')
         kubectl.conditions = ['Pending']
         assert run.status() == 'pending' and run.reason() == 'insufficient quota for cpu'
-        df = kube.jobs([cluster], status='all')
+        df = kube.jobs([cluster], mine_only=True, status='all')
         assert list(df['job']) == [run.id] and df['reason'].iloc[0] == 'insufficient quota for cpu'
         assert df['command'].iloc[0] == 'true'
         assert list(cluster.jobs(status='pending')['job']) == [run.id]      # the one cluster's, by its method
-        assert cluster.jobs().empty                          # running only, by default
+        assert cluster.jobs().empty                                      # running only, by default
+        assert list(cluster.jobs(status='all')['job']) == [run.id]
 
     def test_a_jobs_gpus_are_all_its_pods(self, cluster, kubectl):
         cluster.submit('true', n_gpus=8)
@@ -643,10 +644,12 @@ class TestWatching:
         row = cluster.jobs(status='all').iloc[0]
         assert (row['n_gpus'], row['n_pods']) == (24, 3)
 
-    def test_jobs_are_the_users_unless_all_users(self, cluster, kubectl, monkeypatch):
+    def test_jobs_are_everyones_or_one_users_or_mine(self, cluster, kubectl, monkeypatch):
         cluster.submit('true')
         cluster.user = 'someone-else'
-        assert len(kube.jobs([cluster], status='all')) == 0 and len(kube.jobs([cluster], all_users=True, status='all')) == 1
+        assert len(kube.jobs([cluster], mine_only=True, status='all')) == 0 and len(kube.jobs([cluster], status='all')) == 1
+        assert len(kube.jobs([cluster], user='me', mine_only=True, status='all')) == 0       # mine_only overrides user
+        assert len(kube.jobs([cluster], user='me', status='all')) == 1               # one user's, by name
 
 
 class TestRunner:

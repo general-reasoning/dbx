@@ -156,10 +156,11 @@ class KubeCluster(_cluster_.Cluster):
     def jobs(self, *, user: str | None = None, mine_only: bool = False, status: str = 'running') -> pd.DataFrame:
         """The Jobs in the cluster's namespace, as a table, newest first; raises when kubectl cannot reach it.
 
-        One row per Job: `cluster, job, status, n_gpus` (all its pods'), `n_pods`, `created, started, ended, command`, and `reason`,
-        Kueue's message for a pending one. Every user's by default; *user*'s when given; with *mine_only*, this cluster's
-        `user`'s (else $USER's), whatever *user* says. A Job is a user's by its `dbx/user` label or its name's `<user>-`
-        prefix. Only those of *status*: 'running' by default, or 'pending', 'complete', 'failed', 'all'.
+        One row per Job: `cluster, job, user, status, n_gpus` (all its pods'), `n_pods`, `created, started, ended,
+        command`, and `reason`, Kueue's message for a pending one. Every user's by default; *user*'s when given; with
+        *mine_only*, this cluster's `user`'s (else $USER's), whatever *user* says. Kubernetes keeps no creator: `user`
+        is what the Job says of itself (`_job_user_`), empty when nothing does, and a Job is a user's by it or by its
+        name's `<user>-` prefix. Only those of *status*: 'running' by default, or 'pending', 'complete', 'failed', 'all'.
         """
         if status not in _JOB_STATUSES_:
             raise ValueError(f"status {status!r}: one of {', '.join(_JOB_STATUSES_)}")
@@ -171,7 +172,9 @@ class KubeCluster(_cluster_.Cluster):
         rows = []
         for j in items:
             md, st = j['metadata'], j.get('status', {})
-            if who is not None and not (md.get('labels', {}).get('dbx/user') == who or md['name'].startswith(f"{who}-")):
+            owner = _job_user_(md)
+            # chen.zhou@... is chen's; a Job named <user>-... is <user>'s
+            if who is not None and who not in ((owner or '').split('.')[0], owner) and not md['name'].startswith(f"{who}-"):
                 continue
             s = _job_status_(j)
             if status != 'all' and s != status:
@@ -181,7 +184,8 @@ class KubeCluster(_cluster_.Cluster):
             expression = {e.get('name'): e.get('value') for e in cont.get('env', [])}.get('DBX_SUBMIT_EXPRESSION')
             n_pods = int(j['spec'].get('parallelism') or 1)
             per_pod = int(float(cont.get('resources', {}).get('requests', {}).get('nvidia.com/gpu', 0)))
-            rows.append(dict(cluster=self.name, job=md['name'], status=s, n_gpus=per_pod * n_pods, n_pods=n_pods,
+            rows.append(dict(cluster=self.name, job=md['name'], user=owner, status=s, n_gpus=per_pod * n_pods,
+                             n_pods=n_pods,
                              created=md.get('creationTimestamp'), started=st.get('startTime'),
                              ended=st.get('completionTime'), command=(expression or command)[:120],
                              reason=reasons.get(md['name']) if s == 'pending' else None))
@@ -451,7 +455,7 @@ def queues_main(argv: list | None = None) -> None:
 # What `KubeCluster.jobs` can be asked for: a Job's status, or every one.
 _JOB_STATUSES_ = ('running', 'pending', 'complete', 'failed', 'all')
 # The columns of `KubeCluster.jobs` and `KubeCluster.queues`.
-_JOB_COLUMNS_ = ['cluster', 'job', 'status', 'n_gpus', 'n_pods', 'created', 'started', 'ended', 'reason', 'command']
+_JOB_COLUMNS_ = ['cluster', 'job', 'user', 'status', 'n_gpus', 'n_pods', 'created', 'started', 'ended', 'reason', 'command']
 # The quantity columns of `KubeCluster.queues`, by the resource they count: a count, or a quantity with its unit.
 _RESOURCE_PREFIXES_ = {'nvidia.com/gpu': 'n_gpus', 'cpu': 'n_cpus', 'memory': 'mem_gib'}
 _QUANTITIES_ = ('quota', 'used', 'free', 'borrowed', 'cohort')
@@ -832,6 +836,15 @@ def _mtime_(info) -> float | None:
     if isinstance(t, datetime.datetime):
         return t.timestamp()
     return float(t) if t is not None else None
+
+
+def _job_user_(metadata: dict) -> str | None:
+    """Who a Job says it is from: its `dbx/user` label, else the local part of a `contact` annotation (an email); None."""
+    label = (metadata.get('labels') or {}).get('dbx/user')
+    if label:
+        return label
+    contact = (metadata.get('annotations') or {}).get('contact') or ''
+    return contact.split('@')[0] or None
 
 
 def _workload_reasons_(c: KubeCluster) -> dict:

@@ -638,6 +638,16 @@ class TestWatching:
         assert cluster.jobs().empty                                      # running only, by default
         assert list(cluster.jobs(status='all')['job']) == [run.id]
 
+    def test_a_jobs_user_is_its_label_or_its_contact(self, cluster, kubectl):
+        cluster.submit('true')
+        assert list(cluster.jobs(status='all')['user']) == ['me']                      # dbx/user
+        m = kubectl.created[-1]['metadata']
+        m['labels'].pop('dbx/user')
+        m['name'] = 'mv3d-run-zhou'
+        m.setdefault('annotations', {})['contact'] = 'chen.zhou@gatik.ai'
+        assert list(cluster.jobs(status='all')['user']) == ['chen.zhou']
+        assert len(cluster.jobs(user='chen', status='all')) == 1                         # by the contact's first name
+
     def test_a_jobs_gpus_are_all_its_pods(self, cluster, kubectl):
         cluster.submit('true', n_gpus=8)
         kubectl.created[-1]['spec']['parallelism'] = 3          # an indexed Job of three 8-GPU pods

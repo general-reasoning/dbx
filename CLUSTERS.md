@@ -346,7 +346,7 @@ myproject = "myproject.clusters:CLUSTERS"
 loads every `dbx.clusters` entry point and looks the name up in what they name. It does that on
 each call and keeps nothing: what a name means is a function of the installed packages, not of
 what this process happened to import. `dbx.cluster.clusters()` lists them. (sctx: `sctx/clusters.py`,
-`LAMBDA` and `CRUSOE`; entry point `sctx = "sctx.clusters:CLUSTERS"`.)
+`LAMBDA` and `CRUSOE`; entry point `sctx = "sctx.dbx.clusters:CLUSTERS"`.)
 
 **A journaled run carries its cluster.** `job:submit`'s record holds the cluster itself as
 `cluster_spec` -- its class and its fields -- so a `Runner`'s `runs()` rebuilds each run's cluster

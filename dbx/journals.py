@@ -1565,7 +1565,7 @@ def _datalakes_seen_(recorded, read_from):
 
 
 # An entry's columns recorded in it as dicts -- the yaml their side files held -- and as text.
-RECORDED_DICTS = ('spec', 'kwargs', 'env')
+RECORDED_DICTS = ('spec', 'ops', 'env')
 RECORDED_TEXTS = ('quote', 'cite', 'repr', 'signature', 'type')
 
 
@@ -2095,6 +2095,7 @@ class Pretty:
             'hash', 'code', 'version', 'revision', 'gitrepo', 'datalake',
             'anchor', 'tag', 'key', 'keyby', 'tree', 'session', 'id')}
         d['note'] = self.note()
+        d['spec'], d['ops'] = self.spec, self.ops
         # The TEXT of each rendering, not the path of the file it was written to.
         d['signature'] = self.signaturestr()
         d['type'] = self.typestr()
@@ -2117,6 +2118,16 @@ class Pretty:
         return a.replace('\\', '') if isinstance(a, str) else a
 
     # 3. Accessors ---------------------------------------------------------
+
+    @property
+    def spec(self) -> dict:
+        """The recorded spec, as `Datablock.spec`: `entry.read('spec')`."""
+        return self._entry.read('spec')
+
+    @property
+    def ops(self) -> dict:
+        """The recorded operational keyword arguments, as `Datablock.ops`: `entry.read('ops')`."""
+        return self._entry.read('ops')
 
     @property
     def TOPICS(self):
@@ -2846,7 +2857,7 @@ class BuildJournal:
 
         {B.anchorkeypath}/.journal/{fqcn}/journal/{hash}/{fqcn}-journal-{hash}-{dt}-{id}.parquet
 
-    with its side files (spec, kwargs, quote, cite, repr, signature, type, note)
+    with its side files (spec, ops, quote, cite, repr, signature, type, note)
     beside it under `.journal/{fqcn}/{x}/{hash}/` -- see `path` --
     and `read` globs for exactly that under `{datalake}/{anchor}`.
 
@@ -3414,7 +3425,7 @@ class BuildJournal:
                                          'log': capture.path if capture is not None else None,
                                          'event': event,
                                          'redirection': redirection_value,
-                                         **{k: record[k] for k in ('spec', 'kwargs', 'quote', 'cite', 'signature',
+                                         **{k: record[k] for k in ('spec', 'ops', 'quote', 'cite', 'signature',
                                                               'type', 'repr')},
                                          'env': _yaml_text_(recorded_env()),
                                          'note': note_val,
@@ -3562,7 +3573,7 @@ class BuildJournal:
                 'paths': str(block.paths()),
                 'slices': str(slices) if slices is not None else None,
                 'spec': _yaml_text_(block.spec),
-                'kwargs': _yaml_text_(block.kwargs),
+                'ops': _yaml_text_(block.ops),
                 'quote': block.quote(),
                 'cite': block.cite(),
                 'signature': block.signaturestr(),
@@ -3980,6 +3991,12 @@ class BuildJournal:
             elif legacy in df.columns:
                 df = df.drop(columns=[legacy])
         df = BuildJournal._legacy_tree_(df)
+        # Merged, not dropped: `ops` was `kwargs` until 2026-11-12, and a journal spanning the rename has both, each
+        # row filled in one.
+        for legacy, current in (('kwargs', 'ops'),):
+            if legacy in df.columns:
+                df[current] = df[current].where(df[current].notna(), df[legacy]) if current in df.columns else df[legacy]
+                df = df.drop(columns=[legacy])
         if 'url' in df.columns:
             # `datalake` was `url` until it was renamed; a journal spanning the
             # rename has both, each row filled in one.
@@ -4138,7 +4155,7 @@ class PipeJournal(BuildJournal):
 
         Under each pipeline's `.journal/{fqcn}/journal/{hash}/`, the newest
         `create` entry -- by its `datetime` -- of every distinct `entrypath` is
-        kept, and every entry of another event -- a run's `job:*` -- is kept as it is, with its side files (spec, kwargs, quote, cite, repr,
+        kept, and every entry of another event -- a run's `job:*` -- is kept as it is, with its side files (spec, ops, quote, cite, repr,
         signature, type, note), which are named, as it is, by the instance's
         `dt`; every other entry is removed, side files and all. `collect`
         reads the same pipelines, each with the same entrypaths, before and
@@ -4241,8 +4258,9 @@ class PipeJournal(BuildJournal):
     _PIPELINE_COLUMNS_ = ('datalake', 'anchor', 'hash', 'keyby', 'key', 'anchorkeypath', 'tag', 'version')
 
     # An entry's columns naming its side files: what it keeps, beside itself.
-    # `dfn` no entry records now -- `Pretty.quote` says it -- but those from before do, and keep it.
-    _SIDE_COLUMNS_ = ('spec', 'dfn', 'kwargs', 'quote', 'cite', 'signature', 'type', 'repr', 'note')
+    # `dfn` no entry records now -- `Pretty.quote` says it -- but those from before do, and keep it; `kwargs`, `ops`
+    # until 2026-11-12, is named here too, as compaction reads the files as written.
+    _SIDE_COLUMNS_ = ('spec', 'dfn', 'ops', 'kwargs', 'quote', 'cite', 'signature', 'type', 'repr', 'note')
 
     @staticmethod
     def _is_event_(names):

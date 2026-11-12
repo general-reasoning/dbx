@@ -1285,7 +1285,7 @@ class Datablock:
         'version', 'dbx_version', 'revision',
         'datalake', 'anchor', 'keyby', 'key', 'anchorkeypath', 'tag',
         'topics', 'paths', 'slices', 'note',
-        'spec', 'kwargs', 'quote', 'cite', 'repr', 'signature', 'type', 'env',
+        'spec', 'ops', 'quote', 'cite', 'repr', 'signature', 'type', 'env',
         'gitrepo', 'entry_path', 'event',
     ]
 
@@ -5616,25 +5616,13 @@ class Datablock:
         return self.var
 
     @property
-    def kwargs(self):
-        """The dynamically-supplied keyword arguments of this Datablock instance.
+    def ops(self):
+        """This datablock's operational keyword arguments: those `Datablock.__init__` does not declare.
 
-        Returns a dict containing *only* the parameters that are NOT declared
-        as explicit keyword arguments in `Datablock.__init__`.  For example,
-        if a block is created as:
-
-            block = MyBlock(root='/data', my_custom_param=42)
-
-        then `block.kwargs == {'my_custom_param': 42}` — the `root` key is
-        excluded because it is an explicit parameter.
-
-        These are the "user-defined" parameters that distinguish one block
-        configuration from another within the same class.
-
-        See also
-        --------
-        dfn : The complementary property that returns the full definition
-              including explicit parameters.
+        Constructed as `MyBlock(spec=..., n_gpus=8, n_workers=4)`, a datablock's `ops` are `{'n_gpus': 8,
+        'n_workers': 4}`. They say how it is built, never what: outside its identity, its hash and its spec, and
+        recorded in each journal entry beside the spec (`entry.read('ops')`, `entry.pretty.ops`). A pipeline hands
+        its own on as `**self.operational`. `dfn` is the full definition, the declared parameters included.
         """
         explicit_keys = set(self.__explicit_params__())
         return {k: v for k, v in self.__getstate__().items() if k not in explicit_keys}

@@ -1,10 +1,10 @@
 """
-Comprehensive tests for Datablock.kwargs and Datablock.dfn properties.
+Comprehensive tests for Datablock.ops and Datablock.dfn properties.
 
-kwargs: Returns only the dynamically-supplied keyword arguments (not declared
+ops:    Returns only the dynamically-supplied keyword arguments (not declared
         in Datablock.__init__'s explicit parameter list).
 
-dfn:    Returns the full definition / state dict — explicit params + kwargs —
+dfn:    Returns the full definition / state dict — explicit params + ops —
         sufficient to reconstruct the block via MyBlock(**block.dfn).
 """
 import os
@@ -37,7 +37,7 @@ def setup_env(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# dfn: returns all parameters (explicit + kwargs)
+# dfn: returns all parameters (explicit + ops)
 # ---------------------------------------------------------------------------
 
 class TestDfn:
@@ -50,7 +50,7 @@ class TestDfn:
         assert d['tag'] == 'mytag'
         assert d['keyby'] == 'norm'
 
-    def test_dfn_contains_dynamic_kwargs(self):
+    def test_dfn_contains_dynamic_ops(self):
         """dfn should also include user-supplied **kwargs."""
         block = SimpleBlock(datalake='/tmp/test', alpha=1, beta='two')
         d = block.dfn
@@ -95,65 +95,65 @@ class TestDfn:
 
 
 # ---------------------------------------------------------------------------
-# kwargs: returns only dynamic (non-explicit) parameters
+# ops: returns only dynamic (non-explicit) parameters
 # ---------------------------------------------------------------------------
 
 class TestKwargs:
 
-    def test_kwargs_excludes_explicit_params(self):
-        """kwargs should not contain root, tag, revision, keyby, etc."""
+    def test_ops_excludes_explicit_params(self):
+        """ops should not contain root, tag, revision, keyby, etc."""
         block = SimpleBlock(datalake='/tmp/test', tag='t', keyby='norm', my_param=42)
-        kw = block.kwargs
+        kw = block.ops
         assert 'url' not in kw
         assert 'tag' not in kw
         assert 'keyby' not in kw
         assert 'anchor' not in kw
 
-    def test_kwargs_contains_only_dynamic(self):
+    def test_ops_contains_only_dynamic(self):
         """kwargs should contain exactly the user-supplied **kwargs."""
         block = SimpleBlock(datalake='/tmp/test', alpha=1, beta=2)
-        kw = block.kwargs
+        kw = block.ops
         assert kw == {'alpha': 1, 'beta': 2}
 
-    def test_kwargs_empty_when_no_extras(self):
-        """kwargs should be empty if no extra kwargs were passed."""
+    def test_ops_empty_when_no_extras(self):
+        """ops should be empty if no extra ops were passed."""
         block = SimpleBlock(datalake='/tmp/test')
-        assert block.kwargs == {}
+        assert block.ops == {}
 
-    def test_kwargs_is_subset_of_dfn(self):
-        """Every key in kwargs should also appear in dfn, but not vice versa."""
+    def test_ops_is_subset_of_dfn(self):
+        """Every key in ops should also appear in dfn, but not vice versa."""
         block = SimpleBlock(datalake='/tmp/test', extra=99)
-        kw = block.kwargs
+        kw = block.ops
         d = block.dfn
         for k in kw:
             assert k in d
             assert d[k] == kw[k]
-        # dfn has more keys than kwargs
+        # dfn has more keys than ops
         assert len(d) > len(kw)
 
-    def test_kwargs_with_many_extras(self):
-        """kwargs should handle many dynamic params correctly."""
+    def test_ops_with_many_extras(self):
+        """ops should handle many dynamic params correctly."""
         extras = {f'param_{i}': i for i in range(20)}
         block = SimpleBlock(datalake='/tmp/test', **extras)
-        kw = block.kwargs
+        kw = block.ops
         for k, v in extras.items():
             assert kw[k] == v
         assert len(kw) == 20
 
 
 # ---------------------------------------------------------------------------
-# dfn / kwargs interaction with set()
+# dfn / ops interaction with set()
 # ---------------------------------------------------------------------------
 
 class TestDfnKwargsWithSet:
 
-    def test_set_preserves_kwargs(self):
-        """set() should preserve existing kwargs and allow overrides."""
+    def test_set_preserves_ops(self):
+        """set() should preserve existing ops and allow overrides."""
         block1 = SimpleBlock(datalake='/tmp/a', x=1, y=2)
         block2 = block1.set(y=3, z=4)
-        assert block2.kwargs['x'] == 1
-        assert block2.kwargs['y'] == 3
-        assert block2.kwargs['z'] == 4
+        assert block2.ops['x'] == 1
+        assert block2.ops['y'] == 3
+        assert block2.ops['z'] == 4
 
     def test_set_preserves_explicit_in_dfn(self):
         """set() should preserve explicit params in dfn."""
@@ -167,12 +167,12 @@ class TestDfnKwargsWithSet:
         """set() should not mutate the original block."""
         block1 = SimpleBlock(datalake='/tmp/a', x=1)
         block2 = block1.set(x=2)
-        assert block1.kwargs['x'] == 1
-        assert block2.kwargs['x'] == 2
+        assert block1.ops['x'] == 1
+        assert block2.ops['x'] == 2
 
 
 # ---------------------------------------------------------------------------
-# dfn / kwargs after serialization
+# dfn / ops after serialization
 # ---------------------------------------------------------------------------
 
 class TestDfnKwargsSerialization:
@@ -181,7 +181,7 @@ class TestDfnKwargsSerialization:
         """kwargs should survive pickle round-trip."""
         block = SimpleBlock(datalake='/tmp/test', alpha='abc', num=42)
         restored = pickle.loads(pickle.dumps(block))
-        assert restored.kwargs == block.kwargs
+        assert restored.ops == block.ops
 
     def test_pickle_preserves_dfn(self):
         """dfn should survive pickle round-trip."""
@@ -199,8 +199,8 @@ class TestDfnKwargsSerialization:
         }
         block = SimpleBlock.__new__(SimpleBlock)
         block.__setstate__(old_state)
-        assert block.kwargs['a'] == 100
-        assert block.kwargs['b'] == 200
+        assert block.ops['a'] == 100
+        assert block.ops['b'] == 200
         assert block.dfn['datalake'] == '/tmp/legacy'
 
     def test_legacy_state_dict_in_state(self):
@@ -213,5 +213,5 @@ class TestDfnKwargsSerialization:
         }
         block = SimpleBlock.__new__(SimpleBlock)
         block.__setstate__(old_state)
-        assert block.kwargs['c'] == 300
+        assert block.ops['c'] == 300
         assert block.dfn['datalake'] == '/tmp/legacy'

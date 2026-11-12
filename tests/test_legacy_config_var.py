@@ -181,7 +181,7 @@ def test_legacy_validate_cfg_is_honored_by_init(url):
     # norm(), but it would be re-serialized forever and drift quote()/cite()
     # -- and hence the journal -- from an otherwise identical block.
     assert 'validate_cfg' not in restored.__getstate__()
-    assert 'validate_cfg' not in restored.kwargs
+    assert 'validate_cfg' not in restored.ops
     assert restored.__getstate__()['validate_vars'] is False
     assert 'validate_cfg=' not in restored.quote()  # NB: tmp_path contains the test name
     assert restored.hash == ModernBlock(datalake=url).hash

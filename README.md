@@ -222,10 +222,10 @@ guarantee.
 - **`cite()` shows every identity-affecting setting at a glance.** Every
   nested datablock is expanded in place, as an indented block of its own,
   however deep the structure gets; every `VAR` field is shown, defaults
-  included; operational kwargs (`local`, `n_workers`, ...) are left out, as
+  included; operational keyword arguments, its `ops` (`local`, `n_workers`, ...), are left out, as
   they do not affect identity.
 - **`quote()` reproduces the datablock's operational behavior.** It is the
-  evaluable specline that makes the datablock again, operational kwargs and
+  evaluable specline that makes the datablock again, its ops and
   all, with nested datablocks written compactly, not expanded.
 - **Both make the same datablock, wherever they are evaluated.**
   `dbx.eval(x.quote()).hash == dbx.eval(x.cite()).hash == x.hash`, and both

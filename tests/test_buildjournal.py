@@ -1068,17 +1068,19 @@ class TestSessionIndex:
 
 
 class TestAnEntryRecordsTheBlockInItself:
-    """Since 2026-11-03 an entry records the block's spec, kwargs and renderings in itself, and its environment: no side files."""
+    """Since 2026-11-03 an entry records the block's spec, ops and renderings in itself, and its environment: no side files."""
 
     def test_its_renderings_and_dicts_are_in_the_entry(self, tmp_path):
-        b = block(tmp_path)
+        b = block(tmp_path, n_viz_workers=3)
+        assert b.ops == {'n_viz_workers': 3}
         b.build()
         e = b.buildjournal(iloc=0)
         assert (e['quote'], e['cite'], e['repr']) == (b.quote(), b.cite(), b.repr())
         assert (e['signature'], e['type']) == (b.signaturestr(), b.typestr())
-        assert e.read('spec') == b.spec and e.read('kwargs') == b.kwargs
+        assert e.read('spec') == b.spec and e.read('ops') == b.ops
+        assert e.pretty.spec == b.spec and e.pretty.ops == b.ops and e.pretty.to_dict()['ops'] == b.ops
         assert e.pretty.quote(pretty=False) == b.quote() and e.pretty.signaturestr() == b.signaturestr()
-        sides = ('spec', 'kwargs', 'quote', 'cite', 'repr', 'signature', 'type')
+        sides = ('spec', 'ops', 'kwargs', 'quote', 'cite', 'repr', 'signature', 'type')
         assert not [d for d, _, _ in os.walk(tmp_path) if os.path.basename(os.path.dirname(d)) in sides]
 
     def test_its_environment_with_its_secrets_withheld(self, tmp_path, monkeypatch):
@@ -1099,13 +1101,16 @@ class TestAnEntryRecordsTheBlockInItself:
         entries = [os.path.join(d, f) for d, _, fs in os.walk(tmp_path) for f in fs if '-journal-' in f]
         [f] = [p for p in entries if pd.read_parquet(p)['event'][0] == 'build:end']
         old = pd.read_parquet(f)
+        # Before 2026-11-12 the ops column was named kwargs: it is read as ops.
+        old = old.rename(columns={'ops': 'kwargs'})
         for name, ext in (('spec', 'yaml'), ('kwargs', 'yaml'), ('quote', 'txt'), ('signature', 'txt')):
             path = BuildJournal.path(b, name, ext)
-            (write_yaml if ext == 'yaml' else write_str)(old[name][0] if ext == 'txt' else b.spec if name == 'spec' else b.kwargs, path)
+            (write_yaml if ext == 'yaml' else write_str)(old[name][0] if ext == 'txt' else b.spec if name == 'spec' else b.ops, path)
             old[name] = [path]
         old.to_parquet(f)
         e = b.buildjournal(event='build:end', iloc=0)
-        assert e['quote'].endswith('.txt') and e.read('spec') == b.spec and e.read('kwargs') == b.kwargs
+        assert e['quote'].endswith('.txt') and e.read('spec') == b.spec and e.read('ops') == b.ops
+        assert e.pretty.spec == b.spec and e.pretty.ops == b.ops
         assert e.pretty.quote(pretty=False) == b.quote() and e.pretty.signaturestr() == b.signaturestr()
 
 

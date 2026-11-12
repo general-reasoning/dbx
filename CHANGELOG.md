@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Changed
+- **`Datablock.kwargs` is `Datablock.ops`, in the journal too.** A datablock's operational keyword arguments -- those
+  its `__init__` does not declare, outside its identity -- are its `ops`: they are options, how it is built, and
+  `kwargs` named every keyword argument of a call where these are only a subset. The journal's column is `ops`
+  (`entry.read('ops')`); a journal's `kwargs` column, from before, is read as `ops` -- merged, row by row, where a
+  journal spans the rename -- and compaction still keeps the `kwargs` side files older entries name. `Pretty` gains
+  `spec` and `ops`, the recorded dicts, as `Datablock`'s.
+
 ### Added
 - **`DBX_DIRTY=True`: the working tree, as it is.** One variable for the pair a dirty run needs,
   `DBX_USE_WORK_REPO=False` and `DBX_DIRTY_REPO_OK=True`; set when `dbx.databits` is imported, so every reader and

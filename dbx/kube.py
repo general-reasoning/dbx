@@ -9,12 +9,12 @@ where it submits:
     run = LAMBDA.submit('python -m my.thing', n_gpus=8)
     run.wait()                      # True when the Job completes; raises with its log tail if it fails
 
-A pipeline runs its own calls (`Pipeline.runner`, `dbx.cluster`) through a `KubeRunner` on a KubeCluster:
+A pipeline runs its own calls (`Pipeline.runner`, `dbx.clusters`) through a `KubeRunner` on a KubeCluster:
 
     my_pipeline('preset').runner(LAMBDA).build_tree()        # a KubeRun
 
 Where a value cannot be passed -- a `dbx.pprint` one-liner, `dbx.kubejobs` -- a cluster's name
-works when a package names it in a `dbx.clusters` entry point (`dbx.cluster.cluster`).
+works when a package names it in a `dbx.clusters` entry point (`dbx.clusters.cluster`).
 
 The Job is generated here, so a different command is a different call, never a file to edit. It
 runs *command* with bash, after:
@@ -37,7 +37,7 @@ executable). Or the code is in the image (`dbx.image`).
 `anyscale=True` adds what an Anyscale image needs (`dbx.anyscale.job_options`): its image, its
 `ray` user, its Ray, its Ray working directory. Off Anyscale, give *image* (or `KubeCluster.image`).
 
-A pipeline's run is journaled on the pipeline (`dbx.cluster`): by the submitter in its datalake's
+A pipeline's run is journaled on the pipeline (`dbx.clusters`): by the submitter in its datalake's
 PipeJournal -- `job:submit`, its note the whole record (cluster, Job, expression, image, revision,
 workdirs, session, and the Job's manifest itself), then `job:complete` / `job:fail` when it sees it
 finish, `job:cancel` -- and by the run in the PipeJournal of the datalake it runs in: `job:start`,
@@ -73,8 +73,8 @@ import pandas as pd
 import tqdm
 
 from . import anyscale
-from . import cluster as _cluster_
-from .cluster import Run, Runner
+from . import clusters as _clusters_
+from .clusters import Run, Runner
 from .databits import dbx_repos, dbx_revisions
 
 
@@ -82,7 +82,7 @@ __all__ = ['KubeCluster', 'KubeRun', 'KubeRunner', 'cluster', 'clusters', 'jobs'
 
 
 @dataclasses.dataclass
-class KubeCluster(_cluster_.Cluster):
+class KubeCluster(_clusters_.Cluster):
     """A Kubernetes cluster with Kueue, as a project submits to it.
 
     *mounts* maps a path in the Job to the volume claim mounted there, *readonly* names the ones
@@ -133,7 +133,7 @@ class KubeCluster(_cluster_.Cluster):
     def submit(self, command: str, *, block=None, expression: str | None = None, **options) -> 'KubeRun':
         """Create the Job running *command* here (`job` for *options*, and `dry_run`); its `KubeRun`.
 
-        *workdirs* are synced first. With *block*, the submission is journaled on it (`dbx.cluster`):
+        *workdirs* are synced first. With *block*, the submission is journaled on it (`dbx.clusters`):
         `job:submit` before the Job is created, its note the whole record, the manifest among it, and
         `job:fail` if creating it fails. *expression* is recorded as what *command* evaluates.
         *dry_run*: True submits nothing and contacts nothing; `'server'` has the API server validate the
@@ -382,12 +382,12 @@ KubeCluster.MODE, KubeCluster.RUNNER = 'kube', KubeRunner
 
 def cluster(c: 'str | KubeCluster') -> KubeCluster:
     """*c* itself when a KubeCluster, else the one of that name among the `dbx.clusters` entry points'."""
-    return _cluster_.cluster(c, 'kube')
+    return _clusters_.cluster(c, 'kube')
 
 
 def clusters() -> dict:
     """The Kube clusters the `dbx.clusters` entry points name, by name."""
-    return _cluster_.clusters('kube')
+    return _clusters_.clusters('kube')
 
 
 # --------------------------------------------------------------------------------------------- #

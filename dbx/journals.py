@@ -3366,7 +3366,7 @@ class BuildJournal:
         cluster and the id of the run on it (a Kube Job's name) -- by default
         `DBX_CLUSTER` and `DBX_RUN`, which a run's Job sets, so every entry its
         build writes carries them; None when written from no run. `job:*`
-        entries name the run they are about (`dbx.cluster`).
+        entries name the run they are about (`dbx.clusters`).
 
         *columns* are recorded in the entry beside its own -- read back, they
         sit ahead of `event` -- for what a journal of another kind adds to
@@ -4090,7 +4090,7 @@ class PipeJournal(BuildJournal):
                 storage_options=None, log=None, n_workers=None, progress=None, **filters) -> BuildJournalFrame:
         """Every pipeline in the journal, one row each, with every entrypath it was created to.
 
-        Only its `create` entries count -- not the `job:*` entries of its runs (`dbx.cluster`).
+        Only its `create` entries count -- not the `job:*` entries of its runs (`dbx.clusters`).
         The entries are read and *filters* applied as `BuildJournal.read`
         applies them, then grouped by the pipeline they are of -- its
         `anchorkeypath`, with the identity columns that go with it -- and

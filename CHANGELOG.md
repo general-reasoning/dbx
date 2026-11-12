@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Changed
+- **`dbx.cluster` is `dbx.clusters`; `dbx.cluster('crusoe')` is the cluster.** The module of clusters, runners and runs
+  is `dbx.clusters`, and its `cluster()` -- the one typed most -- is re-exported, beside `runner()`: `dbx.cluster(name)`
+  for `dbx.cluster.cluster(name)`. The rest is reached through the module (`dbx.clusters.runs`, `dbx.clusters.Runner`,
+  `dbx.clusters.clusters()`, which a re-export would have shadowed the module with). A Job evaluates
+  `dbx.clusters.run(...)`; a run's record from before names `dbx.cluster.run`.
 - **`Datablock.kwargs` is `Datablock.ops`, in the journal too.** A datablock's operational keyword arguments -- those
   its `__init__` does not declare, outside its identity -- are its `ops`: they are options, how it is built, and
   `kwargs` named every keyword argument of a call where these are only a subset. The journal's column is `ops`

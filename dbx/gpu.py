@@ -16,7 +16,7 @@ Anyscale, *working_dir* defaults to `dbx.anyscale.working_dir()`: without one, i
 snapshots the current directory for every task.
 
 This is the fan-out within one process's work -- a block's build across a node's GPUs -- where
-`dbx.cluster` ships a whole call to another machine.
+`dbx.clusters` ships a whole call to another machine.
 """
 import contextlib
 import os

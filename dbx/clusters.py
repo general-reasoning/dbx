@@ -407,14 +407,14 @@ class Runner:
             return self.RUN(self._cluster_, None, {}, on=self._pipeline_, skipped=f"{entry.anchorkeypath} is valid here")
         shipped = self._pipeline_.quote()
         call = ''.join([f", {a!r}" for a in args] + [f", {k}={v!r}" for k, v in kwargs.items()])
-        expression = f"dbx.cluster.run(dbx.eval({shipped!r}), {method!r}{call})"
+        expression = f"dbx.clusters.run(dbx.eval({shipped!r}), {method!r}{call})"
         options.setdefault('n_gpus', getattr(self._pipeline_, 'n_gpus', None) or 0)
         options.setdefault('name', f"{type(self._pipeline_).__name__.removesuffix('Pipeline')}-{method}")
         if check:  # The call is recorded, not made: the run evaluates the quote and verifies the entry.
             options.pop('dry_run')
             options = {**options, **self._check_options_(), 'name': f"{options['name']}-check"}
             options['env'] = {'DBX_SUBMIT_CALL': expression, **options.get('env', {})}
-            expression = f"dbx.cluster.verify(dbx.eval({shipped!r}).entry, {entry.hash!r})"
+            expression = f"dbx.clusters.verify(dbx.eval({shipped!r}).entry, {entry.hash!r})"
             method = 'verify'
         # The run joins this command's session, in its own datalake: what it journals is found by (session, run).
         options['env'] = {'DBX_SUBMIT_EXPRESSION': expression, SESSION_ENV: _session_(), **options.get('env', {}),

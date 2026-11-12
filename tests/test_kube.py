@@ -13,7 +13,7 @@ from dataclasses import dataclass
 import pytest
 
 import dbx
-from dbx import cluster as dbxcluster, kube
+from dbx import clusters as dbxclusters, kube
 from dbx.datablocks import DATAFILE, Datablock
 from dbx.journals import PipeJournal
 from dbx.pipelines import Pipeline
@@ -38,7 +38,7 @@ class _EP_:
 def entry_points(monkeypatch):
     """The installed `dbx.clusters` entry points, as a list to put objects in."""
     eps = []
-    monkeypatch.setattr(dbxcluster.metadata, 'entry_points',
+    monkeypatch.setattr(dbxclusters.metadata, 'entry_points',
                         lambda group: [_EP_(o) for o in eps] if group == 'dbx.clusters' else [])
     return eps
 
@@ -206,9 +206,9 @@ class TestWorkdirs:
         assert cluster.fsspec_options() == {'username': 'u'}
         cluster.storage_options = 'tests.test_kube:_sftp_options_'
         assert cluster.fsspec_options() == {'username': 'from-a-function'}
-        assert dbxcluster._rebuild_({'cluster_spec': dbxcluster._spec_(cluster)}) == cluster
-        old = dbxcluster._spec_(cluster) | {'class': 'dbx.kube:Cluster'}    # as journaled before the rename
-        assert dbxcluster._rebuild_({'target_spec': old}) == cluster
+        assert dbxclusters._rebuild_({'cluster_spec': dbxclusters._spec_(cluster)}) == cluster
+        old = dbxclusters._spec_(cluster) | {'class': 'dbx.kube:Cluster'}    # as journaled before the rename
+        assert dbxclusters._rebuild_({'target_spec': old}) == cluster
 
     def test_fsspec_defaults_hold_only_while_inside(self, cluster):
         import fsspec
@@ -505,7 +505,7 @@ class TestPipelineRunner:
         run = p.runner(cluster).build_tree()
         m = kubectl.created[0]
         expression = _env_(m)['DBX_SUBMIT_EXPRESSION']
-        assert expression == f"dbx.cluster.run(dbx.eval({p.quote()!r}), 'build_tree')" == run.record['expression']
+        assert expression == f"dbx.clusters.run(dbx.eval({p.quote()!r}), 'build_tree')" == run.record['expression']
         assert run.record['method'] == 'build_tree' and run.record['pipeline_anchor'] == p.anchor
         assert _env_(m)['DBX_DATALAKE'] == str(tmp_path) and _env_(m)['DBX_KUBE_COMMAND'] == 'dbx.pprint --capture-output "$DBX_SUBMIT_EXPRESSION"'
         assert _container_(m)['resources']['requests']['nvidia.com/gpu'] == '2'
@@ -608,7 +608,7 @@ class TestWatching:
         kubectl.conditions = ['Complete']
         first.wait(poll=0)
         second = p.runner(cluster).build_tree()
-        runs = dbx.cluster.runs(p)
+        runs = dbx.clusters.runs(p)
         assert [r.id for r in runs] == [first.id, second.id] and type(runs[0]) is kube.KubeRun
         assert runs[0]._closed_ and not runs[1]._closed_
         assert runs[1].record['manifest'] == kubectl.created[1]
@@ -619,7 +619,7 @@ class TestWatching:
         p = Single(datalake=str(tmp_path))
         p.runner(cluster).build_tree()
         assert kube.clusters() == {}            # nothing to look 'testc' up in
-        (run,) = dbx.cluster.runs(p)
+        (run,) = dbx.clusters.runs(p)
         assert run.cluster == cluster and run.cluster is not cluster
 
     def test_a_name_submits_to_the_entry_points_cluster(self, cluster, kubectl, entry_points, tmp_path):
@@ -696,8 +696,8 @@ class TestRunner:
         one, two = Single(spec={'n': 1}, datalake=str(tmp_path)), Single(spec={'n': 2}, datalake=str(tmp_path))
         r1, r2 = one.runner(cluster).build_tree(), two.runner(cluster).build_tree()
         assert [r.id for r in one.runner().runs()] == [r1.id]
-        assert [r.id for r in dbx.cluster.runs(two)] == [r2.id]
-        assert [r.id for r in dbx.cluster.runs(two.entry)] == [r2.id]
+        assert [r.id for r in dbx.clusters.runs(two)] == [r2.id]
+        assert [r.id for r in dbx.clusters.runs(two.entry)] == [r2.id]
         everyone = [r1.id, r2.id]
         assert [r.id for r in dbx.runner(Leaf, datalake=str(tmp_path)).runs()] == everyone
         assert [r.id for r in dbx.runner(two.entry.anchor, datalake=str(tmp_path)).runs()] == everyone
@@ -770,7 +770,7 @@ class TestRunner:
         assert df['elapsed'].notna().all() and df['observed'].isna().tolist() == [False, False, True]
         assert df['started'].isna().all() and df['outcome'].isna().all()     # no run journaled its own here
         assert list(p.runner(cluster).runs().dash(live=False)['status']) == ['complete', 'cancelled', 'open']
-        assert list(dbx.cluster.runs(Leaf, datalake=str(tmp_path)).dash()['run']) == list(df['run'])
+        assert list(dbx.clusters.runs(Leaf, datalake=str(tmp_path)).dash()['run']) == list(df['run'])
 
     def test_runs_print_as_their_dash_each_row_its_index(self, cluster, kubectl, tmp_path):
         p = Single(datalake=str(tmp_path))
@@ -782,9 +782,9 @@ class TestRunner:
         assert lines[0].split() == ['run', 'cluster', 'method', 'status', 'submitted', 'elapsed']
         assert lines[1].split()[:5] == ['0', first.id, 'testc', 'build_tree', 'cancelled']
         assert lines[2].split()[:5] == ['1', last.id, 'testc', 'build', 'running']
-        assert rs[-1].id == last.id and isinstance(rs[:1], dbx.cluster.Runs)
+        assert rs[-1].id == last.id and isinstance(rs[:1], dbx.clusters.Runs)
         assert _pipe_events_(p) == ['job:submit', 'job:cancel', 'job:submit']    # printing journals nothing
-        assert repr(dbx.cluster.Runs()) == 'Runs([])'
+        assert repr(dbx.clusters.Runs()) == 'Runs([])'
 
     def test_runs_printed_journal_nothing_even_for_a_run_found_over(self, cluster, kubectl, tmp_path):
         p = Single(datalake=str(tmp_path))
@@ -857,7 +857,7 @@ class TestRunner:
         launched = p.runner(cluster).build_tree()
         monkeypatch.setenv('DBX_CLUSTER', 'testc')
         monkeypatch.setenv('DBX_RUN', launched.id)
-        dbx.cluster.run(dbx.eval(p.quote()), 'build_tree')               # what the Job evaluates
+        dbx.clusters.run(dbx.eval(p.quote()), 'build_tree')               # what the Job evaluates
         assert p.entry.valid()
         j = PipeJournal.read(f"{PipeJournal.ANCHOR}/{p.anchor}", datalake=str(tmp_path), index=None, event='^job:')
         mine = j[j['run'] == launched.id].sort_values('datetime')
@@ -869,7 +869,7 @@ class TestRunner:
     def test_a_failing_run_says_what_it_raised(self, tmp_path, monkeypatch):
         monkeypatch.setenv('DBX_RUN', 'job-y')
         with pytest.raises(AttributeError):
-            dbx.cluster.run(Single(datalake=str(tmp_path)), 'no_such_method')
+            dbx.clusters.run(Single(datalake=str(tmp_path)), 'no_such_method')
         j = PipeJournal.read(f"{PipeJournal.ANCHOR}/{Single().anchor}", datalake=str(tmp_path), index=None,
                              event='job:end')
         assert j['note'].iloc[0].startswith('AttributeError')
@@ -900,8 +900,8 @@ class TestRunner:
         class Dblk:
             hash = 'mine'
             _redirected_paths_ = {'x': '/lake/A/theirs/x.txt'}
-        assert list(dbxcluster._of_dblk_(j, Dblk, adopted=False)) == [True, False, False]
-        assert list(dbxcluster._of_dblk_(j, Dblk, adopted=True)) == [True, True, False]
+        assert list(dbxclusters._of_dblk_(j, Dblk, adopted=False)) == [True, False, False]
+        assert list(dbxclusters._of_dblk_(j, Dblk, adopted=True)) == [True, True, False]
 
 
 class TestClusterDryRun:
@@ -911,17 +911,17 @@ class TestClusterDryRun:
         run = p.runner(cluster, dry_run='cluster').build_tree()
         m = kubectl.created[0]
         assert run.id is not None and m['metadata']['name'].startswith('me-single-build-tree-check-')
-        assert _env_(m)['DBX_SUBMIT_EXPRESSION'] == f"dbx.cluster.verify(dbx.eval({p.quote()!r}).entry, {p.entry.hash!r})"
+        assert _env_(m)['DBX_SUBMIT_EXPRESSION'] == f"dbx.clusters.verify(dbx.eval({p.quote()!r}).entry, {p.entry.hash!r})"
         assert _env_(m)['DBX_SUBMIT_CALL'].endswith("'build_tree')") and run.record['method'] == 'verify'
         req = _container_(m)['resources']['requests']
         assert (req['nvidia.com/gpu'], req['cpu']) == ('0', '2') and 'ray start' not in _container_(m)['command'][2]
 
     def test_verify_reports_the_entry_and_refuses_another_hash(self, tmp_path):
         b = Leaf(datalake=str(tmp_path))
-        got = dbx.cluster.verify(dbx.eval(b.quote()), b.hash)
+        got = dbx.clusters.verify(dbx.eval(b.quote()), b.hash)
         assert got['hash'] == b.hash and got['valid'] is False
         with pytest.raises(ValueError, match='differs'):
-            dbx.cluster.verify(b, '0' * 8)
+            dbx.clusters.verify(b, '0' * 8)
 
 
 # --------------------------------------------------------------------------------------------- #

@@ -12,7 +12,7 @@ its root -- an entrypoint function -- its arguments the pipeline's VAR: a
 `PipelineFromEntrypointFn`.
 
 `Pipeline.runner` runs a call on the pipeline's entrypoint elsewhere -- a Kueue Job (`dbx.kube`) --
-journals it, and lists, watches and cancels its runs: a `dbx.cluster.Runner`.
+journals it, and lists, watches and cancels its runs: a `dbx.clusters.Runner`.
 """
 import dataclasses
 import functools
@@ -24,8 +24,8 @@ from typing import Any
 from .databits import default_datalake
 from .datablocks import SYNTHETIC, Datablock
 from .journals import PipeJournal
-from . import cluster as _cluster_
-from .cluster import Runner
+from . import clusters as _clusters_
+from .clusters import Runner
 
 
 __all__ = ['Pipeline', 'PipelineFromEntrypointFn', 'pipeline', 'entrypoint_tag']
@@ -147,7 +147,7 @@ class Pipeline(Datablock):
         return {k: getattr(self, k) for k in self.parameters if k not in explicit and k != 'log'}
 
     def runner(self, cluster=None, *, mode: str | None = None, force: bool = False, **options) -> 'Runner':
-        """This pipeline's runs on *cluster*: a `dbx.cluster.Runner` of the cluster's kind, which launches, lists, watches and cancels them.
+        """This pipeline's runs on *cluster*: a `dbx.clusters.Runner` of the cluster's kind, which launches, lists, watches and cancels them.
 
             r = p.runner(LAMBDA, n_gpus=8)
             r.build_tree()                           # a Run -- here a dbx.kube.KubeRun
@@ -156,7 +156,7 @@ class Pipeline(Datablock):
             r.runs()[-1].cancel(), r.cancel()        # cancel the last row; all still pending or running
             p.runner().runs().dash()                 # its runs on every cluster, the whole table
 
-        *cluster* is where (`dbx.cluster`): a value, e.g. a `dbx.kube.KubeCluster`, or the name a
+        *cluster* is where (`dbx.clusters`): a value, e.g. a `dbx.kube.KubeCluster`, or the name a
         `dbx.clusters` entry point gives one; with none, the Runner lists runs and launches nothing.
         *mode*, when given, is the kind it must be ('kube'). *options* are the kind's --
         `dbx.kube.KubeCluster.job`'s for 'kube' -- refused here when it does not take them: among them the pod's
@@ -164,10 +164,10 @@ class Pipeline(Datablock):
         `workdirs={src: target}` (sent, or packed, before the Job); and `env={name: value}`, the
         Job's environment, over the cluster's own `env`, and over the runner's own `DBX_*` (the
         session, the call). The run's `DBX_DATALAKE` is this pipeline's datalake if it was given one,
-        else env's, else the cluster's (`dbx.cluster.Runner._run_datalake_`). *force* launches `build`/`build_tree` of an entrypoint
+        else env's, else the cluster's (`dbx.clusters.Runner._run_datalake_`). *force* launches `build`/`build_tree` of an entrypoint
         that is valid here.
         """
-        return _cluster_.runner(self, cluster, mode=mode, force=force, **options)
+        return _clusters_.runner(self, cluster, mode=mode, force=force, **options)
 
 
 class PipelineFromEntrypointFn(Pipeline):

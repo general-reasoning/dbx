@@ -36,7 +36,7 @@ pipelines
     one is recorded in the `PipeJournal`, read with
     `pipejournal`.
 cluster, kube, gpu, image, anyscale
-    `dbx.cluster`: a pipeline's call (`Pipeline.runner`) run on a
+    `dbx.clusters`: a pipeline's call (`Pipeline.runner`) run on a
     `Cluster`, and journaled; `dbx.runner`, the runs of a pipeline, a
     datablock or a whole Datablock class. `dbx.kube`: a Kueue cluster,
     `dbx.kube.KubeCluster` -- its `submit`, `jobs` and `queues` -- and
@@ -84,6 +84,7 @@ if _importlib_util.find_spec('torch') and _importlib_util.find_spec('streaming')
     from .featuretables import *
     from .probes import *
 from .pipelines import *
-from . import anyscale, cluster, gpu, image, kube
-from .cluster import runner
+from . import anyscale, clusters, gpu, image, kube
+# The two of dbx.clusters typed most: dbx.cluster('crusoe'), dbx.runner(...); the rest through the module.
+from .clusters import cluster, runner
 

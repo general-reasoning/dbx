@@ -49,12 +49,19 @@ the pipeline classes, their functions and preset helpers.
   resolves, building nothing. `build_tree()` adopts them too, before it
   builds what is left.
 
-  **Specialize wherever possible.** A specialization adopts only a build the
-  journal records as made -- a `build:end` or a redirection under the old
-  anchor. A build it cannot adopt (data copied in with `UNSAFE_copy_from`, say)
-  is a case for the project's owner: list each one -- class, hash, its journal
-  events -- and bring the list to them. Never redirect on your own: whether and
-  how to redirect is their decision.
+  **Specialize wherever possible.** A specialization adopts what the journal
+  under the old anchor records as data (`SPECIALIZATION_EVENTS`).
+
+  **A copy is data like a build.** `UNSAFE_copy_from` (from another lake, say
+  over `sftp://`) writes in the dbx layout, under the block's own anchor and
+  key, journaled `UNSAFE_copy_from:BEGIN`/`:END`: the copy belongs to that
+  block, reachable and specializable like a build. Copy between lakes only with
+  it, never with `cp` or `rsync`. If a specialization misses a copy, the gap is
+  in dbx's event set: say so and propose the fix, not a redirection.
+
+  What still cannot be specialized is a case for the project's owner: list each
+  one -- class, hash, its journal events -- and bring the list to them. Never
+  redirect on your own: whether and how to redirect is their decision.
 
 ```python
 from dataclasses import dataclass

@@ -21,9 +21,15 @@ the pipeline classes, their functions and preset helpers.
 - A block's lake directory is named by its class's `module.Name`
   (`sctx.datablocks.SCScenery/<hash>`). So moving or renaming a Datablock
   class moves its blocks, even when the hash stays the same. Don't move the
-  lake's directories. Declare a specialization pointing at the old anchor
-  instead, in `pipelines.py`, passed as `SPECIALIZATIONS=` where `__create__`
-  constructs the block:
+  lake's directories, and **don't touch anchoring**: no `ANCHOR` on a class,
+  no `anchor=` on a block, no loop setting either, to keep blocks where they
+  were. A block's anchor is dbx's to derive, and dbx already has the two
+  mechanisms for pointing a block at data stored elsewhere -- Specialization
+  and Redirection -- which find the data through the journal and record that
+  they did. Going around them hides the move from the journal and pins the
+  class to a name that no longer exists. Declare a specialization pointing at
+  the old anchor instead, in `pipelines.py`, passed as `SPECIALIZATIONS=` where
+  `__create__` constructs the block:
 
   ```python
   SCENERY_SPECIALIZATIONS = [
@@ -42,6 +48,13 @@ the pipeline classes, their functions and preset helpers.
   Then `entry.try_specialize_tree()` adopts every block of the tree that
   resolves, building nothing. `build_tree()` adopts them too, before it
   builds what is left.
+
+  **Specialize wherever possible.** A specialization adopts only a build the
+  journal records as made -- a `build:end` or a redirection under the old
+  anchor. A build it cannot adopt (data copied in with `UNSAFE_copy_from`, say)
+  is a case for the project's owner: list each one -- class, hash, its journal
+  events -- and bring the list to them. Never redirect on your own: whether and
+  how to redirect is their decision.
 
 ```python
 from dataclasses import dataclass

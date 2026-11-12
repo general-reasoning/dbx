@@ -2025,11 +2025,14 @@ class Datablock:
     Diff = collections.namedtuple('Diff', ['subsig', 'topics', 'version'])
 
     #SPECIALIZE: BEGIN
-    # The events that count as "this hash has data": a build, or a redirection
-    # to one. A redirect entry records the paths AFTER redirection (it is
-    # written once they are installed), so following a chain costs nothing
-    # beyond reading the entry -- and cannot loop, since nothing is followed.
-    SPECIALIZATION_EVENTS = ('build:end', 'UNSAFE_redirect')
+    # The events that count as "this hash has data": a build, a copy of one
+    # (`UNSAFE_copy_from`, from another lake, say), or a redirection to one. A
+    # copy lands in this block's own anchor and key and records the paths it
+    # wrote; only its END says the copy finished. A redirect entry records the
+    # paths AFTER redirection (it is written once they are installed), so
+    # following a chain costs nothing beyond reading the entry -- and cannot
+    # loop, since nothing is followed.
+    SPECIALIZATION_EVENTS = ('build:end', 'UNSAFE_copy_from:END', 'UNSAFE_redirect')
 
     ### anchorage: begin
     # The anchor every instance of this class is stored under, unless it is

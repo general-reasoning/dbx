@@ -900,6 +900,47 @@ class TestWhyItDidNotResolve:
         assert '\n' not in why
 
 
+class Moved(V1):
+    """V1 moved to another anchor unchanged: its past is V1's, under V1's anchor."""
+
+    SPECIALIZATIONS = [
+        Datablock.Specialization(spec={}, topics='SAME', anchor=ANCHOR, note="moved unchanged"),
+    ]
+
+
+class TestACopyIsAdoptedLikeABuild:
+    """A build brought from another lake with `UNSAFE_copy_from` lands in the
+    dbx layout under its own anchor and key, journaled `UNSAFE_copy_from:END`:
+    it is that block's data, and a specialization adopts it as it would the
+    build itself."""
+
+    @pytest.fixture
+    def copied(self, tmp_path):
+        there = v1(tmp_path / 'there')
+        there.build()
+        here = v1(tmp_path / 'here')
+        here.UNSAFE_copy_from(there.anchorkeypath, OVERRIDE=True)
+        assert here.valid() is True
+        return here
+
+    def test_the_grown_class_adopts_it(self, tmp_path, copied):
+        block = adopted(v2(tmp_path / 'here'))
+        assert block.specialization == V2.SPECIALIZATIONS[0]
+        assert block.path('spectra') == copied.path('spectra')
+        assert block.read('spectra') == 'spectra-16000'
+
+    def test_a_moved_class_adopts_it_under_the_old_anchor(self, tmp_path, copied):
+        block = adopted(Moved(datalake=str(tmp_path / 'here'), spec={'sr': 16000}))
+        assert block.anchor != copied.anchor
+        assert block.path('spectra') == copied.path('spectra')
+        assert block.valid() is True
+
+    def test_only_a_finished_copy_counts(self):
+        assert 'UNSAFE_copy_from:END' in Datablock.SPECIALIZATION_EVENTS
+        assert 'UNSAFE_copy_from:BEGIN' not in Datablock.SPECIALIZATION_EVENTS
+        assert 'UNSAFE_copy_from:ERROR' not in Datablock.SPECIALIZATION_EVENTS
+
+
 # ═══════════════════════════════════════════════════════════════════════
 #  What a specialization is gated on
 # ═══════════════════════════════════════════════════════════════════════

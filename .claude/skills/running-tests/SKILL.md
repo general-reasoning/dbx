@@ -10,10 +10,8 @@ optional dependencies, so `python -m pytest` outside this env silently skips
 the modules that matter.
 
 ```bash
-DBX_USE_WORK_REPO=False DBX_DIRTY_REPO_OK=True \
-    ~/miniconda3/envs/dbx/bin/python -m pytest -q -n 16                          # linux
-DBX_USE_WORK_REPO=False DBX_DIRTY_REPO_OK=True \
-    /opt/homebrew/Caskroom/miniconda/base/envs/dbx/bin/python -m pytest -q -n 8   # macOS
+DBX_DIRTY=True ~/miniconda3/envs/dbx/bin/python -m pytest -q -n 16                          # linux
+DBX_DIRTY=True /opt/homebrew/Caskroom/miniconda/base/envs/dbx/bin/python -m pytest -q -n 8   # macOS
 ```
 
 Call the interpreter by absolute path, and check which exists here before
@@ -23,7 +21,8 @@ Homebrew path on macOS. `conda activate dbx` does not survive between tool calls
 each Bash invocation is a fresh shell — and `conda` on its own fails out of
 the shell snapshot on this machine.
 
-**Both environment variables, every time.** The same two apply to soundworld's
+**`DBX_DIRTY=True`, every time.** It stands for two variables, `DBX_USE_WORK_REPO=False` and
+`DBX_DIRTY_REPO_OK=True` (set when `dbx.databits` is imported); what each does is below. The same two apply to soundworld's
 suite.
 
 `DBX_USE_WORK_REPO=False` is the important one. `~/.bashrc` exports it as

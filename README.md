@@ -365,7 +365,9 @@ Remote tests rely on **Ray**. If you are running tests in an environment with a 
 | `DBX_DATALAKE` | The datalake a block is stored in when not given `datalake=` |
 | `DBX_STORAGE_OPTIONS` | fsspec options for every datalake path, `key=val;key=val`: see [CLUSTERS.md](CLUSTERS.md) |
 | `DBX_GIT_REPO` | Path to the git repository for revision tracking |
+| `DBX_USE_WORK_REPO` | `True`: run from a clone of the repos at HEAD (`False`: from the working tree) |
 | `DBX_DIRTY_REPO_OK` | Set to skip the dirty-repo check |
+| `DBX_DIRTY` | `True`: both of the above at once, `DBX_USE_WORK_REPO=False` and `DBX_DIRTY_REPO_OK=True`: run the working tree as it is |
 | `DBX_LOG_INFO`, `DBX_LOG_DEBUG`, etc. | Control per-level log output |
 | `DBX_LOG_SELECTION` | Comma-separated FQN list for `selected()` log filtering |
 

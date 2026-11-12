@@ -66,6 +66,13 @@ __eval__ = __builtins__['eval'] if isinstance(__builtins__, dict) else getattr(_
 __exec__ = __builtins__['exec'] if isinstance(__builtins__, dict) else getattr(__builtins__, 'exec')
 
 
+# DBX_DIRTY=True: run the working tree as it is -- DBX_USE_WORK_REPO=False and DBX_DIRTY_REPO_OK=True together, set
+# here once, before anything reads them, so every reader and every child process sees the pair. It overrides a
+# DBX_USE_WORK_REPO=True a shell profile exports.
+if os.environ.get('DBX_DIRTY', '').lower() in ('true', '1'):
+    os.environ['DBX_USE_WORK_REPO'] = 'False'
+    os.environ['DBX_DIRTY_REPO_OK'] = 'True'
+
 DBX_GIT_REPO = os.environ.get('DBX_GIT_REPO')
 if DBX_GIT_REPO is None:
     try:

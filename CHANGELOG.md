@@ -5,6 +5,9 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- **`DBX_DIRTY=True`: the working tree, as it is.** One variable for the pair a dirty run needs,
+  `DBX_USE_WORK_REPO=False` and `DBX_DIRTY_REPO_OK=True`; set when `dbx.databits` is imported, so every reader and
+  every child process sees them, and it overrides a `DBX_USE_WORK_REPO=True` a shell profile exports.
 - **hyp --docs: the phone shows a conversation whole; the tree, its way.** A
   cloud session's first message is the conversation itself, every turn
   written out as it was said, and Claude replies only "Ready." -- not a

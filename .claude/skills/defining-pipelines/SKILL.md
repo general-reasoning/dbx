@@ -22,14 +22,9 @@ the pipeline classes, their functions and preset helpers.
   (`sctx.datablocks.SCScenery/<hash>`). So moving or renaming a Datablock
   class moves its blocks, even when the hash stays the same. Don't move the
   lake's directories, and **don't touch anchoring**: no `ANCHOR` on a class,
-  no `anchor=` on a block, no loop setting either, to keep blocks where they
-  were. A block's anchor is dbx's to derive, and dbx already has the two
-  mechanisms for pointing a block at data stored elsewhere -- Specialization
-  and Redirection -- which find the data through the journal and record that
-  they did. Going around them hides the move from the journal and pins the
-  class to a name that no longer exists. Declare a specialization pointing at
-  the old anchor instead, in `pipelines.py`, passed as `SPECIALIZATIONS=` where
-  `__create__` constructs the block:
+  no `anchor=` on a block. Reach the old builds with a specialization pointing
+  at the old anchor, declared in `pipelines.py` and passed as
+  `SPECIALIZATIONS=` where `__create__` constructs the block:
 
   ```python
   SCENERY_SPECIALIZATIONS = [
@@ -38,30 +33,8 @@ the pipeline classes, their functions and preset helpers.
   ]
   ```
 
-  Check it against the lake before building. None of these write anything:
-  - `block.specializations()`: one row per declared specialization, with
-    why it did or didn't resolve.
-  - `block.find_specialization()`: what `build()` would adopt.
-  - `block.UNSAFE_specialize(dry_run=True, dry_validate=True, OVERRIDE=True)`:
-    the proposed redirection, plus whether each topic's data is still there.
-
-  Then `entry.try_specialize_tree()` adopts every block of the tree that
-  resolves, building nothing. `build_tree()` adopts them too, before it
-  builds what is left.
-
-  **Specialize wherever possible.** A specialization adopts what the journal
-  under the old anchor records as data (`SPECIALIZATION_EVENTS`).
-
-  **A copy is data like a build.** `UNSAFE_copy_from` (from another lake, say
-  over `sftp://`) writes in the dbx layout, under the block's own anchor and
-  key, journaled `UNSAFE_copy_from:BEGIN`/`:END`: the copy belongs to that
-  block, reachable and specializable like a build. Copy between lakes only with
-  it, never with `cp` or `rsync`. If a specialization misses a copy, the gap is
-  in dbx's event set: say so and propose the fix, not a redirection.
-
-  What still cannot be specialized is a case for the project's owner: list each
-  one -- class, hash, its journal events -- and bring the list to them. Never
-  redirect on your own: whether and how to redirect is their decision.
+  The full chain -- specialize, fix dbx for a generic miss, redirect manually
+  for a corner case, and who decides -- is the skill `reaching-existing-builds`.
 
 ```python
 from dataclasses import dataclass

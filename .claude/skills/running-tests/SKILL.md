@@ -50,6 +50,19 @@ streaming's shared memory is named per process. Use about half the cores
 (`nproc`): `-n auto` takes them all, and the tests that build in worker pools
 of their own then compete for them.
 
+**In a container, count the CPUs from the cgroup, not `nproc`.** `nproc`
+reports the host's cores; the container may be allowed far fewer.
+`/sys/fs/cgroup/cpu.max` holds `<quota> <period>`, and quota / period is
+the CPUs it gets (`max` means no limit). On the Anyscale workspace `nproc` says
+32 but `cpu.max` is `740000 100000`, 7.4 CPUs: `-n 16` there runs more than
+twice oversubscribed and outlasted a 15-minute timeout (2026-11-12). Use
+about that many workers:
+
+```bash
+read q p < /sys/fs/cgroup/cpu.max; [ "$q" = max ] && n=$(( $(nproc) / 2 )) || n=$(( q / p ))
+... -m pytest -q -n $n
+```
+
 Scope with a path (`... -m pytest tests/test_stills.py -q`) while iterating --
 a single module is seconds, and needs no `-n` -- and run the whole suite, in
 parallel, once at the end.

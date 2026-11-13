@@ -2235,13 +2235,13 @@ def main(argv=None):
     journal = ap.add_argument_group("--journal: dbx's datalake (DBX_DATALAKE)")
     journal.add_argument("--journal", nargs="?", const="pipelines", default=None, metavar="ANCHOR",
                          help="with no ANCHOR, or 'pipelines', the datalake's pipelines, from dbx.pipejournal(), one point "
-                              "each; with an ANCHOR, that anchor's blocks, from its build journal")
+                              "each; with an ANCHOR, that anchor's datablocks, from its build journal")
     journal.add_argument("--filter", default=None, metavar="'KEY=PATTERN, ...'",
                          help="with an ANCHOR: its journal filtered, each KEY a column, each PATTERN matched against it; the "
                               "filter field in the top bar changes it")
     journal.add_argument("--extra-construction-events", "--ece", nargs="+", default=[], metavar="EVENT",
-                         help="with the pipelines: events that also make an entry block count as constructed -- each alone, "
-                              "or followed by = or : and the rest: `--ece ckpt` takes a block that has checkpointed "
+                         help="with the pipelines: events that also make an entry datablock count as constructed -- each alone, "
+                              "or followed by = or : and the rest: `--ece ckpt` takes a datablock that has checkpointed "
                               "(ckpt=<tag>)")
     journal.add_argument("--remote-python", default=None,
                          help="the python, on the datalake's host, that read runs trueinst() in -- with dbx, ray and the "
@@ -2266,7 +2266,7 @@ def main(argv=None):
     if args.journal is not None and args.docs:
         ap.error("--journal and --docs are two corpora: one at a time")
     if args.extra_construction_events and not pipelines:
-        ap.error("--extra-construction-events is for the entry blocks of --journal's pipelines")
+        ap.error("--extra-construction-events is for the entry datablocks of --journal's pipelines")
     if args.dir is not None and not args.docs:
         ap.error("--dir is the directory --docs scans")
     if args.claude_dir is not None:

@@ -1,13 +1,13 @@
 # Datastack
 
-`Datastack` builds N child `Datablock`s (blocks) in parallel.
+`Datastack` builds N child `Datablock`s in parallel.
 
-## Implementing a Block
+## Implementing the stack's Datablock
 
-A block is a plain `Datablock`.  Implement `VAR`, `TOPICS`, and `__build__`:
+A stack's datablock is a plain `Datablock`.  Implement `VAR`, `TOPICS`, and `__build__`:
 
 ```python
-class MyBlock(Datablock):
+class MyDatablock(Datablock):
     TOPICS = {'output': 'output.parquet'}
 
     @dataclass
@@ -22,13 +22,13 @@ class MyBlock(Datablock):
         df.to_parquet(self.path())
 ```
 
-The block knows nothing about parallelism — it just builds one piece of work.
+The datablock knows nothing about parallelism — it just builds one piece of work.
 
 ## Implementing a Stack
 
 ```python
 class MyStack(Datastack):
-    BLOCK = MyBlock                                     # REQUIRED (a warning, for now)
+    BLOCK = MyDatablock                                     # REQUIRED (a warning, for now)
 
     @dataclass
     class VAR(Datablock.VAR):
@@ -41,8 +41,8 @@ class MyStack(Datastack):
         return math.ceil(self.var.n_items / self.var.shard_size)
 
     def __block__(self, idx: int) -> Datablock:         # REQUIRED
-        """Return block `idx`.  This runs INSIDE the worker."""
-        return MyBlock(
+        """Return datablock `idx`.  This runs INSIDE the worker."""
+        return MyDatablock(
             url=self.url,
             spec=dict(
                 idx=idx,
@@ -53,12 +53,12 @@ class MyStack(Datastack):
 
     # Optional hooks:
     # def __split__(self):  ...   # pre-build (e.g. partition input data)
-    # def __stack__(self):  ...   # post-build (e.g. concatenate block outputs)
+    # def __stack__(self):  ...   # post-build (e.g. concatenate datablock outputs)
 ```
 
 `BLOCK` declares what the stack holds: every `block(i)` is checked to be one
-as it is formed. It does not locate anything -- a block's journal is under
-that block's own url and anchor. A `Datatable`'s `TABLET` is its `BLOCK`, so a
+as it is formed. It does not locate anything -- a datablock's journal is under
+that datablock's own url and anchor. A `Datatable`'s `TABLET` is its `BLOCK`, so a
 table declares nothing more. A stack with no `BLOCK` warns (`FutureWarning`);
 it will be required.
 
@@ -89,22 +89,22 @@ class MyBag(Datablock):
 
 This stores `self.device_batch_size` and `self.device` without touching the hash.
 
-## How Shared State Reaches Blocks
+## How Shared State Reaches Datablocks
 
 `stack.build(*args, **kwargs)` passes `*args, **kwargs` to
 `Datastack.__build__(*args, **kwargs)`, but `__build__` does **not** forward
-them to individual block builds.  This is deliberate: blocks build inside
+them to individual datablock builds.  This is deliberate: datablocks build inside
 workers (threads/processes/actors) where those args may not be serializable.
 
-Shared state reaches blocks through three mechanisms:
+Shared state reaches datablocks through three mechanisms:
 
 1. **Through `spec`** (all backends) — Pass shared config fields from the
-   stack's spec into each block's spec during `__block__()`.  This is the
+   stack's spec into each datablock's spec during `__block__()`.  This is the
    primary mechanism and always works because spec values are simple data.
 
    ```python
    def __block__(self, idx):
-       return MyBlock(url=self.url, spec=dict(
+       return MyDatablock(url=self.url, spec=dict(
            idx=idx,
            source_path=self.var.source_path,  # forwarded from stack config
        ))
@@ -120,7 +120,7 @@ Shared state reaches blocks through three mechanisms:
 
    def __block__(self, idx):
        chunk = self._index[idx]
-       return MyBlock(url=self.url, spec=dict(idx=idx, keys=chunk))
+       return MyDatablock(url=self.url, spec=dict(idx=idx, keys=chunk))
    ```
 
    > [!WARNING]
@@ -130,7 +130,7 @@ Shared state reaches blocks through three mechanisms:
    > attributes like `self._index` are **silently dropped**.
 
 3. **Through `__split__()` + filesystem** (all backends) — Write shared
-   state to disk in `__split__()`, then have each block read it back:
+   state to disk in `__split__()`, then have each datablock read it back:
 
    ```python
    def __split__(self):
@@ -138,7 +138,7 @@ Shared state reaches blocks through three mechanisms:
        write_frame(index, os.path.join(self._url_, '_split_index.parquet'))
 
    def __block__(self, idx):
-       return MyBlock(url=self.url, spec=dict(
+       return MyDatablock(url=self.url, spec=dict(
            idx=idx,
            index_path=os.path.join(self._url_, '_split_index.parquet'),
        ))
@@ -146,19 +146,19 @@ Shared state reaches blocks through three mechanisms:
 
 ## The `__split__()` and `__stack__()` Hooks
 
-### `__split__()` — Precomputing Block Boundaries
+### `__split__()` — Precomputing Datablock Boundaries
 
-`__split__()` runs **once** in the main process before any blocks are built.
-Use it to evaluate expensive source data and precompute each block's input
+`__split__()` runs **once** in the main process before any datablocks are built.
+Use it to evaluate expensive source data and precompute each datablock's input
 boundaries.  For example, when building features from a collection of slides,
-each block processes one slide's tile-bag.  Rather than letting every block
+each datablock processes one slide's tile-bag.  Rather than letting every datablock
 re-resolve the full collection, `__split__` resolves it once:
 
 ```python
 def __split__(self):
     # Evaluate the source clip ONCE — resolves quoted specs, forms folds, etc.
     source_clip = self.var.source_clip
-    # Precompute each block's boundaries and write a manifest to disk
+    # Precompute each datablock's boundaries and write a manifest to disk
     # so workers (including multiprocessing) can read it back.
     manifest = []
     for idx in range(self.n_blocks):
@@ -176,7 +176,7 @@ def __split__(self):
 ```
 
 The resulting manifest survives serialization (it's on disk) and gives each
-block a lightweight handle to its input without re-evaluating the full
+datablock a lightweight handle to its input without re-evaluating the full
 source collection.  `__block__` reads back just its row:
 
 ```python
@@ -189,9 +189,9 @@ def __block__(self, idx):
     ), tag=row['tag'])
 ```
 
-### Reusing Heavy Resources Across Blocks
+### Reusing Heavy Resources Across Datablocks
 
-Between `__split__()` and `__stack__()`, `Datastack.__build__` fans out block
+Between `__split__()` and `__stack__()`, `Datastack.__build__` fans out datablock
 construction to an **executor** — a pool of workers (threads, processes, or
 Ray actors, controlled by the `parallelization=` kwarg).  Each worker receives
 a chunk of `BlockMaker` callables and a copy of the `stack` object.  In
@@ -199,8 +199,8 @@ multiprocessing, `stack` is pickled once per worker and deserialized into a
 single instance that is **reused for every BlockMaker call in that worker's
 chunk** (see "Context Distribution" below).
 
-This creates a natural place to cache expensive resources: if a block needs a
-GPU model, you want to load it **once** and reuse it across all blocks in the
+This creates a natural place to cache expensive resources: if a datablock needs a
+GPU model, you want to load it **once** and reuse it across all datablocks in the
 same worker.  The strategy differs by execution mode:
 
 **Inline mode** — `__split__` creates the resource in the main process and
@@ -228,7 +228,7 @@ class BlockMaker(Datastack.BlockMaker):
         self.device = device
 
     def __call__(self, stack, *, build=True):
-        block = stack.__block__(self.idx, device=self.device)
+        dblk = stack.__block__(self.idx, device=self.device)
         if build:
             # Reuse evaluator: inline gets it from __split__,
             # multiprocessing gets it from worker-local cache.
@@ -240,11 +240,11 @@ class BlockMaker(Datastack.BlockMaker):
                         device=self.device, log=stack.log,
                     )
                 evaluator = stack._worker_evaluator
-            block.build(evaluator=evaluator)
-        del block; gc.collect()
+            dblk.build(evaluator=evaluator)
+        del dblk; gc.collect()
 ```
 
-The block's `__build__` accepts the evaluator as an optional kwarg, with a
+The datablock's `__build__` accepts the evaluator as an optional kwarg, with a
 fallback for standalone builds:
 
 ```python
@@ -259,17 +259,17 @@ class MyBag(Datablock):
 | Execution mode  | Where evaluator is created    | How many loads             |
 |-----------------|-------------------------------|---------------------------|
 | Inline          | `__split__()` in main process | 1 total                   |
-| Multiprocessing | `BlockMaker.__call__` lazily  | 1 per worker (not per block) |
+| Multiprocessing | `BlockMaker.__call__` lazily  | 1 per worker (not per datablock) |
 
 ### `__stack__()` — Building a Unified Index
 
-`__stack__()` runs **once** in the main process after all blocks finish.
-Use it to aggregate block outputs into a unified index that supports random
-access over the full collection without materializing every block:
+`__stack__()` runs **once** in the main process after all datablocks finish.
+Use it to aggregate datablock outputs into a unified index that supports random
+access over the full collection without materializing every datablock:
 
 ```python
 def __stack__(self):
-    # Collect per-block metadata into a unified index.
+    # Collect per-datablock metadata into a unified index.
     index = []
     for i in range(self.n_blocks):
         bag = self.block(i)
@@ -298,7 +298,7 @@ def __stack__(self):
 ```
 
 **When to extend `__stack__`:** If your downstream code needs to enumerate
-blocks, look up tags, or compute dataset-level statistics (total samples,
+datablocks, look up tags, or compute dataset-level statistics (total samples,
 feature dimensions, label distributions), do it in `__stack__` and persist the
 result.  This avoids repeating the aggregation on every read.
 
@@ -328,8 +328,8 @@ flowchart LR
     subgraph "each worker"
         E["maker(stack, build=True)"] --> F
         F["stack.__block__(idx)"] --> G
-        G["block.build()"] --> H
-        H["del block; gc.collect()"]
+        G["dblk.build()"] --> H
+        H["del dblk; gc.collect()"]
     end
 
     C -.-> E
@@ -339,7 +339,7 @@ flowchart LR
 ```
 
 `BlockMaker` is a lightweight callable holding just an index.  It defers both
-block construction (`__block__`) and building into the worker — the main process
+datablock construction (`__block__`) and building into the worker — the main process
 never instantiates N full Datablocks.
 
 ## Context Distribution
@@ -375,7 +375,7 @@ devices on the `BlockMaker`.
 Override `BlockMaker` to carry a device assignment and lazily cache expensive
 resources per worker.  The executor splits makers into **contiguous chunks**
 via `np.array_split` — one chunk per worker.  Assign the device per worker
-chunk, not per block index, to avoid GPU thrashing.
+chunk, not per datablock index, to avoid GPU thrashing.
 
 > [!NOTE]
 > **Why worker-local caching works:** Within a worker, `_run_items_` passes
@@ -401,9 +401,9 @@ class MyClip(Datastack):
                     stack._worker_source_clip = stack.var.source_clip  # eval ONCE
                 source = stack._worker_source_clip.block(self.idx)     # lazy
 
-            block = stack.__block__(self.idx, device=self.device)
-            if stack._keyby_given_():       # a stack at its KEYBY leaves each block its own
-                block.keyby = stack.keyby
+            dblk = stack.__block__(self.idx, device=self.device)
+            if stack._keyby_given_():       # a stack at its KEYBY leaves each datablock its own
+                dblk.keyby = stack.keyby
             if build:
                 kwargs = {'source': source}
                 # Evaluator: shared (inline) or worker-local cache (mp).
@@ -415,8 +415,8 @@ class MyClip(Datastack):
                             device=self.device, log=stack.log,
                         )
                     kwargs['evaluator'] = stack._worker_evaluator
-                block.build(**kwargs)
-            del block; gc.collect()
+                dblk.build(**kwargs)
+            del dblk; gc.collect()
 
     def __build__(self, *args, **kwargs):
         self.__split__()
@@ -442,7 +442,7 @@ class MyClip(Datastack):
                   for idx in range(self.n_blocks)]
         executor = self.executor_cls(
             n_workers=n_workers,
-            tag=f"BUILDING {len(makers)} blocks [{self.__class__.__name__}]",
+            tag=f"BUILDING {len(makers)} datablocks [{self.__class__.__name__}]",
         )
         try:
             executor.exec_callables(makers, self, build=True)
@@ -461,15 +461,15 @@ class MyClip(Datastack):
 > base implementation doesn't provide.
 
 This eliminates two common performance traps:
-- **O(N²) source formation** — without caching, each block re-evaluates its
+- **O(N²) source formation** — without caching, each datablock re-evaluates its
   quoted spec, re-forming the entire source collection.  With worker-local
   caching, the source clip is evaluated once per worker, then `.block(idx)`
   lazily resolves individual items.
-- **Per-block model reload** — without caching, each block instantiates its own
+- **Per-datablock model reload** — without caching, each datablock instantiates its own
   evaluator (loading model weights from disk).  With worker-local caching, one
   evaluator is created per worker and reused for the entire chunk.
 
-The block's `__build__` accepts optional injected resources with fallbacks:
+The datablock's `__build__` accepts optional injected resources with fallbacks:
 
 ```python
 class MyBag(Datablock):
@@ -488,21 +488,21 @@ class MyBag(Datablock):
 
 ## A Valid Stack and Its Children
 
-A block's **children** are what it is built on: its VAR subtrees -- the
-blocks its VAR holds, and theirs, down to the leaves -- and, for a stack, its
-blocks. Both have identities of their own, and either can move to a new hash
-while the block above it keeps its own. Change a stack's `BLOCK`'s `TOPICS`
-or `VERSION` and every block of the stack moves; the stack, and whatever is
-built on it, do not. They are still valid, and the blocks are not built.
+A datablock's **children** are what it is built on: its VAR subtrees -- the
+datablocks its VAR holds, and theirs, down to the leaves -- and, for a stack, its
+datablocks. Both have identities of their own, and either can move to a new hash
+while the datablock above it keeps its own. Change a stack's `BLOCK`'s `TOPICS`
+or `VERSION` and every datablock of the stack moves; the stack, and whatever is
+built on it, do not. They are still valid, and the datablocks are not built.
 
-A block's validity therefore vouches for **itself, not for its children**,
+A datablock's validity therefore vouches for **itself, not for its children**,
 and `build_tree()` says how much it takes it to vouch for:
 
 | `build_tree(deep=...)` | A child that is already valid |
 |---|---|
 | `False` (default) | Vouches for its whole subtree: skipped. |
 | `'try_specialize_children'` | Vouches for itself only: its children are tried for specializations, as `try_specialize_tree()` tries them, and nothing is built. |
-| `True` | Vouches for nothing: every block is built anew. |
+| `True` | Vouches for nothing: every datablock is built anew. |
 
 A child that is not valid is built in every case.
 
@@ -517,12 +517,12 @@ this tablet is not valid: it was never built, but a specialization resolves for 
 and was never adopted
 ```
 
-A stack checks its blocks against its blocks' manifest, a sample of them by
-default (`validation='cross_check'`). A block whose path no longer matches the
-manifest invalidates the cross-check, and every block is then asked. Where
-nothing moved, this costs forming a sample of the blocks. Children that are not
+A stack checks its datablocks against its datablocks' manifest, a sample of them by
+default (`validation='cross_check'`). A datablock whose path no longer matches the
+manifest invalidates the cross-check, and every datablock is then asked. Where
+nothing moved, this costs forming a sample of the datablocks. Children that are not
 valid and whose specializations do not resolve stay unbuilt: their data is
-computed only by `deep=True`, or a build of the block itself.
+computed only by `deep=True`, or a build of the datablock itself.
 
 ## Gotchas
 
@@ -530,8 +530,8 @@ computed only by `deep=True`, or a build of the block itself.
 |-------|-------|-----|
 | `AttributeError` on `self._foo` in worker | Ad-hoc attrs dropped by `__getstate__` | Store on `BlockMaker`, use `spec`, or write to disk |
 | Hash changes when `device` added to VAR | Runtime params in VAR affect identity | Keep them as `__init__` kwargs only |
-| Per-block model reload in multiprocessing | No evaluator caching across blocks in a worker | Worker-local caching via `hasattr` on `stack` |
-| O(N²) source formation | Each block re-evaluates quoted spec for source clip | Cache source clip on `stack`, use `.block(idx)` |
+| Per-datablock model reload in multiprocessing | No evaluator caching across datablocks in a worker | Worker-local caching via `hasattr` on `stack` |
+| O(N²) source formation | Each datablock re-evaluates quoted spec for source clip | Cache source clip on `stack`, use `.block(idx)` |
 | OOM with multi-GPU | Round-robin `idx % n_devices` → workers switch GPUs | Use worker-chunk alignment |
 | CUDA context errors in multiprocessing | Shared evaluator across process boundaries | Each worker loads its own evaluator |
 | `spawn` vs `fork` deadlocks | `fork` + CUDA = deadlocks | Default is `spawn`; use `multiprocessing_start_method` |

@@ -5,7 +5,7 @@ dbx keeps three journals, all as Parquet files under the datalake:
 | | what one row is | read with | returns |
 |---|---|---|---|
 | **exec journal** | one `dbx.exec` / `dbx.pprint` command | `dbx.execjournal()` | `ExecJournalFrame` / `ExecJournalEntry` |
-| **build journal** | one journal entry of one block (`build:end`, a note, …) | `dbx.buildjournal(anchor)` | `BuildJournalFrame` / `BuildJournalEntry` |
+| **build journal** | one journal entry of one datablock (`build:end`, a note, …) | `dbx.buildjournal(anchor)` | `BuildJournalFrame` / `BuildJournalEntry` |
 | **pipeline journal** | one `Pipeline`, with every entrypath it was constructed to | `dbx.pipejournal()` | `BuildJournalFrame` / `BuildJournalEntry` |
 
 They are linked by the command's `session`. Every journal entry written while
@@ -46,7 +46,7 @@ dbx.execjournal(loc=None, *, iloc=None, datalake=None, index=..., **filters)
 
 This reads `<datalake>/.journal/exec/`. `datalake` defaults to
 `DBX_DATALAKE`. That is where `dbx.exec`
-writes every command, whatever datalake the command's blocks use.
+writes every command, whatever datalake the command's datablocks use.
 
 The result is an `ExecJournalFrame`, **newest first**, indexed by the
 command's `id` (pass `index=None` to number the rows 0..N-1 instead). With
@@ -63,7 +63,7 @@ Columns, in the order the frame holds them:
 | `exception` | what it raised, as `'<Type>: <message>'`; None if it returned |
 | `traceback` | where it raised, as Python prints it; None if it returned |
 | `id` | row's uuid |
-| `session` | `BuildJournal` session every block in the command wrote under |
+| `session` | `BuildJournal` session every datablock in the command wrote under |
 | `buildjournal_entries` | paths of the build journal entries the command's own process wrote or got back from its workers, in the order first written (the session index is the complete list) |
 | `output_captures` | paths of the command's captured stdout/stderr, the master capture first; empty unless it ran with `capture_output=True` / `--capture-output` (see [Captured output](#captured-output)) |
 | `comment` | trailing `# comment` alone: what the command was *for* |
@@ -164,22 +164,22 @@ e.dataentries()[0].pretty.paths()   # {'x': '…/demo_blocks.Apple/3c293846/x/x.
 dbx.execjournal(comment='again', iloc=0).dataentries()   # []
 ```
 
-The second command wrote **nothing**. `build()` on a block that is already
-built returns without journaling, so a rebuild of a valid block is not among
+The second command wrote **nothing**. `build()` on a datablock that is already
+built returns without journaling, so a rebuild of a valid datablock is not among
 the command's entries or its `constructed()`. That holds with `deep=True`
 too: `deep` makes `build_tree()` go into subtrees that are already valid, but
-each valid block's own `build()` still skips without writing.
+each valid datablock's own `build()` still skips without writing.
 
 **Reads are live.** The entries are read from the session index at call
 time, so `.dataentries()` shows what is in those files *now*, and a path that has
 since been cleared is skipped with a warning. A row written before the index
 existed falls back to its `buildjournal_entries`.
 
-**One entry per block instance.** A block instance rewrites its one entry
+**One entry per datablock instance.** A datablock instance rewrites its one entry
 file. So a `build()` appears as its final event: `build:end`,
 `build:exception` if it raised, or `build:start` if it never finished. A
 failed build is in `buildjournal()` and not in `constructed()`. Two instances
-of the same block give two entries. The same goes for `build_tree()`: it
+of the same datablock give two entries. The same goes for `build_tree()`: it
 writes `build_tree:<var>:begin` and `build_tree:<var>:end` for each var into
 that one file, so after a `build_tree()` that skipped its own build, the entry
 holds only the last var's `end`.
@@ -264,7 +264,7 @@ lists the names. It searches every capture in the session directory, not only
 the ones the row lists, so it also finds the capture of a worker that died
 before it could send its path back.
 
-A block doesn't capture anything itself. Its journal entry's `log` column is
+A datablock doesn't capture anything itself. Its journal entry's `log` column is
 the path of the capture open in the process that built it. That file is
 shared with everything else the process printed, and it is only written once
 the capture closes. `Datablock(capture_output=...)` is still accepted, so
@@ -280,7 +280,7 @@ dbx.buildjournal(what, loc=None, *, iloc=None, datalake=None, index=..., unnorma
 
 - an anchor string such as `'demo_blocks.Apple'`
 - a `Datablock` class
-- a block instance, whose `datalake`, `storage_options` and `log` then become the defaults
+- a datablock instance, whose `datalake`, `storage_options` and `log` then become the defaults
 - a DataFrame to wrap as a `BuildJournalFrame`, which reads nothing
 
 This reads every entry under `<datalake>/<anchor>/`, for every hash and tag.
@@ -290,7 +290,7 @@ position), it returns one `BuildJournalEntry`. A prefix that matches no id or
 several ids raises `KeyError`, listing the matches. An anchor with no journal
 directory raises `FileNotFoundError`.
 
-`block.buildjournal(**filters)` reads the same journal through the block's own
+`dblk.buildjournal(**filters)` reads the same journal through the datablock's own
 `BuildJournal`, but its frame is numbered rather than indexed by id, so its
 `loc=` is a row number. Pass `index='id'` to look an entry up by id or id
 prefix instead. `frame.get(...)` takes the same labels, prefixes included.
@@ -305,15 +305,15 @@ dbx.buildjournal(Apple, hash='^3c29', date='2026-09-28')
 
 The main columns:
 
-- `anchor`, `hash`, `key`, `tag`, `version`, `revision`, `gitrepo`, `datalake`: the block and the code it came from
+- `anchor`, `hash`, `key`, `tag`, `version`, `revision`, `gitrepo`, `datalake`: the datablock and the code it came from
 - `event`: `build:end`, `build:exception`, `UNSAFE_redirect`, `note:…`, …
 - `datetime`: parsed to a real datetime here, unlike in the exec journal
 - `session`, `tree`: the command, and the build tree within it
-- `pipeline`: the `id` of the pipeline whose tree the block is in, or None. It is the `id` of that pipeline's `create` entry in the PipeJournal, and per pipeline instance, not per preset
+- `pipeline`: the `id` of the pipeline whose tree the datablock is in, or None. It is the `id` of that pipeline's `create` entry in the PipeJournal, and per pipeline instance, not per preset
 - `cluster`, `run`: the cluster and run (a Kube Job's name) the entry was written from, or None
 - `id`, `code`: identify the row
 - `topics`, `paths`: the recorded `{topic: filename}` and `{topic: path}`
-- `log`: path of the output capture open while the block was built, or None (see [Captured output](#captured-output))
+- `log`: path of the output capture open while the datablock was built, or None (see [Captured output](#captured-output))
 - `spec`, `quote`, `cite`, `repr`, `signature`, `type`, `note`: **paths** to the files holding each rendering
 
 Rows from older eras have their `type` and `signature` columns resolved per
@@ -364,8 +364,8 @@ absent.
 | call | returns |
 |---|---|
 | `entry.read('spec')`, `entry.read('quote', 'note')` | **contents** behind a path column: YAML parsed, `.txt`/`.log` as text; several names give a dict |
-| `entry.pretty` | `Pretty`: the block **as recorded**, with `Datablock`'s API shape |
-| `entry.inst()` | re-creates the block by evaluating its recorded `quote` in this interpreter |
+| `entry.pretty` | `Pretty`: the datablock **as recorded**, with `Datablock`'s API shape |
+| `entry.inst()` | re-creates the datablock by evaluating its recorded `quote` in this interpreter |
 | `entry.rinst()` / `entry.inst(remote=True)` / `entry.trueinst()` | same, but on a Ray worker pinned to the entry's `revision`, so the hash matches the recorded one; returns a proxy |
 
 `inst()` can check out the project at the recorded revision, but not `dbx`,
@@ -419,15 +419,15 @@ A journal read often and written in many small files can be compacted:
 `BuildJournal.UNSAFE_compact(anchors)` rewrites each anchor's entries as one parquet
 file, where `read` finds it, and `ExecJournal.UNSAFE_compact()` does the same for
 the exec journal. No entry is dropped, and entries recording a redirection stay in
-their block's own journal. `PipeJournal.UNSAFE_compact()` instead keeps one entry per
+their datablock's own journal. `PipeJournal.UNSAFE_compact()` instead keeps one entry per
 pipeline and entrypath -- all `collect` reads.
 
 `PipeJournal` is a `BuildJournal` whose entries are laid out exactly as a
-block's are, under `<datalake>/.pipelines` instead of the datalake itself:
+datablock's are, under `<datalake>/.pipelines` instead of the datalake itself:
 `<datalake>/.pipelines/<anchor>/<key>/.journal/…`, where the pipeline's own
 journal is at `<datalake>/<anchor>/<key>/.journal/…`. So every pipeline in a
 datalake is found by scanning one directory. The datalake is the pipeline's
-own, resolved as any block's is. Each entry has one column a block's entry
+own, resolved as any datablock's is. Each entry has one column a datablock's entry
 does not: `entrypath`, the entrypoint's `anchorkeypath`.
 
 `dbx.pipejournal()` is `PipeJournal.collect()`. It reads the entries,

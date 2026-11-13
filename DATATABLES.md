@@ -1,6 +1,6 @@
 # Datatablet / Datatable
 
-`Datatable` is a `Datastack` whose blocks — `Datatablet`s — each write several
+`Datatable` is a `Datastack` whose datablocks — `Datatablet`s — each write several
 **parallel MDS streams**, called *slices*, that can be zipped back into one
 `torch.utils.data.Dataset` on demand.
 
@@ -80,8 +80,8 @@ FrameTablet.TOPICS
 # {'data': {'frames': DIRTOPIC, 'annotations': DIRTOPIC}, 'note': 'note.txt'}
 ```
 
-so the slices are covered by the block's signature and hence by its hash:
-adding, removing or renaming one re-keys the block rather than quietly reusing
+so the slices are covered by the datablock's signature and hence by its hash:
+adding, removing or renaming one re-keys the datablock rather than quietly reusing
 another shape's artifacts.  Declaring the `data` group explicitly works too,
 and then *it* defines `SLICES`; declaring both and having them disagree is an
 error.
@@ -446,14 +446,14 @@ hash.  A table passes both down to every tablet it forms.
 
 `cacheroot` is the resolved form of `cache`, named for it the way dbx's own
 `localroot` is named for `local`.  It defaults to `<localroot>/streaming` —
-under the block's local staging root (`local=`, `DBX_LOCAL`, or the url itself
+under the datablock's local staging root (`local=`, `DBX_LOCAL`, or the url itself
 when that is already local), **not** `/tmp`, so a cache big enough to matter
 lands on the disk the deployment chose for it.  Under it go shard downloads
 (bounded by `cache_limit`), staged writes on their way to remote storage, and
 decompression scratch — no data, and safe to delete at any time.
 
 `cache` is stored raw and resolved lazily, so leaving it unset keeps it unset
-in the block's handle and journal instead of baking one machine's absolute
+in the datablock's handle and journal instead of baking one machine's absolute
 path into them.
 
 ```python

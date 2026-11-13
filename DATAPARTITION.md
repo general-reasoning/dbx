@@ -46,7 +46,7 @@ is that part, and says so: `MappedDatatable`'s specialization renders it as
 `partition` and `part` moved out, the part under its old name; for a
 `MappedFeaturetable`, its `upstream` left out too, *determined* by its map, table
 and collator (`Specialization.determined`) -- under the old classes' paths
-(`dbx.dataparts.PART_PAST`). A block built on an old part finds its build by that
+(`dbx.dataparts.PART_PAST`). A datablock built on an old part finds its build by that
 rendering, as a nested past, and adopts it where it is.
 
 *Known issue.* A pullback declares its table's TOPICS -- as a part did, whose hash
@@ -400,7 +400,7 @@ names its map, which forms it: `datamap` is in `TREE_SKIP_BUILDING` and
 `TREE_SKIP_VALIDATION`.
 
 A pullback is a table pulled back along a part's map, a `MappedDatatable`. Its
-tablet *i* is, for a lot `[(t, None)]`, tablet *t* itself, the same block and
+tablet *i* is, for a lot `[(t, None)]`, tablet *t* itself, the same datablock and
 hash, nothing written; for any other lot, a `MappedDatatablet` copying the rows.
 A piece, a packed tablet and a core tablet are all of these; only the lot
 differs.
@@ -476,7 +476,7 @@ below).
   column, whichever role read the column, so its hash and its rows did not
   change. A piece built under `dbx.datatables`, before the move to
   `dbx.dataparts` on 2026-10-09, is reached through a specialization
-  anchored there: a hash names no module, but a block is stored under its
+  anchored there: a hash names no module, but a datablock is stored under its
   class's.
 - **`coalesce`, `min_tablet_rows` and `max_tablet_rows`**, added on 2026-10-09,
   are in the hash at their defaults too. A core partition takes no
@@ -517,7 +517,7 @@ parts of one partition, typically. It does not split anything itself.
 - With an `aggregateby` column, the two tables must share no value of it,
   whatever `aggregation` is. A row of no value is refused, unless
   `skip_missing` skips it.
-- `check_probe_inputs` asks a part about its own blocks, its pieces and
+- `check_probe_inputs` asks a part about its own datablocks, its pieces and
   packed tablets included, before any worker starts. If a piece is missing it
   says so and says to build the part. A part that was never built is refused
   before that, by the probe's `validate_vars`.
@@ -856,7 +856,7 @@ go together, and each new combination so far has meant a new class:
 **A datamap is the layout, as a table.** Its rows say, for each tablet of a part
 of the table being mapped, which rows of which source tablets it takes:
 
-- `PartitionDatamapTable(Datatable)`: the map of one part. Its VAR is the partition block and
+- `PartitionDatamapTable(Datatable)`: the map of one part. Its VAR is the partition datablock and
   the part (see Identities, below), and through the partition, the table being mapped.
 - `PartitionDatamapTablet(Datatablet)`: the map of one output tablet. Its VAR names its
   `PartitionDatamapTable` and its index. A tablet naming its own table is circular for
@@ -876,7 +876,7 @@ warranted only if a core map carries more per row -- its cluster.
 **The partition makes the map, and stops there.** SCAN, ITEMS, ASSIGN and COALESCE --
 `whole` and `pack` decide what the output tablets are -- run once for every
 part, since part 0's tablets depend on every tablet's scan. So the partition is a
-block of its own, today's `DatatablePartition` less its parts, and the
+datablock of its own, today's `DatatablePartition` less its parts, and the
 `PartitionDatamapTable` of part *k* reads its part's records from it. A clustering partition
 writes its layout, a template partition takes another map's. WRITE is no longer the
 partition's: it is the pull.
@@ -886,7 +886,7 @@ of `MappedDatatablet(Datatablet)`s, one per `PartitionDatamapTablet`. Each pulls
 of the source tablets' own slices, by its lot:
 
 - `[(t, ALL)]` -- the identity map -- pulls back to **source tablet *t* itself**:
-  the same block, the same hash, nothing written. A part of whole tablets is
+  the same datablock, the same hash, nothing written. A part of whole tablets is
   a view, as a pullback's whole tablets are.
 - anything else is copied: the rows named, of every slice the source tablets
   hold themselves, into slices of the mapped tablet's own.
@@ -910,7 +910,7 @@ is what makes it checkable, and should come with this.
 
 ### Identities: what must not move
 
-A block enters the identity of a block built on it as its **rendered spec only**
+A datablock enters the identity of a datablock built on it as its **rendered spec only**
 -- no class, no version. A CPTAC part renders, in every deep feature clip built
 over it, as `{'fold': k, 'partition': {balance, coalesce, collator, datatable,
 fractions, max_tablet_rows, method, min_tablet_rows, partition_slice, seed}}`.
@@ -922,7 +922,7 @@ So, for the CPTAC parts and everything downstream of them -- deep feature
 clips, bipolar clips, stats probes, probes -- to keep their hashes, with no
 specializations:
 
-- **the partition block keeps today's `DatatablePartition` VAR, version 2, and topics**,
+- **the partition datablock keeps today's `DatatablePartition` VAR, version 2, and topics**,
   `tablets` as `tabs.json` with its whole-tablet entries as indices;
 - **a pullback reaches the VAR `{partition, fold}` a part had**, through `PART_PAST`,
   which renders its `datamap`'s partition and part as that VAR did; its map is in its VAR;
@@ -997,7 +997,7 @@ change form.
 - **A carbon map is per part.** The map of part *k* of a table laid out alike is a
   `PartitionDatamapTable` whose VAR is `{template: <the template's PartitionDatamapTable of part k>,
   datatable: <this table>}`: it takes the template's records, after checking the
-  two tables are laid out alike, tablet for tablet and row for row. No partition block;
+  two tables are laid out alike, tablet for tablet and row for row. No partition datablock;
   a chain of carbon copies is a chain of maps.
 - **A collator names what a mapped tablet copies**, slices and columns; by default,
   every slice the source tablet holds itself.
@@ -1017,7 +1017,7 @@ All in `dbx/dataparts.py`, except the probe.
 | A part's lots, as the partition wrote them | `DatatablePartition.lot`, `whole`, `tag_of`, `partitioned`, `_lot_rows_`; `DatatableClusterCorePartition.lot` |
 | A part's map, and its tablets' lots, built and stored | `PartitionDatamapTable`, `PartitionDatamapTablet.__build__`, `PartitionDatamapTablet.lot`; `lot_tablets` |
 | A part, and a table pulled back along it | `DatatablePartition.part`, `PartitionDatamapTable.pullback`, `MappedDatatable` |
-| A mapped table accepting copies as blocks | `MappedDatatable.tablet`, `valid_tablet`, `_form_block_` |
+| A mapped table accepting copies as datablocks | `MappedDatatable.tablet`, `valid_tablet`, `_form_block_` |
 | A pullback's rows, as the table's | `MappedDatatable.source_index` |
 | A piece, a packed or a core tablet: a copy of the rows a lot names | `MappedDatatablet`: `__build__`, `_sources_`, `_copied_`, `source_index` |
 | A copy of a feature table's rows, layer by layer | `MappedFeaturetablet`, `MappedFeaturetable.upstream` |

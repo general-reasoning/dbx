@@ -827,7 +827,7 @@ def test_a_pipelines_window_lists_its_sessions_blocks_and_opens_them(pipelines_a
     app.sessions["s1"] = [("/lake/pkg.Model/v1", "build:end"), ("/lake/pkg.Data/d1", "build:end")]
     dbxpipelines.HypDbxJournal.__open_point__(app, 0)
     viewer = app.viewers[-1]
-    session = next(m for m in viewer.menus if getattr(m, "label", "") == "session blocks")
+    session = next(m for m in viewer.menus if getattr(m, "label", "") == "session datablocks")
     assert session.visible()
     assert [v for _, v in session.current()] == ["/lake/pkg.Model/v1", "/lake/pkg.Data/d1"]
     session.select("/lake/pkg.Data/d1")

@@ -14,7 +14,7 @@
 
 - **Config-addressed** — identified by a deterministic SHA-256 hash of its class name, configuration, and version.
 - **Journaled** — every build writes a Parquet journal entry recording the full provenance (timestamp, git revision, config, hash).
-- **Idempotent** — calling `build()` on an already-valid block is a no-op.
+- **Idempotent** — calling `build()` on an already-valid datablock is a no-op.
 - **Storage-agnostic** — paths are resolved via [fsspec](https://filesystem-spec.readthedocs.io/), supporting local, S3, GCS, ADLS, and any other backend.
 
 ## Key Features
@@ -22,7 +22,7 @@
 | Feature | Description |
 |---|---|
 | `Datablock` | Config-addressed unit of computation with topic-based output paths |
-| `Datastack` | Orchestrates parallel builds of child Datablocks (blocks) |
+| `Datastack` | Orchestrates parallel builds of child Datablocks |
 | `VAR` | Dataclass-based configuration schema with lazy evaluation and specline support |
 | Journaling | Automatic Parquet-based provenance tracking for every build |
 | `env()` | Relocatable environment variable references that stay symbolic in handles |
@@ -59,7 +59,7 @@ from dataclasses import dataclass
 import pandas as pd
 from dbx import Datablock, write_frame, read_frame
 
-class SampleBlock(Datablock):
+class SampleDatablock(Datablock):
     """A minimal Datablock that generates a DataFrame."""
 
     TOPICFILES = {'output': 'data.parquet'}
@@ -80,9 +80,9 @@ class SampleBlock(Datablock):
 root = tempfile.mkdtemp()
 os.environ['DBXGITREPO'] = ''  # skip git check for this example
 
-block = SampleBlock(url=root, spec=dict(n_rows=5))
-block.build()
-df = block.read('output')
+dblk = SampleDatablock(url=root, spec=dict(n_rows=5))
+dblk.build()
+df = dblk.read('output')
 print(df)
 #    x
 # 0  0
@@ -104,7 +104,7 @@ A `Datablock` is the fundamental unit. Subclass it and implement:
 - **`VAR`** — dataclass defining your configuration schema.
 
 ```python
-class MyBlock(Datablock):
+class MyDatablock(Datablock):
     TOPICFILES = {'features': 'features.parquet', 'model': 'model.pt'}
 
     @dataclass
@@ -128,18 +128,18 @@ Every Datablock maps to a deterministic directory tree:
 
 - **root** — storage root (local path or fsspec URL)
 - **anchor** — defaults to the fully-qualified class name
-- **key** — derived from the content hash and VERSION (configurable via `keyby`); a block's
+- **key** — derived from the content hash and VERSION (configurable via `keyby`); a datablock's
   tag is a label and stays out of it, except a tablet's, which is keyed by its tag
 - **topic** — named output channel
 - **TOPICFILE** — the filename within the topic directory
 
 ### Datastack
 
-A `Datastack` manages a collection of child Datablocks (blocks) and builds them in parallel:
+A `Datastack` manages a collection of child Datablocks and builds them in parallel:
 
 ```python
 class MyStack(Datastack):
-    BLOCK = MyBlock                  # the class its blocks are (a Datatable's TABLET is its BLOCK)
+    BLOCK = MyDatablock                  # the class its datablocks are (a Datatable's TABLET is its BLOCK)
 
     @dataclass
     class VAR(Datablock.VAR):
@@ -151,7 +151,7 @@ class MyStack(Datastack):
         return math.ceil(self.var.n_items / self.var.block_size)
 
     def __block__(self, idx):
-        return MyBlock(url=self.root, spec=dict(idx=idx, ...))
+        return MyDatablock(url=self.root, spec=dict(idx=idx, ...))
 
 stack = MyStack(url='/data', spec=dict(n_items=1000),
                 parallelization='multithreading', n_workers=4)
@@ -205,13 +205,13 @@ Use `env()` to reference environment variables symbolically — the handle stays
 ```python
 from dbx import env
 
-block = MyBlock(url=env('DATA_ROOT'), spec=dict(input_path=env('INPUT_DIR')))
+dblk = MyDatablock(url=env('DATA_ROOT'), spec=dict(input_path=env('INPUT_DIR')))
 # The handle contains "$dbx.getenv('DATA_ROOT')" instead of the resolved path
 ```
 
 A specline stays the line wherever it is configured -- given in the spec or as
 a `VAR` default -- in the datablock's hash, its `quote()` and its `cite()`: the
-same configuration has the same hash on every machine. `block.var.input_path`
+same configuration has the same hash on every machine. `dblk.var.input_path`
 is what it resolves to here.
 
 ### `quote()` and `cite()`
@@ -270,32 +270,32 @@ results = executor.execute(list_of_callables)
 Every `build()` writes journal entries (Parquet) recording the timestamp, git revision, config, and hash. Query them later:
 
 ```python
-j = block.buildjournal()            # BuildJournalFrame (DataFrame subclass)
+j = dblk.buildjournal()            # BuildJournalFrame (DataFrame subclass)
 entry = j.get(0)               # BuildJournalEntry (Series subclass)
 print(entry.hash, entry.anchor, entry.revision)
 ```
 
-Blocks don't choose where their journal entries go. Every entry is written
+Datablocks don't choose where their journal entries go. Every entry is written
 under the current `BuildJournal` session. To keep track of what a piece of code
 wrote, open one around it:
 
 ```python
 with BuildJournal() as dj:      # reads nothing; dj.session is fixed for its lifetime
-    run_pipeline()             # every block it builds, however deep, and on dbx executors' workers
+    run_pipeline()             # every datablock it builds, however deep, and on dbx executors' workers
 dj.written_entries()           # a reference to every entry written under dj.session
 BuildJournal.read_refs(dj.written_entries())                # those entries, wherever they are filed now
-BuildJournal.read('my.module.MyBlock', event='build:end')   # read any anchor's journal
+BuildJournal.read('my.module.MyDatablock', event='build:end')   # read any anchor's journal
 ```
 
 The innermost `with` wins. A `with` opened in the main thread is seen by every
 thread; one opened in another thread is that thread's own. With none open,
 entries go under `DEFAULT_BUILDJOURNAL`, one per process. Each `dbx.exec`
-command runs inside its own scope, so all of its blocks share one session. Its exec-journal row records that `session` and the
+command runs inside its own scope, so all of its datablocks share one session. Its exec-journal row records that `session` and the
 `buildjournal_entries` the command produced; `dbx.execjournal(iloc=0).buildjournal()`
-reads them back as a `BuildJournalFrame`, `.constructed()` just the blocks it
+reads them back as a `BuildJournalFrame`, `.constructed()` just the datablocks it
 built, redirected or copied in (by anchor), and `.rerun()` runs the command again.
 
-`dbx.buildjournal(anchor | cls | block)` reads a build journal and
+`dbx.buildjournal(anchor | cls | dblk)` reads a build journal and
 `dbx.execjournal()` the exec journal; `dbx.journal()` picks one by whether it
 is given an anchor.
 
@@ -322,7 +322,7 @@ The expression may be a sequence of statements separated by `;` (or newlines),
 optionally ending in a `#` comment:
 
 ```bash
-dbx.pprint "b = module.Block(spec={'x': 1}); b.build(); b.read()  # nightly refresh"
+dbx.pprint "dblk = module.MyDatablock(spec={'x': 1}); dblk.build(); dblk.read()  # nightly refresh"
 ```
 
 The statements share one namespace and the value of the last one is what is
@@ -342,7 +342,7 @@ hyperbolically and open.
 
 ```bash
 DBX_DATALAKE=ssh://host/path/to/datalake hyp --journal            # its pipelines
-DBX_DATALAKE=ssh://host/path/to/datalake hyp --journal pkg.Anchor # an anchor's blocks
+DBX_DATALAKE=ssh://host/path/to/datalake hyp --journal pkg.Anchor # an anchor's datablocks
 ```
 
 It installs with the `[hyp]` extra, which `[all]` -- and so `dbx.yml` --
@@ -362,7 +362,7 @@ Remote tests rely on **Ray**. If you are running tests in an environment with a 
 
 | Variable | Description |
 |---|---|
-| `DBX_DATALAKE` | The datalake a block is stored in when not given `datalake=` |
+| `DBX_DATALAKE` | The datalake a datablock is stored in when not given `datalake=` |
 | `DBX_STORAGE_OPTIONS` | fsspec options for every datalake path, `key=val;key=val`: see [CLUSTERS.md](CLUSTERS.md) |
 | `DBX_GIT_REPO` | Path to the git repository for revision tracking |
 | `DBX_USE_WORK_REPO` | `True`: run from a clone of the repos at HEAD (`False`: from the working tree) |

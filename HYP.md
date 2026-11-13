@@ -44,7 +44,7 @@ DBX_DATALAKE=ssh://host/path/to/datalake hyp --journal     # or: --journal pipel
 ```
 
 runs `HypDbxJournal`, the specialization of the app over a datalake's
-pipelines. The datalake is dbx's own -- `DBX_DATALAKE` -- as every block
+pipelines. The datalake is dbx's own -- `DBX_DATALAKE` -- as every datablock
 resolves it; hyp names none. Its corpus --
 embeddings, layout, points -- is kept in the datalake, under
 `{DBX_DATALAKE}/.hyp`, and `--reset` clears it there. `dbx.pipejournal()` reads the pipeline journal and aggregates it --
@@ -60,27 +60,27 @@ to -- and each row is a point:
   datetime -- that has the top row to itself, with a row of menus beneath:
   - the title itself: every journal entry with that tag, by datetime and
     `VAR.name`, to switch to
-  - constructed entry blocks, from `dbx.pipejournal(construct_only=True)`:
-    picking one opens that block's own journal over the pipeline's -- below
+  - constructed entry datablocks, from `dbx.pipejournal(construct_only=True)`:
+    picking one opens that datablock's own journal over the pipeline's -- below
     its header, which stays in view -- its title a menu of the pipeline's
-    other constructed blocks, and beside it, *session blocks*: every block
+    other constructed datablocks, and beside it, *session datablocks*: every datablock
     journaled under the session of the entry shown, from the index a
     `dbx.exec` command keeps (`BuildJournal.session_entries`), to show in its
-    place. A block built outside `dbx.exec` has no index to list.
-  - session blocks: every block journaled under the pipeline's own session,
-    as the entry blocks' windows list theirs: picking one opens its journal,
-    as a constructed entry block's opens
-  - *read* and *ls*, beside them, list the shown block's recorded topics.
+    place. A datablock built outside `dbx.exec` has no index to list.
+  - session datablocks: every datablock journaled under the pipeline's own session,
+    as the entry datablocks' windows list theirs: picking one opens its journal,
+    as a constructed entry datablock's opens
+  - *read* and *ls*, beside them, list the shown datablock's recorded topics.
     *ls* lists what is at a topic's recorded path, over ssh, with nothing
     instantiated. *read* calls the entry's `trueinst()` here, against a Ray
     head that `dbx.SshRay` starts on the datalake's host for the session --
     run by `--remote-python`, reached through an ssh tunnel, and stopped when
-    hyp exits -- so the block is a proxy to an instance pinned to the entry's
+    hyp exits -- so the datablock is a proxy to an instance pinned to the entry's
     own revision of dbx and the project, where its data are. The topic is
-    read there and its repr shown. The first read of a block takes about a
-    minute; the block is kept, and reading it again takes seconds. Ray here
+    read there and its repr shown. The first read of a datablock takes about a
+    minute; the datablock is kept, and reading it again takes seconds. Ray here
     must be the version Ray there is.
-  - *data*, *labels*, *rows*, *tablets* and *workers*, where the block's
+  - *data*, *labels*, *rows*, *tablets* and *workers*, where the datablock's
     entry records `slices`: the columns its `DATASLICE(...)` declarations
     record -- a dict column key by key, as declared -- one as the data, and
     another, or none, as the labels. *hyp* samples them in the pinned worker
@@ -88,7 +88,7 @@ to -- and each row is a point:
     whole -- its rows together, as its shards hold them -- in one of *workers*
     processes forked there, *rows* of each kept. Auto is 64 tablets and 4,000
     rows split among them. *tablets* and *workers* are dimmed while the
-    table's tablets are counted there -- begun as the block's window opens --
+    table's tablets are counted there -- begun as the datablock's window opens --
     and gone for a table of one. The sample is laid out with hyperbolic UMAP here,
     on a disk in a window of its own, colored by label. A slice that declares
     no columns -- a bare `DATASLICE` -- cannot be viewed.
@@ -98,20 +98,20 @@ to -- and each row is a point:
   progress bar as last drawn. A capture is uploaded when its command ends,
   so one still running has none to show yet.
 - in either window, `quote` and `cite` buttons, where the entry shown
-  recorded its block's quote: each opens a bash line, to copy (Cmd+C), that
-  makes the block again from that quote and prints it --
-  `dbx.pprint "dbx.eval(\"\$pkg.Block(spec={...}, ...)\")"` -- or, for
+  recorded its datablock's quote: each opens a bash line, to copy (Cmd+C), that
+  makes the datablock again from that quote and prints it --
+  `dbx.pprint "dbx.eval(\"\$pkg.MyDatablock(spec={...}, ...)\")"` -- or, for
   `cite`, prints its cite, the same with `.cite()` after it. The quote is
-  evaluated by `dbx.eval`, as recorded: its nested blocks are written bare,
+  evaluated by `dbx.eval`, as recorded: its nested datablocks are written bare,
   and only `dbx.eval` reads them back as the speclines they were -- run as
-  Python, they would be made into blocks, and the block made would not be
+  Python, they would be made into datablocks, and the datablock made would not be
   the one quoted. The cite is made from the quote: the quote is the faithful
   form, operational kwargs and all, and cites recorded before dbx kept
   speclines in a cite name this machine's values. The window's title switches
   between the
   two; beside it, `[ ] --revision=` pins the line to the entry's recorded
   revision, `dbx.pprint --revision=<dbxsha>:<projsha> "..."`, so it runs as
-  the block was built. Off, as it starts, the line runs at today's checkout.
+  the datablock was built. Off, as it starts, the line runs at today's checkout.
 
 The menus are read in the background once the points are up. Each launch adds
 new pipelines and re-embeds the ones whose spec changed.
@@ -178,10 +178,10 @@ DBX_DATALAKE=ssh://host/path/to/datalake hyp --journal dbx.dataparts.DatatableCo
 DBX_DATALAKE=ssh://host/path/to/datalake hyp --journal pkg.Model --filter 'tag=TRAIN, event=build:end|note'
 ```
 
-shows one point per block of the anchor, from its build journal -- each
-block's newest entry, embedded and labeled as a pipeline is; pipeline
+shows one point per datablock of the anchor, from its build journal -- each
+datablock's newest entry, embedded and labeled as a pipeline is; pipeline
 entries, filed in the pipeline journal, are not among them. Beneath a
-block's label, its full `tag`, then its datetime -- on the same line where
+datablock's label, its full `tag`, then its datetime -- on the same line where
 both fit in 48 characters, else on a third. Its corpus is
 kept under `{DBX_DATALAKE}/.hyp/anchors/<anchor>`.
 
@@ -192,15 +192,15 @@ With an anchor shown, the **filter** field beside it takes `key=pattern,
 key=pattern, ...` -- each *key* a journal column, each *pattern* matched
 against it, as `BuildJournal.read`'s filters are (a comma splits only before
 another `key=`, so a pattern may hold one; `|` alternates) -- and Enter
-applies it; Esc puts it back. `--filter` gives it at the start. Blocks a
+applies it; Esc puts it back. `--filter` gives it at the start. Datablocks a
 filter leaves out keep their embeddings, so widening it again embeds
 nothing; those shown are laid out by themselves.
 
-- **left click** opens the block's window -- the one a constructed entry
-  block opens in under a pipeline: its journal's events and newest entry,
-  with *session blocks*, *read*, *ls*, the slice menus and *output* -- its
-  title a menu of the anchor's blocks, to step through;
-- **right click** lists the blocks of its `dbx.exec` session, at the mouse,
+- **left click** opens the datablock's window -- the one a constructed entry
+  datablock opens in under a pipeline: its journal's events and newest entry,
+  with *session datablocks*, *read*, *ls*, the slice menus and *output* -- its
+  title a menu of the anchor's datablocks, to step through;
+- **right click** lists the datablocks of its `dbx.exec` session, at the mouse,
   each opening its window.
 
 ## A directory's documents
@@ -654,7 +654,7 @@ a directory of markdowns, they are directions of content.
 | reload (top left) | read the corpus's source again, re-embed what changed, and lay it out afresh |
 | re-embed (beside it) | embed the whole corpus afresh, from its source, and lay it out anew; points the source no longer gives -- a text typed in, where every point is a file -- are dropped |
 | left click on a pipeline (`--journal`) | its window, as a right click opens a point otherwise |
-| right click on a pipeline (`--journal`) | its constructed entry blocks, in a menu at the mouse: picking one opens that block's window directly |
+| right click on a pipeline (`--journal`) | its constructed entry datablocks, in a menu at the mouse: picking one opens that datablock's window directly |
 | left drag | move the plane rigidly (a hyperbolic translation); the grabbed point stays under the cursor |
 | scroll | hyperbolic zoom: a point at distance *d* is drawn at *k·d* |
 | right click on a point | its stored text |
@@ -667,7 +667,7 @@ a directory of markdowns, they are directions of content.
 | while a corpus loads | the window is dimmed and takes no input. A card in its middle shows the stage under way, with a bar, the files done out of the total, the time taken and the time left. An anchor's journal is listed first, as a stage of its own (`dbx.BuildJournal.list`). Until the listing is done there is no total, so the bar slides and the card counts the files found so far, after every directory. Then the files are read (`dbx.BuildJournal.read_frame`), counted against that total |
 | Esc, while a corpus loads | interrupt it at its next step and drop anything queued behind it. A reload that is interrupted leaves the disk as it was; a switch of journal leaves it empty until the next reload. Laying out the disk (UMAP) cannot be cut short, so an Esc during it waits for it to finish |
 | points (top right) | every point, by its label and second line in full, alphabetically (the first 2,000): picking one slides it to the center; a right click on one does what a right click on its point does |
-| settings (top right) | tags (an anchor's blocks), names and versions (`--journal`) and datetimes, each on and off: under labels and in tooltips; line numbers, in text windows (off by default); title colors -- a point's window titled in the point's color, and its entry blocks' windows in the same; in `--docs`, sessions on remote, and web access -- Claude may search the web and fetch pages, kept with the corpus (see [Claude sessions](#claude-sessions)) |
+| settings (top right) | tags (an anchor's datablocks), names and versions (`--journal`) and datetimes, each on and off: under labels and in tooltips; line numbers, in text windows (off by default); title colors -- a point's window titled in the point's color, and its entry datablocks' windows in the same; in `--docs`, sessions on remote, and web access -- Claude may search the web and fetch pages, kept with the corpus (see [Claude sessions](#claude-sessions)) |
 | in a text window | scroll / Up Down / PgUp PgDn move; Left / Right step through its title menu; × or Esc closes it |
 | in a text window: the triangle by a line | a line whose next line is indented deeper folds the deeper lines after it into `… N lines`, and unfolds them. Spec, dfn and kwargs are shown one key per line, a level per four spaces, so they fold by nesting |
 | in a text window: *fold* (top right), or 1–9, 0 | fold every such line at that many levels of indentation or deeper; *unfold all*, or 0, unfolds them all |
@@ -681,9 +681,9 @@ hyp --data DIR               # the corpus directory, local or an fsspec url
 hyp --reset                  # discard the corpus and start over
 hyp --fg                     # keep the terminal: the output there, Ctrl+C stopping it
 hyp --journal                # the pipelines of DBX_DATALAKE (HypDbxJournal); also: --journal pipelines
-hyp --journal ANCHOR         # the blocks of ANCHOR, from its build journal; the journal menu switches either
-hyp --journal ANCHOR --filter 'key=pattern, ...'   # its blocks filtered; the filter field changes it
-hyp --journal --ece ckpt     # --extra-construction-events: events that also make an entry block count as
+hyp --journal ANCHOR         # the datablocks of ANCHOR, from its build journal; the journal menu switches either
+hyp --journal ANCHOR --filter 'key=pattern, ...'   # its datablocks filtered; the filter field changes it
+hyp --journal --ece ckpt     # --extra-construction-events: events that also make an entry datablock count as
                              # constructed, each alone or followed by = or : -- here, a still that checkpointed
 hyp --docs [--dir DIR]       # the markdowns and pdfs under DIR, local or an fsspec url (HypDocs; default: the current directory)
 hyp --docs --claude-dir REL        # Claude sessions saved under DIR/REL, not DIR itself (REL relative, and scanned)

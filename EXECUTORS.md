@@ -4,7 +4,7 @@
 an `executor` operational kwarg, but `Pipeline.runner(target, **options)`,
 handing out the entrypoint's runs as a `Runner` of the target's kind; a call shipped through it runs there and returns a `Run`
 (`dbx/clusters.py`, `dbx/kube.py`). Sections 1, 2, 4 and 5 are done that way, section 6 by
-`Cluster.url`; Slurm, the per-block resources (section 3) and fan-out are not. The proposal is kept
+`Cluster.url`; Slurm, the per-datablock resources (section 3) and fan-out are not. The proposal is kept
 as written.
 
 ## The problem
@@ -26,7 +26,7 @@ only be submitted, waited on and read back. That is the common ground of every b
   and that is what the `PipeJournal` records. *Checked for `sc_representation('nuscenes_08-14-2026_stage3_val', n_gpus=8,
   n_viz_workers=16)`: the pipeline hash, the entry hash, the ops and the re-quote all survive
   `dbx.eval(pipeline.quote())`.*
-- **Operational kwargs:** a block's undeclared kwargs stay out of its hash, are shown in its
+- **Operational kwargs:** a datablock's undeclared kwargs stay out of its hash, are shown in its
   `quote()`, and reach `__build__` as `getattr(self, name, default)`. The pipeline hands them on with
   `**self.operational`. `n_gpus` is one.
 - **Journals:** the exec journal records each `dbx.exec` / `dbx.pprint` command, under a session that
@@ -43,11 +43,11 @@ sc_representation('nuscenes_08-14-2026_stage3_val', n_gpus=8, executor=dbx.kube(
 ```
 
 `executor` is an op like `n_gpus`: it says where the tree is built, never what it is, so it stays
-out of every hash. When a block whose `executor` is set is asked to build, it does not build here.
+out of every hash. When a datablock whose `executor` is set is asked to build, it does not build here.
 It hands the executor the expression that builds it elsewhere, and returns a **run handle**:
 
 ```
-dbx.eval('<block.quote() without executor>').build_tree()
+dbx.eval('<dblk.quote() without executor>').build_tree()
 ```
 
 Dropping `executor` from the shipped quote is what stops the remote side from submitting again. The
@@ -79,9 +79,9 @@ class Run:
 `dbx.remote` stays as it is: a live interpreter is an extra that a backend with a reachable Ray
 address (Slurm, a cluster on the same network) can offer, and the executors do not need.
 
-### 3. Resources declared by the block
+### 3. Resources declared by the datablock
 
-A block knows what its build needs from its own ops. A hook returns it:
+A datablock knows what its build needs from its own ops. A hook returns it:
 
 ```python
 def __resources__(self) -> dict:      # SCRepresentation
@@ -89,7 +89,7 @@ def __resources__(self) -> dict:      # SCRepresentation
     return dict(gpus=n, cpus=n * getattr(self, 'cpus_per_gpu', 4) + getattr(self, 'n_viz_workers', 2) + 4)
 ```
 
-The default is no GPU and a few CPUs. For a tree, the run needs the maximum over the blocks built in
+The default is no GPU and a few CPUs. For a tree, the run needs the maximum over the datablocks built in
 it, since `build_tree` builds them one after another in one process. The executor turns these into
 its own terms: Kueue requests and limits, `--gres` and `--cpus-per-task`. Explicit
 `executor=dbx.kube('lambda', cpus=128)` arguments override them. *Prototype finding: Kueue admits on
@@ -128,13 +128,13 @@ here, e.g. the cluster filesystem's S3 endpoint through fsspec `storage_options`
 - **`dbx.pprint` and a leading `$`:** the CLI rejects a bare specline (`dbx.pprint "$X(...).build_tree()"`
   is a SyntaxError), so the prototype wraps it as `dbx.eval('<quote>')`. Accepting a leading `$` in
   `dbx.exec` would make the shipped command the quote itself.
-- **`__repr__`:** a block's `repr()` today shows spec values quoted twice (`'split': "'val'"`), and
-  `eval(repr(x))` builds a different block (a different hash). Making `__repr__` return `quote()`
+- **`__repr__`:** a datablock's `repr()` today shows spec values quoted twice (`'split': "'val'"`), and
+  `eval(repr(x))` builds a different datablock (a different hash). Making `__repr__` return `quote()`
   would make what is printed the reusable form. The `quote(specline=False)` variant is plain-Python
   evaluable only for flat specs: nested datablocks are quoted as `"$X(...)"` strings, which only
-  `dbx.eval` turns back into blocks.
+  `dbx.eval` turns back into datablocks.
 - **Granularity:** one run per tree is what the prototype does. A `Datastack` could fan out one run
-  per child block; that needs the per-block resources above, and the journal to tie the runs together.
+  per child datablock; that needs the per-datablock resources above, and the journal to tie the runs together.
 - **Multi-node:** out of scope until a pipeline needs more GPUs than one node has.
 
 ## Prototype notes (sctx, Lambda, 2026-11-01)
@@ -145,5 +145,5 @@ here, e.g. the cluster filesystem's S3 endpoint through fsspec `storage_options`
   workspace's path so every absolute path resolves unchanged. On a cluster with its own filesystem
   the code is uploaded first, and an upload that drops execute bits breaks the venv's console
   scripts: an image with the code baked in removes that step.
-- The smoke preset built end to end, and a block's hash came out the same on both clusters, so a
-  block built on one is the same block on the other.
+- The smoke preset built end to end, and a datablock's hash came out the same on both clusters, so a
+  datablock built on one is the same datablock on the other.

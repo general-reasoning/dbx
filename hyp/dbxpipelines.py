@@ -482,7 +482,7 @@ def blocks(anchor, progress=print, n_workers=16, filters=None):
     if "anchorkeypath" in df.columns:
         df = df.drop_duplicates("anchorkeypath", keep="first")
     df = df.reset_index(drop=True)
-    return _entries_(df, progress, f"reading the specs and renderings of {len(df):,} blocks of {anchor}", n_workers)
+    return _entries_(df, progress, f"reading the specs and renderings of {len(df):,} datablocks of {anchor}", n_workers)
 
 
 # What the journal menu calls the pipeline journal: no anchor can be named so, starting with a dot.
@@ -1147,8 +1147,8 @@ class HypDbxJournal(Hyp):
 
     title = "hyp: dbx pipelines"
     HINTS = {
-        "pipelines": "click: open · right-click: entry blocks · drag: move · scroll: zoom · Home or double-click outside: reset",
-        "anchor": "click: open · right-click: session blocks · drag: move · scroll: zoom · Home or double-click outside: reset",
+        "pipelines": "click: open · right-click: entry datablocks · drag: move · scroll: zoom · Home or double-click outside: reset",
+        "anchor": "click: open · right-click: session datablocks · drag: move · scroll: zoom · Home or double-click outside: reset",
     }
     HINT = HINTS["pipelines"]
 
@@ -1337,11 +1337,11 @@ class HypDbxJournal(Hyp):
             empty="no entries",
             match=lambda k: self._is_entry_(k, viewer.row),
         )
-        roots = Dropdown("constructed entry blocks", lambda: self._entrypoints_(viewer.row), lambda p: self._open_entrypoint_(viewer.row, p, viewer.title_color),
+        roots = Dropdown("constructed entry datablocks", lambda: self._entrypoints_(viewer.row), lambda p: self._open_entrypoint_(viewer.row, p, viewer.title_color),
                          empty="none constructed", **self._copies_anchorkey_(viewer.row))
         # The blocks journaled under the pipeline's session -- as an entry block's window lists them -- each opened as one.
         session = Dropdown(
-            "session blocks",
+            "session datablocks",
             lambda: self._session_blocks_(viewer, viewer.row),
             lambda p: self._open_entrypoint_(viewer.row, p, viewer.title_color),
             empty="none indexed: built outside dbx.exec, before such sessions were",
@@ -1421,7 +1421,7 @@ class HypDbxJournal(Hyp):
                 **self._copies_anchorkey_(row),
             ),
             Dropdown(
-                "session blocks",
+                "session datablocks",
                 lambda: self._session_blocks_(window, row),
                 lambda p: self._show_session_block_(window, row, p),
                 empty="none indexed: built outside dbx.exec, before such sessions were",
@@ -1579,7 +1579,7 @@ class HypDbxJournal(Hyp):
             fn = lambda: ls_text(row, topic)  # noqa: E731
         else:
             window = TextViewer(f"read {name} · {self._relative_(row, str(row.get('anchorkeypath', '')))}",
-                                f"reading {name} through trueinst(): the first read of a block starts a Ray worker pinned to its revision, which takes a while …")
+                                f"reading {name} through trueinst(): the first read of a datablock starts a Ray worker pinned to its revision, which takes a while …")
             fn = lambda: read_text(row, topic, self.remote_python)  # noqa: E731
         self.push_viewer(window)
         self.run_async(fn, window.set_text)
@@ -1755,7 +1755,7 @@ class HypDbxJournal(Hyp):
             state["quote"] = quote
             show()
 
-        title = Dropdown(how, [("quote: makes the block again, and prints it", "quote"), ("cite: prints its cite", "cite")], pick,
+        title = Dropdown(how, [("quote: makes the datablock again, and prints it", "quote"), ("cite: prints its cite", "cite")], pick,
                          value=how)
         pin = Button("", toggle, visible=lambda: revision is not None)
         window = TextViewer(how, "reading the quote …", menus=[title, pin])

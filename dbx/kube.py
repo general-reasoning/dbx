@@ -478,15 +478,16 @@ _BYTES_ = {'k': 1e3, 'M': 1e6, 'G': 1e9, 'T': 1e12, 'P': 1e15, 'Ki': 2 ** 10, 'M
 
 
 def _manifest_(command: str, c: KubeCluster, *, name: str = 'dbx', n_gpus: int = 0, n_cpus: int | None = None,
-               mem_gib: int | None = None, image: str | None = None, venv: str | None = None, cwd: str | None = None,
-               revision=None, pin_source=None, env: dict | None = None, setup: list | None = None,
+               mem_gib: int | None = None, disk_gib: int = 100, image: str | None = None, venv: str | None = None,
+               cwd: str | None = None, revision=None, pin_source=None, env: dict | None = None, setup: list | None = None,
                anyscale: bool = False, ray: bool = False, ray_bin: str = 'ray', run_as: tuple | None = None,
                priority: str | None = None, deadline_hours: float = 24, ttl_days: float = 7,
                workdirs: dict | None = None, pack: bool = False, packs: list | None = None) -> dict:
     """`job`'s manifest, from all its options.
 
     *n_cpus* and *mem_gib* default to the cluster's per-GPU share times *n_gpus*; lower them when the
-    queue's CPU or memory quota, not its GPUs, is what Kueue is waiting on. *workdirs* are recorded
+    queue's CPU or memory quota, not its GPUs, is what Kueue is waiting on; *disk_gib*, the pod's local disk
+    (ephemeral-storage), likewise, for a run whose data is on the mounted claims. *workdirs* are recorded
     on the Job; `submit` syncs them -- or with *pack*, sends each as one archive, which the Job
     unpacks first (*packs*, the plan, is made by `KubeRunner._prepare_`; see `_pack_plan_`).
     """
@@ -519,7 +520,7 @@ def _manifest_(command: str, c: KubeCluster, *, name: str = 'dbx', n_gpus: int =
         script.append(f"{ray_bin} start --head --num-gpus={n_gpus} --num-cpus={cpu} --disable-usage-stats")
     script.append('exec bash -c "$DBX_KUBE_COMMAND"')
 
-    resources = {'cpu': str(cpu), 'memory': f"{mem}Gi", 'ephemeral-storage': '100Gi', 'nvidia.com/gpu': str(n_gpus)}
+    resources = {'cpu': str(cpu), 'memory': f"{mem}Gi", 'ephemeral-storage': f"{disk_gib}Gi", 'nvidia.com/gpu': str(n_gpus)}
     queue = c.queue if n_gpus else (c.cpu_queue or c.queue)
     labels = {'dbx/user': user}
     if queue:

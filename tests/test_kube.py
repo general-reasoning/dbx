@@ -109,6 +109,10 @@ class TestTheJob:
         assert m['spec']['suspend'] is True and m['spec']['backoffLimit'] == 0
         assert _env_(m)['DBX_KUBE_COMMAND'] == 'echo hi' and m['metadata']['annotations']['dbx/command'] == 'echo hi'
 
+    def test_the_local_disk_is_100gib_unless_asked_for(self, cluster):
+        disk = lambda m: _container_(m)['resources']['requests']['ephemeral-storage']
+        assert (disk(cluster.job('true')), disk(cluster.job('true', disk_gib=20))) == ('100Gi', '20Gi')
+
     def test_a_job_without_gpus_goes_to_the_cpu_queue(self, cluster):
         m = cluster.job('echo hi')
         assert m['metadata']['labels']['kueue.x-k8s.io/queue-name'] == 'cpu-q'

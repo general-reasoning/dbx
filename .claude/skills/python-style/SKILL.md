@@ -1,6 +1,6 @@
 ---
 name: python-style
-description: The Python style rules in this repo that are not about class layout - a Datablock instance is named dblk or datablock, never block; imports go at module level, except to break a circular import or to defer a heavy or questionable dependency like torch or ray; strings are formatted with f-strings, not % or .format(), except for a named template filled elsewhere; a section of computation is bracketed in log lines with Datalog.section(), not hand-written BEGIN/END lines; dbx commands are run through dbx.exec or dbx.pprint, even from Python, so that the exec journal records them; and docstrings and comments carry no reStructuredText or Sphinx markup - no :meth:/:func:/:class: roles (name it in single backticks), no double backticks, no :: before an example, no #: comments; a string meant to hold backticks, as a Markdown fence, is not a docstring and stays. Load when writing or reviewing any Python in dbx or hyp, writing a docstring or comment, adding an import, formatting a string, logging the start and end of a step, or running a dbx command. For member order and private naming, load class-layout.
+description: The Python style rules in this repo that are not about class layout - a Datablock instance is named dblk or datablock, never block, in code and in prose, including what is said to the user; imports go at module level, except to break a circular import or to defer a heavy or questionable dependency like torch or ray; strings are formatted with f-strings, not % or .format(), except for a named template filled elsewhere; a section of computation is bracketed in log lines with Datalog.section(), not hand-written BEGIN/END lines; dbx commands are run through dbx.exec or dbx.pprint, even from Python, so that the exec journal records them; and docstrings and comments carry no reStructuredText or Sphinx markup - no :meth:/:func:/:class: roles (name it in single backticks), no double backticks, no :: before an example, no #: comments; a string meant to hold backticks, as a Markdown fence, is not a docstring and stays. Load when writing or reviewing any Python in dbx or hyp, writing a docstring or comment, adding an import, formatting a string, logging the start and end of a step, or running a dbx command. For member order and private naming, load class-layout.
 ---
 
 # Python style
@@ -75,9 +75,10 @@ handled as described in running-tests, not by importing inside the test.
 
 A variable, parameter or attribute holding a Datablock instance is named
 `dblk` (or `datablock`, where a longer name reads better), and so are the
-words for it in docstrings, comments and messages: "the datablock", not "the
-block". `block` is too generic -- a code block, a block of rows, a blocking
-call, a Kube or Ray resource -- and a reader cannot tell from the name that it
+words for it in docstrings, comments, messages, docs, commit messages and
+anything said to the user: "the datablock", not "the block". `block` is too
+generic -- a code block, a block of rows, a blocking call, a Kube or Ray
+resource -- and a reader cannot tell from the name that it
 is the thing with a hash, an anchor and a journal.
 
 ```python
@@ -180,20 +181,20 @@ Use those only for that.
 ## Run dbx commands through `dbx.exec` or `dbx.pprint`
 
 Run a dbx command through `dbx.exec` or `dbx.pprint`, from the shell or from
-Python, not by calling the blocks directly. `exec` writes one row to the exec
+Python, not by calling the datablocks directly. `exec` writes one row to the exec
 journal for each command, when the command finishes or fails. The row holds
 the command's text, its trailing `# comment`, and the build session every
-block it builds writes under. `pprint` runs through `exec` and also prints
+datablock it builds writes under. `pprint` runs through `exec` and also prints
 the result. A build called directly from Python leaves no row, so the
-journal cannot say what produced the block or why.
+journal cannot say what produced the datablock or why.
 
 ```bash
-dbx.pprint "b = pkg.Block(spec={'x': 1}); b.build(); b.read()  # why it was run"
+dbx.pprint "dblk = pkg.MyDatablock(spec={'x': 1}); dblk.build(); dblk.read()  # why it was run"
 ```
 
 ```python
-dbx.exec("b = pkg.Block(spec={'x': 1}); b.build()  # why it was run")
-dbx.pprint("pkg.Block(spec={'x': 1}).read()")
+dbx.exec("dblk = pkg.MyDatablock(spec={'x': 1}); dblk.build()  # why it was run")
+dbx.pprint("pkg.MyDatablock(spec={'x': 1}).read()")
 ```
 
 Add `--capture-output` (or `capture_output=True`) to keep what the command

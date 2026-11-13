@@ -18,7 +18,7 @@ Members go in four sections, in this order, in **every** class:
 Mark the sections with a comment so the boundary survives later edits:
 
 ```python
-class Block(Datablock):
+class MyDatablock(Datablock):
     """..."""
 
     # 1. Datablock protocol ---------------------------------------------
@@ -52,7 +52,7 @@ class Block(Datablock):
 
 ## Why the protocol comes first
 
-A Datablock subclass is read to answer *what does this block build, and is it
+A Datablock subclass is read to answer *what does this datablock build, and is it
 valid* before anything else. Those methods are the contract with dbx; every
 other member exists to serve them. Burying `__build__` at the bottom — where
 the training loop that implements it happened to be written last — makes a
@@ -68,7 +68,7 @@ Three spellings, three contracts:
 - **`plain_name`** -- declared API: callers call it. A subclass may extend it
   through `super()`, but should not need to.
 - **`_name_`** -- private: neither callers nor subclasses. Anything that
-  feeds a block's IDENTITY (hash, key, path) belongs here: a public name is an
+  feeds a datablock's IDENTITY (hash, key, path) belongs here: a public name is an
   invitation to override, and an override there moves every hash a subclass
   has built under. `signature_topics()` was public, and an agent reached for
   overriding it to make a specialization resolve -- it is now

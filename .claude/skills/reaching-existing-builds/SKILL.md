@@ -1,35 +1,35 @@
 ---
 name: reaching-existing-builds
-description: How a block reaches data that was built (or copied in) under another identity or anchor -- a class moved or renamed, a VAR or topic renamed, a build brought from another lake. The chain is specialize, then fix dbx if the miss is a generic pattern, then manual redirection; never anchoring. Load before moving or renaming a Datablock class, VAR field or topic, before copying builds between lakes, and whenever a block that should find old data rebuilds or reads as invalid instead.
+description: How a datablock reaches data that was built (or copied in) under another identity or anchor -- a class moved or renamed, a VAR or topic renamed, a build brought from another lake. The chain is specialize, then fix dbx if the miss is a generic pattern, then manual redirection; never anchoring. Load before moving or renaming a Datablock class, VAR field or topic, before copying builds between lakes, and whenever a datablock that should find old data rebuilds or reads as invalid instead.
 ---
 
 # Reaching existing builds
 
 dbx controls where builds live and how they are found until a candidate is
-shipped. A block reaches data stored elsewhere through **redirection**:
-recorded in the block's journal, undone with `UNSAFE_clear_redirection`. A
+shipped. A datablock reaches data stored elsewhere through **redirection**:
+recorded in the datablock's journal, undone with `UNSAFE_clear_redirection`. A
 **specialization** is automated redirection: the class declares how its old
 self differed, dbx works out the old hash, finds that build in the journal and
 redirects to it.
 
 **Never touch anchoring** to get there: no `ANCHOR` on a class, no `anchor=`
-on a block, nothing that moves lake directories so a lookup happens to
+on a datablock, nothing that moves lake directories so a lookup happens to
 succeed. That hides the move from the journal.
 
 ## The chain
 
 1. **Specialize.** Declare a `Datablock.Specialization` saying how the old
-   block differed: `spec`, `topics`, `version`, `anchor`, `redirect_vars`,
+   datablock differed: `spec`, `topics`, `version`, `anchor`, `redirect_vars`,
    `redirect_topics`. For a moved class that is `spec={}`, `topics=SAME`,
    `anchor=<old anchor>`. Check it against the lake before building; none of
    these write anything:
-   - `block.specializations()`: one row per specialization, with *why* it did
+   - `dblk.specializations()`: one row per specialization, with *why* it did
      or didn't resolve;
-   - `block.find_specialization()`: what `build()` would adopt;
-   - `block.UNSAFE_specialize(dry_run=True, dry_validate=True, OVERRIDE=True)`:
+   - `dblk.find_specialization()`: what `build()` would adopt;
+   - `dblk.UNSAFE_specialize(dry_run=True, dry_validate=True, OVERRIDE=True)`:
      the proposed redirection, and whether each topic's data is there.
 
-   `entry.try_specialize_tree()` then adopts every block of the tree that
+   `entry.try_specialize_tree()` then adopts every datablock of the tree that
    resolves, building nothing; `build_tree()` adopts them before building the
    rest. A specialization adopts a hash whose journal under the target anchor
    has an entry in `SPECIALIZATION_EVENTS` (`build:end`,
@@ -50,15 +50,15 @@ succeed. That hides the move from the journal.
    paths directly:
 
    ```python
-   block.UNSAFE_redirect(paths={'sr': '<lake>/<anchor>/<key>/sr'}, topics=['sr'],
+   dblk.UNSAFE_redirect(paths={'sr': '<lake>/<anchor>/<key>/sr'}, topics=['sr'],
                          dry_run=True, dry_validate=True, OVERRIDE=True)   # look first
-   block.UNSAFE_redirect(paths={'sr': ...}, topics=['sr'], validate=True, OVERRIDE=True)
+   dblk.UNSAFE_redirect(paths={'sr': ...}, topics=['sr'], validate=True, OVERRIDE=True)
    ```
 
    `paths=` is taken as given: the journal is not consulted to find or check
    the target. It only follows any further redirection on those paths. The
    redirection is still recorded (`.redirection/paths.yaml` and an
-   `UNSAFE_redirect` journal entry), so the block stays traceable.
+   `UNSAFE_redirect` journal entry), so the datablock stays traceable.
 
 ## Who decides
 
@@ -70,5 +70,5 @@ dbx change, or the `paths=` to redirect to). Never redirect on your own.
 
 Data from another lake (Lambda's, over `sftp://`, say) comes in with
 `UNSAFE_copy_from`, never with `cp` or `rsync`. It lands in the dbx layout,
-under the block's own anchor and key, journaled `UNSAFE_copy_from:BEGIN` and
-`:END`. It is that block's data, reachable and specializable like a build.
+under the datablock's own anchor and key, journaled `UNSAFE_copy_from:BEGIN` and
+`:END`. It is that datablock's data, reachable and specializable like a build.

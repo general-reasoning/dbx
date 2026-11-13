@@ -42,7 +42,7 @@ deciding what to change.
 Pin a property that would still have to be true after a redesign:
 
 - **Identity and its consequences** — the same configuration reached two ways
-  is one block; `hash` is `sha256(type())`; a signature is relocatable.
+  is one datablock; `hash` is `sha256(type())`; a signature is relocatable.
 - **What must not silently change meaning** — a specline is what lands in the
   identity, not its resolved value; two slices carrying one column name both
   survive.
@@ -64,7 +64,7 @@ class TestSpeclinesCommute:
     """A spec value that is not its own value.
 
     `var.source` is the RESOLVED path and `spec['source']` the unexpanded
-    text. A route that rebuilds from the resolved value produces a block that
+    text. A route that rebuilds from the resolved value produces a datablock that
     is configured identically and identified differently -- and every check
     that compares configuration would pass.
     """

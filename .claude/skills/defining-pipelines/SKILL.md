@@ -1,6 +1,6 @@
 ---
 name: defining-pipelines
-description: How a project defines its dbx pipelines and implements their Datablocks - one XXXPipeline(dbx.Pipeline) class plus one xxx(name, **ops) function per pipeline, presets keyed by name feeding a flat XXXPipeline.VAR, @dbx.pipeline on the entrypoint function, one qualified tag module.qualname:name shared by the pipeline and its blocks (dbx.entrypoint_tag), preset names prefixed with what they are built over, the tree's VARs built from the pipeline VAR only, **ops reserved for runtime behavior and handed on with self.operational, imports from dbx only, machine-specific defaults in the project's env module, no datalake handling in code, __build__ resuming topic by topic (every topic checked before it is built), and __read__ returning the data of one explicitly named topic (no default, no fallthrough, never a path, None when nothing sensible to read). Load when writing or reviewing a project's pipelines or Datablocks, adding a preset, or deciding whether a setting is identity (VAR) or operational (ops).
+description: How a project defines its dbx pipelines and implements their Datablocks - one XXXPipeline(dbx.Pipeline) class plus one xxx(name, **ops) function per pipeline, presets keyed by name feeding a flat XXXPipeline.VAR, @dbx.pipeline on the entrypoint function, one qualified tag module.qualname:name shared by the pipeline and its datablocks (dbx.entrypoint_tag), preset names prefixed with what they are built over, the tree's VARs built from the pipeline VAR only, **ops reserved for runtime behavior and handed on with self.operational, imports from dbx only, machine-specific defaults in the project's env module, no datalake handling in code, __build__ resuming topic by topic (every topic checked before it is built), and __read__ returning the data of one explicitly named topic (no default, no fallthrough, never a path, None when nothing sensible to read). Load when writing or reviewing a project's pipelines or Datablocks, adding a preset, or deciding whether a setting is identity (VAR) or operational (ops).
 ---
 
 # Defining pipelines
@@ -18,13 +18,13 @@ Each pipeline is **two definitions**, side by side in the project's
 The Datablock classes the pipelines build live in the project's
 `datablocks.py`, which `pipelines.py` imports from. `pipelines.py` holds only
 the pipeline classes, their functions and preset helpers.
-- A block's lake directory is named by its class's `module.Name`
+- A datablock's lake directory is named by its class's `module.Name`
   (`sctx.datablocks.SCScenery/<hash>`). So moving or renaming a Datablock
-  class moves its blocks, even when the hash stays the same. Don't move the
+  class moves its datablocks, even when the hash stays the same. Don't move the
   lake's directories, and **don't touch anchoring**: no `ANCHOR` on a class,
-  no `anchor=` on a block. Reach the old builds with a specialization pointing
+  no `anchor=` on a datablock. Reach the old builds with a specialization pointing
   at the old anchor, declared in `pipelines.py` and passed as
-  `SPECIALIZATIONS=` where `__create__` constructs the block:
+  `SPECIALIZATIONS=` where `__create__` constructs the datablock:
 
   ```python
   SCENERY_SPECIALIZATIONS = [
@@ -94,31 +94,31 @@ def sc_representation(name, **ops) -> SCRepresentationPipeline:
   `.entry.cite()`, `.entry.build_tree()` (with the ops you'd actually use),
   and `.entry.read(topic)`. Each line should run as written from a shell.
 - **The pipeline VAR, and only it, defines the tree's VARs.** Every value that
-  reaches a block's `spec` in `__create__` comes from `self.var`. Don't read
+  reaches a datablock's `spec` in `__create__` comes from `self.var`. Don't read
   the environment, module globals, files or `ops` there. A pipeline is then
   reproduced exactly by its own quote, which is what the `PipeJournal` records.
 - **The pipeline VAR is flat: one field per VAR of the tree.** Each preset of
   `sc_representation` is one set of VARs. Some define the upstream `SCScenery.VAR`, the
   rest the `SCRepresentation.VAR`, and `SCRepresentation.VAR` takes the upstream `SCScenery` as an
-  input VAR. A value that two blocks share is one field, passed to both. Group
-  the fields by the block they feed, with a comment per group.
+  input VAR. A value that two datablocks share is one field, passed to both. Group
+  the fields by the datablock they feed, with a comment per group.
   - Don't hold a preset *name*, or another pipeline, in a VAR. The VAR holds
     the values themselves.
 - **Presets live inside the function**, as a dict keyed by `name`; each value
   is a dict that becomes `XXXPipeline.VAR`.
-  - Presets that share a block's VARs build them from one local dict
+  - Presets that share a datablock's VARs build them from one local dict
     (`val_scenery` above) and splat it into each preset.
   - An unknown name should fail by listing the presets that exist.
 - **`**ops` is runtime behavior only**: parallelization, `n_workers`,
   `n_devices`/`n_gpus`, batch sizes that don't change results, verbosity.
   - These settings change how the tree is built, never what it is. Changing
-    one must not change any block's hash.
+    one must not change any datablock's hash.
   - The function passes `ops` to the pipeline, and `__create__` hands them on
-    with `**self.operational`, only to the blocks that use them.
+    with `**self.operational`, only to the datablocks that use them.
     `dbx.Pipeline.operational` is the pipeline's undeclared keyword
     arguments.
   - Every keyword argument a Datablock doesn't declare stays out of its hash,
-    kept as a parameter and shown in its `quote()`. The block reads it in
+    kept as a parameter and shown in its `quote()`. The datablock reads it in
     `__build__` as `getattr(self, 'n_gpus', <default>)`, and passes it on to
     whatever does the work, e.g. the code that makes the Ray call. That code
     takes these as arguments and has no defaults of its own hidden elsewhere.
@@ -130,27 +130,27 @@ def sc_representation(name, **ops) -> SCRepresentationPipeline:
   - Identify inputs by content where their path could be reused for
     different content: e.g. a checkpoint's `checkpoint_sha256` as a VAR,
     checked in `__build__`.
-  - Give a block a `VERSION` and bump it when the code that writes its output
+  - Give a datablock a `VERSION` and bump it when the code that writes its output
     changes what it writes.
 - **Tags: one qualified tag per preset, never the bare preset `name`.**
   Several projects write to one journal, and a bare
   `'nuscenes_08-14-2026_stage3_val'` says neither which project nor which
-  pipeline. The pipeline and its blocks carry the same tag,
+  pipeline. The pipeline and its datablocks carry the same tag,
   `<module>.<function>:<name>`, e.g.
   `sctx.pipelines.sc_representation:nuscenes_08-14-2026_stage3_val`. A tag of
   the function alone would conflate all of its presets.
   - `@dbx.pipeline` tags the pipeline so when the function's first argument
     is `name` (see below).
-  - The function tags the blocks it constructs, the root and those upstream
+  - The function tags the datablocks it constructs, the root and those upstream
     of it, with `dbx.entrypoint_tag(fn, name)`, the same string.
 - **Preset names say what they are built over.** Prefix a preset with the
   presets or the dataset upstream of it (`nuscenes_08-14-2026_stage3_val`, not
   `stage3_val`), so that the same model over another scenery doesn't take the
   same name. Renaming a preset moves nothing: the name only selects values, and
-  blocks are keyed by class, version and hash.
+  datablocks are keyed by class, version and hash.
 
   A tag filter matches by containment, so `tag='nuscenes_08-14-2026_stage3_val'` still finds
-  them. A tag is only a label: tagging a block that is already built doesn't
+  them. A tag is only a label: tagging a datablock that is already built doesn't
   move it or change its hash.
 - **`JOURNAL = True`** on pipelines that are run and looked up again later.
   Leave it off for helpers that other pipelines only nest.
@@ -177,7 +177,7 @@ def sc_representation(name, **ops) -> SCRepresentationPipeline:
   No other module computes paths from `__file__`, the home directory or
   another root. That keeps the code relocatable: moving it, or running on
   another machine, means setting an environment variable, not editing code.
-- **Don't handle the datalake in code.** Every block resolves `DBX_DATALAKE`
+- **Don't handle the datalake in code.** Every datablock resolves `DBX_DATALAKE`
   itself; don't pass `datalake=` or read the variable. It is the user's to
   set, in their shell profile; never set, export or override it for them
   (not in a venv's `activate`, not in a script). If it isn't set, dbx
@@ -196,7 +196,7 @@ def sc_representation(name, **ops) -> SCRepresentationPipeline:
 
 ## Implementing `__build__`: resume topic by topic
 
-dbx skips a whole block that is already valid, but not the topics inside one.
+dbx skips a whole datablock that is already valid, but not the topics inside one.
 A build that died part way leaves some topics written and others not, so
 `__build__` must handle that itself:
 
@@ -211,7 +211,7 @@ A build that died part way leaves some topics written and others not, so
   creates what is needed for writing. Don't switch to `dirpath()` by topic
   type.
 - **Call Python steps as Python, never through a shell.** A step written in
-  Python is a function the block calls, on remote workers too (a Ray task
+  Python is a function the datablock calls, on remote workers too (a Ray task
   calling the function in the project's interpreter, through
   `runtime_env={'py_executable': sys.executable}`). Running it as a
   subprocess command loses its exceptions, tracebacks and return values,
@@ -220,7 +220,7 @@ A build that died part way leaves some topics written and others not, so
 - **Write each item atomically** (to `x.tmp`, then `os.replace`), so an item
   that exists is complete and the check above can trust it.
 - **Write a summary topic last** (e.g. `config`, with the resolved settings and
-  counts). Then the block is valid only once everything before it is.
+  counts). Then the datablock is valid only once everything before it is.
 - **Bracket each long step with `self.log.section(...)`**, so the log shows
   which step a failed build died in.
 - **Imports go at module level, all of them.** A project's own modules, and
@@ -255,14 +255,14 @@ def __read__(self, topic):
 - **Read it even when it is large.** Whether something is too big to load is
   the caller's call. Say so in the topic's note, e.g.
   `DATADIR(note='... ~7 MB per scene, and read() loads every scene')`. Mind
-  that a note renders into the block's identity, so changing it re-keys the
-  block.
+  that a note renders into the datablock's identity, so changing it re-keys the
+  datablock.
 
 ## Use `@dbx.pipeline` for the entrypoint function
 
 `dbx.pipeline` turns the preset function into the pipeline: it builds the
 `<FnInCamelCase>Pipeline` class, tags each call `module.qualname:<name>`,
-and journals it with `journal=True`. Use it, and tag the blocks with
+and journals it with `journal=True`. Use it, and tag the datablocks with
 `dbx.entrypoint_tag`, which gives the same string:
 
 ```python
@@ -277,10 +277,10 @@ def sc_representation(name, **ops):
 
 - The function's leading arguments become the pipeline's VAR, so here the
   VAR is `{'name': 'nuscenes_08-14-2026_stage3_val'}`. That is the exception to "no preset name
-  in a VAR": the pipeline is identified by the preset, and the blocks by the
+  in a VAR": the pipeline is identified by the preset, and the datablocks by the
   values the preset holds. Their hashes don't depend on the name.
 - `**ops` are operational: passed to the function, out of every hash. Hand
-  them to the blocks that use them as `**ops`.
+  them to the datablocks that use them as `**ops`.
 - Don't declare a `tag` parameter: the decorator passes one to the pipeline
   class, and a second would arrive in `**ops`.
 - Calls are cached per process by all their arguments, so a pipeline other
@@ -290,7 +290,7 @@ The explicit form above, a hand-written `XXXPipeline` plus a function
 returning it, is equivalent, but its `__create__` doesn't see the preset
 name. It sets the qualified tag on the pipeline by hand
 (`tag=f"{__name__}.sc_representation:{name}"`), and `__create__` passes
-`self.tag` to its blocks. Use one form or the other within a project, not both.
+`self.tag` to its datablocks. Use one form or the other within a project, not both.
 
 ## Running a pipeline on a cluster
 

@@ -264,13 +264,30 @@ journal entry's, without opening a file or reading `__build__`:
 
 ```python
 TOPICS = {
-    'config': DATADICT('config.yaml', n_scenes='int', cameras='list', doc='what the build resolved'),
-    'scenes': DATAFRAME('scenes.parquet', split='str', scene_name='str', doc='one row per scene'),
+    'config': DATADICT('config.yaml',
+                       n_scenes='int',
+                       cameras='list',
+                       doc='what the build resolved'),
+    'scenes': DATAFRAME('scenes.parquet',
+                        split='str',
+                        scene_name='str',
+                        doc='one row per scene'),
     'sr': DATADIR({'{split}': DATAFILE('{scene}.npz', doc='one scene of SR')},
-                  over={'split': VAR.splits, 'scene': 'the scenes of the split'}, doc='the scenes, by split'),
+                  over={'split': VAR.splits, 'scene': 'the scenes of the split'},
+                  doc='the scenes, by split'),
     'logs': DATADIR,
 }
 ```
+
+- **Spell TOPICS out, in the class body, every time**: they are the datablock's
+  self-documentation, read where the class is read. Never build them in a
+  helper -- `TOPICS = _topics_(VAR.logs)` -- even when two classes differ only
+  in an `over=` binding: write both out in full. Repetition is the price of
+  each class saying what it holds on its own page. (An instance-dependent
+  declaration is a `forward_property`, and still spells out its class value.)
+- **One entry per line** when a declaration does not fit on one: each key of a
+  DATADICT, each column of a DATAFRAME, each child, `over=` and `doc=` of a
+  DATADIR on its own line, aligned under the first (python-style).
 
 - **`doc=` is documentation and reaches no identity**: reword it freely. The
   older `note=` renders into the hash and is deprecated; a datablock declared

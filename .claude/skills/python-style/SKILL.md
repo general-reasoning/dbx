@@ -1,6 +1,6 @@
 ---
 name: python-style
-description: The Python style rules in this repo that are not about class layout - a Datablock instance is named dblk or datablock, never block, in code and in prose, including what is said to the user; imports go at module level, except to break a circular import or to defer a heavy or questionable dependency like torch or ray; strings are formatted with f-strings, not % or .format(), except for a named template filled elsewhere; a section of computation is bracketed in log lines with Datalog.section(), not hand-written BEGIN/END lines; dbx commands are run through dbx.exec or dbx.pprint, even from Python, so that the exec journal records them; and docstrings and comments carry no reStructuredText or Sphinx markup - no :meth:/:func:/:class: roles (name it in single backticks), no double backticks, no :: before an example, no #: comments; a string meant to hold backticks, as a Markdown fence, is not a docstring and stays. Load when writing or reviewing any Python in dbx or hyp, writing a docstring or comment, adding an import, formatting a string, logging the start and end of a step, or running a dbx command. For member order and private naming, load class-layout.
+description: The Python style rules in this repo that are not about class layout - one entry per line in a dict or keyword call that spans lines; a Datablock instance is named dblk or datablock, never block, in code and in prose, including what is said to the user; imports go at module level, except to break a circular import or to defer a heavy or questionable dependency like torch or ray; strings are formatted with f-strings, not % or .format(), except for a named template filled elsewhere; a section of computation is bracketed in log lines with Datalog.section(), not hand-written BEGIN/END lines; dbx commands are run through dbx.exec or dbx.pprint, even from Python, so that the exec journal records them; and docstrings and comments carry no reStructuredText or Sphinx markup - no :meth:/:func:/:class: roles (name it in single backticks), no double backticks, no :: before an example, no #: comments; a string meant to hold backticks, as a Markdown fence, is not a docstring and stays. Load when writing or reviewing any Python in dbx or hyp, writing a docstring or comment, adding an import, formatting a string, logging the start and end of a step, or running a dbx command. For member order and private naming, load class-layout.
 ---
 
 # Python style
@@ -152,6 +152,33 @@ with the tokenizer, touching docstrings and comments only -- so any you find cam
 back in a later edit. Fix it when you see it, and never write one: `:meth:` included. The numpydoc headings
 (`Parameters`, `Returns` or `Example` underlined with `-------`) are still in
 about 68 docstrings, and were left for a separate pass.
+
+## One entry per line in a dict or keyword call that spans lines
+
+A dict literal, a `dict(...)`, a topic marker's call (`DATADICT`, `DATAFRAME`,
+`DATADIR`, `DATAFILE`, `DATASLICE`) -- any call that is a list of named
+entries -- puts each entry on its own line once it does not fit on one, aligned
+under the first. A leading positional (a marker's filename) stays on the
+opening line:
+
+```python
+paths = dict(databases=self.path('databases', ensure_dirpath=True),
+             sr=self.path('sr', ensure_dirpath=True),
+             cameras_dirpath=self.path('cameras', ensure_dirpath=True))
+
+'config': DATADICT('config.yaml',
+                   version='str',
+                   scenery=dict(hash='str', anchorkeypath='str'),
+                   scenes='int',
+                   doc='what the run resolved'),
+```
+
+An entry is found by scanning down one column, not by reading a paragraph of
+`key=value, key=value` wrapped wherever 120 characters fell. Short ones that
+fit on one line stay there -- `dict(hash='str', anchorkeypath='str')`, a
+two-key `over=`. A long string inside an entry may run past 120 rather than be
+split mid-phrase. The pass on sctx (2026-11-13) was made with an AST-checked
+rewrite: the syntax tree before and after must be identical.
 
 ## Bracket a section of computation with `Datalog.section`
 

@@ -20,7 +20,7 @@ def setup_env(monkeypatch):
 
 class Cfg(Datablock):
     """A generated config directory, a facts file, and a topic with no location."""
-    TOPICS = {'configs': DATADIR('hydra config dir'),
+    TOPICS = {'configs': DATADIR(note='hydra config dir'),
               'facts': DATAFILE('facts.json'),
               'scratch': SYNTHETIC}
 

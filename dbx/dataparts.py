@@ -265,8 +265,8 @@ class DatatablePartition(Datablock):
     VERSION = 2
 
     TOPICS = {
-        'tablets': DATAFILE('tabs.json', 'one list of tablet indices per fold'),
-        'summary': DATAFILE('summary.json', 'per fold its tags and counts, and the tablets skipped'),
+        'tablets': DATAFILE('tabs.json', note='one list of tablet indices per fold'),
+        'summary': DATAFILE('summary.json', note='per fold its tags and counts, and the tablets skipped'),
     }
     # None: the roles were renamed (VERSION 2), and the topic `tabs` became `tablets` on 2026-10-10 -- a
     # specialization takes a topic only under the name it had, so even the partitions with no collator,
@@ -1784,12 +1784,12 @@ class DatatableClusterCorePartition(DatatablePartition):
     VERSION = 2
 
     TOPICS = {
-        'tablets': DATAFILE('tabs.json', "per fold, each core tablet's [start, end) in the fold's layout"),
+        'tablets': DATAFILE('tabs.json', note="per fold, each core tablet's [start, end) in the fold's layout"),
         # Its words, as built: a topic's description is in the hash.
-        'layout': DATADIR('per fold, (tablet, row, cluster) of each row dealt to it, as <fold>.npy'),
-        'centers': DATAFILE('centers.npy', 'the cluster centers'),
-        'columns': DATAFILE('columns.json', 'the columns the core tablets carry: {slice: {column: type}}'),
-        'summary': DATAFILE('summary.json', 'per fold its rows, strata, clusters and core tablets; what was skipped'),
+        'layout': DATADIR(note='per fold, (tablet, row, cluster) of each row dealt to it, as <fold>.npy'),
+        'centers': DATAFILE('centers.npy', note='the cluster centers'),
+        'columns': DATAFILE('columns.json', note='the columns the core tablets carry: {slice: {column: type}}'),
+        'summary': DATAFILE('summary.json', note='per fold its rows, strata, clusters and core tablets; what was skipped'),
         'coverage': DATADICT('coverage.npz', levels='ndarray', sample='ndarray', scale='ndarray',
                              coverage='ndarray', coverage_mean='ndarray', baseline='ndarray',
                              baseline_mean='ndarray', separation='ndarray', cluster_rows='ndarray',

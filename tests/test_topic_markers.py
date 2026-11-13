@@ -730,13 +730,13 @@ class TestADatadirIsADirectory:
     def test_it_is_a_dir_so_every_directory_test_answers_for_it(self, tmp_path):
         class B(Datablock):
             VERSION = 1
-            TOPICS = {'masks': DATADIR('per-frame masks')}
+            TOPICS = {'masks': DATADIR(note='per-frame masks')}
 
         assert issubclass(DIR, DATADIR), "DIR is the deprecated DATADIR, still rendering 'DIR'"
         assert block(B, tmp_path)._is_dir_topic_('masks') is True
 
     def test_the_note_renders(self):
-        assert str(DATADIR('per-frame masks')) == "DATADIR('per-frame masks')"
+        assert str(DATADIR(note='per-frame masks')) == "DATADIR('per-frame masks')"
 
     def test_the_note_is_in_the_identity(self, tmp_path):
         def h(topic):
@@ -772,7 +772,7 @@ class TestADatafileIsAFileTopic:
 
     def test_the_note_is_optional_in_the_rendering(self):
         assert str(DATAFILE('rows.csv')) == "DATAFILE('rows.csv')"
-        assert (str(DATAFILE('rows.csv', 'one row per frame'))
+        assert (str(DATAFILE('rows.csv', note='one row per frame'))
                 == "DATAFILE('rows.csv', 'one row per frame')")
 
     def test_adopting_it_re_keys_and_the_note_re_keys_again(self, tmp_path):
@@ -782,7 +782,7 @@ class TestADatafileIsAFileTopic:
                 TOPICS = {'rows': topic}
             return block(B, tmp_path, tag='h').hash
 
-        assert h('rows.csv') != h(DATAFILE('rows.csv')) != h(DATAFILE('rows.csv', 'note'))
+        assert h('rows.csv') != h(DATAFILE('rows.csv')) != h(DATAFILE('rows.csv', note='note'))
 
     def test_a_bare_datafile_locates_nothing_and_says_so(self, tmp_path):
         class B(Datablock):
@@ -804,12 +804,12 @@ class TestASyntheticMayCarryANote:
 
     def test_the_note_renders_and_the_bare_form_does_not(self):
         assert str(SYNTHETIC) == 'SYNTHETIC'
-        assert str(SYNTHETIC('derived on read')) == "SYNTHETIC('derived on read')"
+        assert str(SYNTHETIC(note='derived on read')) == "SYNTHETIC('derived on read')"
 
     def test_it_is_still_synthetic(self, tmp_path):
         class B(Datablock):
             VERSION = 1
-            TOPICS = {'cache': SYNTHETIC('derived on read')}
+            TOPICS = {'cache': SYNTHETIC(note='derived on read')}
 
         b = block(B, tmp_path)
         assert b.path('cache') is None
@@ -820,9 +820,9 @@ class TestTheNewSpellingsRoundTrip:
 
     @pytest.mark.parametrize('marker', [
         DATAFILE('rows.csv'),
-        DATAFILE('rows.csv', 'one row per frame'),
-        DATADIR('per-frame masks'),
-        SYNTHETIC('derived on read'),
+        DATAFILE('rows.csv', note='one row per frame'),
+        DATADIR(note='per-frame masks'),
+        SYNTHETIC(note='derived on read'),
     ])
     def test_a_recorded_declaration_reads_back_as_the_same_marker(self, marker):
         read = literal_topics(str({'x': marker}))['x']
@@ -843,12 +843,12 @@ class TestTheNewMarkersArgumentsAreChecked:
             DATAFILE('a/b.csv')
 
     def test_a_note_with_a_slash_is_refused(self):
-        for make in (lambda n: DATAFILE('r.csv', n), DATADIR, SYNTHETIC):
+        for make in (lambda n: DATAFILE('r.csv', note=n), lambda n: DATADIR(note=n), lambda n: SYNTHETIC(note=n)):
             with pytest.raises(ValueError, match="may not contain"):
                 make('a/b')
 
     def test_a_note_must_be_a_non_empty_string(self):
-        for make in (lambda n: DATAFILE('r.csv', n), DATADIR, SYNTHETIC):
+        for make in (lambda n: DATAFILE('r.csv', note=n), lambda n: DATADIR(note=n), lambda n: SYNTHETIC(note=n)):
             for bad in ('', 3):
                 with pytest.raises(TypeError, match="non-empty string"):
                     make(bad)
@@ -905,9 +905,9 @@ def test_subdirs_nest(tmp_path):
 def test_only_a_directory_takes_subdirs():
     """SYNTHETIC keeps its positional NOTE: it has no location, so it has nothing to
     declare, and reading its note as a directory name would be nonsense."""
-    assert repr(SYNTHETIC('derived on read')) == "SYNTHETIC('derived on read')"
+    assert repr(SYNTHETIC(note='derived on read')) == "SYNTHETIC('derived on read')"
     with pytest.raises(TypeError):
-        SYNTHETIC('derived on read', subdirs=('a',))
+        SYNTHETIC(note='derived on read', subdirs=('a',))
 
 
 def test_a_subdir_name_may_not_be_a_path():
@@ -915,14 +915,21 @@ def test_a_subdir_name_may_not_be_a_path():
         DATADIR('videos/chunk-000')
 
 
-def test_one_spaced_positional_is_still_the_note():
-    """`DATADIR('one PNG per frame')` meant a note before subdirs existed and still
-    does: a directory name has no spaces, so the two never collide and nothing re-keys.
-    Alongside subdirectories it is ambiguous, and refused."""
-    assert DATADIR('one PNG per frame').note == 'one PNG per frame'
-    assert DATADIR('one PNG per frame').subdirs is None
-    with pytest.raises(TypeError, match="may not hold whitespace"):
-        DATADIR('meta', 'one PNG per frame')
+def test_prose_is_never_positional_and_a_recorded_note_still_reads_back():
+    """`DATADIR('one PNG per frame')` meant a note before subdirs existed. Prose is a
+    keyword now -- `doc=`, or `note=` for an old identity -- in every marker, and a
+    positional one is refused rather than read as a name. The rendering is the identity
+    and does not change, so a note RECORDED positionally reads back as the note it was."""
+    for call in (lambda: DATADIR('one PNG per frame'), lambda: DATADIR('meta', 'one PNG per frame'),
+                 lambda: DATAFILE('rows.csv', 'one row per frame'), lambda: SYNTHETIC('derived on read')):
+        with pytest.raises(TypeError, match="never positional"):
+            call()
+    noted = {'masks': DATADIR(note='one PNG per frame'), 'rows': DATAFILE('rows.csv', note='one row per frame'),
+             'derived': SYNTHETIC(note='derived on read')}
+    assert str(noted) == ("{'masks': DATADIR('one PNG per frame'), 'rows': DATAFILE('rows.csv', 'one row per "
+                          "frame'), 'derived': SYNTHETIC('derived on read')}")
+    back = literal_topics(str(noted))
+    assert {k: (v.note, str(v)) for k, v in back.items()} == {k: (v.note, str(v)) for k, v in noted.items()}
 
 
 @pytest.mark.pinned
@@ -933,7 +940,7 @@ def test_declaring_subdirs_moves_the_hash_and_a_bare_marker_does_not(tmp_path):
         TOPICS = {'data': DATADIR}
 
     class Noted(Datablock):
-        TOPICS = {'data': DATADIR('a lerobot dataset')}
+        TOPICS = {'data': DATADIR(note='a lerobot dataset')}
 
     class Declared(Datablock):
         TOPICS = {'data': DATADIR('meta', note='a lerobot dataset')}

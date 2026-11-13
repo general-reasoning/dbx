@@ -626,7 +626,7 @@ def _check_note_(kind, note):
 
 
 class _NotedMarkerMeta_(TopicMarkerMeta):
-    """Makes `DATADIR('per-frame masks')` a marker carrying that note.
+    """Makes `SYNTHETIC(note='derived on read')` a marker carrying that note.
 
     The note is documentation that reaches the identity: it renders into the
     type string, so writing one re-keys the block that writes it.  That is the
@@ -637,7 +637,10 @@ class _NotedMarkerMeta_(TopicMarkerMeta):
     so `DATADIR() is DATADIR` and the two spell the same thing.
     """
 
-    def __call__(cls, note=None, *, subdirs=None, doc=None):
+    def __call__(cls, *args, note=None, subdirs=None, doc=None):
+        if args:
+            raise TypeError(f"{cls.__name__} takes doc= -- or, to reproduce an old identity, note= -- by "
+                            f"keyword, not {args!r}: prose is never positional")
         if note is None and subdirs is None and doc is None:
             return cls
         if note is not None:
@@ -678,31 +681,25 @@ class SYNTHETIC(TOPICMARKER, metaclass=_NotedMarkerMeta_):
 
 
 class _DirMarkerMeta_(_NotedMarkerMeta_):
-    """`DATADIR('meta', 'data', 'videos', note='a lerobot dataset')`.
+    """`DATADIR('meta', 'data', 'videos', doc='a lerobot dataset')`.
 
-    Positionals are the subdirectories the topic must contain -- a name, or a dict for
-    a nested level -- and the note is a keyword, because a directory far more often
-    wants to say what is under it than to carry prose.
+    Positionals are what the topic contains -- a name, a dict for a nested level, a
+    file marker -- and prose is a keyword: `doc=`, or `note=` to reproduce an old
+    identity.
 
     A positional holding whitespace is REFUSED rather than taken as a subdirectory:
-    `DATADIR('one PNG per frame')` was a note before this signature existed, and
-    reading it as a directory name would re-key the block and change what makes it
-    valid, both in silence.
+    `DATADIR('one PNG per frame')` was a note once, and reading it as a directory name
+    would re-key the block and change what makes it valid, both in silence. A RECORDED
+    one still reads back as the note it was (`_recorded_marker_`).
     """
 
     def __call__(cls, *subdirs, note=None, doc=None, over=None):
-        # One positional holding whitespace is the NOTE, as it was before subdirs
-        # existed -- `DATADIR('one PNG per frame')`. A directory name has no spaces in
-        # it, so the two never collide, and no declaration written before this re-keys.
-        if (note is None and len(subdirs) == 1 and isinstance(subdirs[0], str)
-                and any(c.isspace() for c in subdirs[0])):
-            note, subdirs = subdirs[0], ()
         for entry in subdirs:
             if isinstance(entry, str) and any(c.isspace() for c in entry):
                 raise TypeError(
-                    f"{cls.__name__}({entry!r}): a subdirectory name may not hold "
-                    f"whitespace. For prose alongside subdirectories, say "
-                    f"{cls.__name__}(..., doc={entry!r})")
+                    f"{cls.__name__}({entry!r}): a subdirectory name may not hold whitespace, and "
+                    f"prose is never positional: say doc={entry!r} -- or, to reproduce an old "
+                    f"identity, note={entry!r}")
         if note is not None:
             _check_note_(cls.__name__, note)
         if doc is not None:
@@ -802,9 +799,12 @@ class DIR(DATADIR):
 
 
 class _DataFileMeta_(TopicMarkerMeta):
-    """Makes `DATAFILE('rows.csv', 'one row per frame')` a marker carrying both."""
+    """Makes `DATAFILE('rows.csv', doc='one row per frame')` a marker carrying both."""
 
-    def __call__(cls, filename, note=None, *, doc=None):
+    def __call__(cls, filename, *args, note=None, doc=None):
+        if args:
+            raise TypeError(f"{cls.__name__}({filename!r}, {', '.join(map(repr, args))}): prose is never "
+                            f"positional -- say doc=..., or, to reproduce an old identity, note=...")
         cls._check_filename_(filename)
         if note is not None:
             _check_note_(cls.__name__, note)
@@ -827,7 +827,7 @@ class _DataFileMeta_(TopicMarkerMeta):
 class DATAFILE(TOPICMARKER, metaclass=_DataFileMeta_):
     """A topic stored as one file, named and optionally described:
 
-        TOPICS = {'rows': DATAFILE('rows.csv', 'one row per frame')}
+        TOPICS = {'rows': DATAFILE('rows.csv', doc='one row per frame')}
 
     The marker spelling of a bare filename.  `DATAFILE('rows.csv')` and
     `'rows.csv'` name the same file, and differ only in what they render as
@@ -836,8 +836,9 @@ class DATAFILE(TOPICMARKER, metaclass=_DataFileMeta_):
 
     `doc=` says what the file holds: the sentence a reader would otherwise have
     to go and find, recorded where the journal shows it and kept out of the
-    identity, so rewording it re-keys nothing. The positional note before it
-    said the same and rendered into the hash; it is deprecated.
+    identity, so rewording it re-keys nothing. The note before it -- `note=`,
+    keyword-only as `doc=` is -- said the same and renders into the hash; it is
+    deprecated, kept to reproduce the identities built under it.
     """
 
     # Unset on the bare marker, and set by the call that parameterises it.
@@ -1340,8 +1341,25 @@ def _topic_literal_(node):
             return {kw.arg: _topic_literal_(kw.value) for kw in node.keywords}
         marker = _marker_named_(node.func.id)
         args = [_topic_literal_(arg) for arg in node.args]
-        return marker(*args, **{kw.arg: _topic_literal_(kw.value) for kw in node.keywords})
+        return _recorded_marker_(marker, args, {kw.arg: _topic_literal_(kw.value) for kw in node.keywords})
     return ast.literal_eval(node)
+
+
+def _recorded_marker_(marker, args, kwargs):
+    """*marker* called as a recording spells it: a note that renders positionally read back as `note=`.
+
+    A marker's rendering is its identity and does not change, so a note renders
+    as it always has -- `DATAFILE('rows.csv', 'one row per frame')`,
+    `DATADIR('one PNG per frame')`, `SYNTHETIC('derived on read')` -- while a
+    declaration has to say `note=`. This is the reading of the recorded form.
+    """
+    kind = type(marker)
+    if kind is _DataFileMeta_ and len(args) == 2 and isinstance(args[1], str):
+        args, kwargs = args[:1], {'note': args[1], **kwargs}
+    elif kind in (_DirMarkerMeta_, _NotedMarkerMeta_) and len(args) == 1 and isinstance(args[0], str) \
+            and (kind is _NotedMarkerMeta_ or any(c.isspace() for c in args[0])):
+        args, kwargs = [], {'note': args[0], **kwargs}
+    return marker(*args, **kwargs)
 
 
 def _var_root_(node) -> bool:

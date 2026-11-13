@@ -436,8 +436,8 @@ class FeatureAffineLogisticProbe(Datablock):
     TOPICS = {
         'fit': {'labels': DATADICT('labels.npz', labels='ndarray'), 'features': DATAFILE('features.npy')},
         'eval': {'labels': DATADICT('labels.npz', labels='ndarray'), 'features': DATAFILE('features.npy')},
-        'columns': DATAFILE('columns.pkl', 'the feature layout: which column each feature came from'),
-        'evaluation_report': DATAFILE('evaluation_report.pkl', "the classification report on eval_table"),
+        'columns': DATAFILE('columns.pkl', note='the feature layout: which column each feature came from'),
+        'evaluation_report': DATAFILE('evaluation_report.pkl', note="the classification report on eval_table"),
         'coef': DATAFILE('coef.npy'),
         'intercept': DATAFILE('intercept.npy'),
         'classes': DATADICT('classes.npz', classes='ndarray'),

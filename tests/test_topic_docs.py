@@ -68,15 +68,15 @@ def test_documentation_never_reaches_the_hash(tmp_path, bare, documented):
 
 
 def test_the_note_still_reaches_it(tmp_path):
-    assert _hash({'t': DATAFILE('c.yaml', 'a note')}, tmp_path) != _hash({'t': DATAFILE('c.yaml')}, tmp_path)
+    assert _hash({'t': DATAFILE('c.yaml', note='a note')}, tmp_path) != _hash({'t': DATAFILE('c.yaml')}, tmp_path)
 
 
 @pytest.mark.pinned
 def test_declarations_from_before_render_as_they_did():
     assert repr(DATADIR('meta', {'videos': ('chunk-000',)})) == "DATADIR('meta', {'videos': ('chunk-000',)})"
-    assert repr(DATADIR('one PNG per frame')) == "DATADIR('one PNG per frame')"
+    assert repr(DATADIR(note='one PNG per frame')) == "DATADIR('one PNG per frame')"
     assert repr(DATADIR('meta', note='a lerobot dataset')) == "DATADIR('meta', note='a lerobot dataset')"
-    assert repr(DATAFILE('rows.csv', 'one row per frame')) == "DATAFILE('rows.csv', 'one row per frame')"
+    assert repr(DATAFILE('rows.csv', note='one row per frame')) == "DATAFILE('rows.csv', 'one row per frame')"
     assert repr(DATADICT('m.json', rows='int', run=dict(id='str'))) == \
         "DATADICT('m.json', rows='int', run=dict(id='str'))"
 
@@ -105,7 +105,7 @@ def test_a_file_among_the_children_is_its_marker_and_a_level_needs_a_name():
     with pytest.raises(TypeError, match='needs a name'):
         DATADIR(DATADIR('x'))
     with pytest.raises(TypeError, match='doc=, not a note'):
-        DATADIR(DATAFILE('f.json', 'a note'))
+        DATADIR(DATAFILE('f.json', note='a note'))
 
 
 @pytest.mark.parametrize('bad', ['{}', '{0}', '{scene!r}', '{scene:>3}', '{a-b}', '{scene'])

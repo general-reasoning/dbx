@@ -273,10 +273,14 @@ TOPICS = {
 ```
 
 - **`doc=` is documentation and reaches no identity**: reword it freely. The
-  older note -- `DATAFILE('x', 'a note')`, `DATADIR(note=...)` -- renders into
-  the hash and is deprecated; a datablock declared with one keeps it until it is
-  migrated, with a `Specialization(spec={}, topics=<the noted declaration>)` --
-  and its parents' `nested=` -- to reach what was built.
+  older `note=` renders into the hash and is deprecated; a datablock declared
+  with one keeps it until it is migrated, with a
+  `Specialization(spec={}, topics=<the noted declaration>)` to reach what was
+  built. Its parents need nothing: a nested datablock enters a parent's identity
+  by its spec alone, never its topics.
+- **Prose is never positional**: `doc=` and `note=` are keywords on every
+  marker. A note recorded positionally -- `DATAFILE('x', 'a note')`, as notes
+  render -- still reads back from a journal.
 - **The shape does reach it**: `DATADICT` keys, `DATAFRAME` columns, a
   `DATADIR`'s declared files and levels. Declaring them re-keys, as the note
   did; do it when a datablock is migrated anyway.

@@ -7,8 +7,8 @@ from dbx.datablocks import DATADICT, DATADIR, DATAFILE, DIR, SYNTHETIC, Databloc
 from dbx.datatables import DATASLICE
 
 MARKERS = [DATAFILE, DATADIR, DIR, SYNTHETIC, DATASLICE,
-           DATAFILE('tabs.json'), DATAFILE('tabs.json', 'one list of tab indices per fold'),
-           DATADIR('a note'), SYNTHETIC('derived on read'),
+           DATAFILE('tabs.json'), DATAFILE('tabs.json', note='one list of tab indices per fold'),
+           DATADIR(note='a note'), SYNTHETIC(note='derived on read'),
            DATADICT('bag.npz', mean='ndarray', sign='ndarray'),
            DATASLICE(tile='ndarray:uint8'), DATASLICE(annotations=dict(case_id='str', cohort='str'))]
 
@@ -24,7 +24,7 @@ def test_a_marker_round_trips_to_its_own_rendering(marker):
 
 def test_a_specialization_naming_old_topics_pickles():
     sp = Datablock.Specialization(spec={}, version=1,
-                                  topics={'tabs': DATAFILE('tabs.json', 'one list of tab indices per fold')},
+                                  topics={'tabs': DATAFILE('tabs.json', note='one list of tab indices per fold')},
                                   redirect_topics={'tablets': 'tabs'})
     back = pickle.loads(pickle.dumps(sp))
     assert back == sp and back.key == sp.key

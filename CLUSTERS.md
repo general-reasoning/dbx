@@ -6,7 +6,7 @@ dbx separates where the data are from where the code runs:
   `DBX_STORAGE_OPTIONS`. It can be a local directory, a cloud bucket, a
   directory on another host over ssh, or an
   [Anyscale workspace](#an-anyscale-workspace-as-a-datalake).
-- **Where the code runs** is this process by default. A block can be
+- **Where the code runs** is this process by default. A datablock can be
   instantiated on [a Ray head on the datalake's host](#a-ray-head-on-the-datalakes-host-sshray)
   or run on [a Slurm job](#slurm). A pipeline's call, or a shell command, can be
   [submitted to a cluster](#submitting-a-pipelines-call-to-a-cluster-and-watching-it):
@@ -24,7 +24,7 @@ Contents:
 
 ## The datalake: DBX_DATALAKE and DBX_STORAGE_OPTIONS
 
-`DBX_DATALAKE` is the datalake a block is stored in when it is not given
+`DBX_DATALAKE` is the datalake a datablock is stored in when it is not given
 `datalake=`. It is a local path or an fsspec URL: `/data/lake`,
 `gs://bucket/lake`, `abfss://...`, `ssh://host/path/to/lake`.
 
@@ -221,7 +221,7 @@ and the change goes away when the workspace restarts.
 
 ## A Ray head on the datalake's host: SshRay
 
-Reading a block's topics means instantiating the block, and the instance that
+Reading a datablock's topics means instantiating the datablock, and the instance that
 reads the data recorded in a journal entry is the one pinned to that entry's
 own revisions of dbx and the project (`trueinst`). `dbx.SshRay` starts a Ray
 head on the datalake's host over ssh, so that this instance runs where the
@@ -230,9 +230,9 @@ data are and is interrogated from here:
 ```python
 python = dbx.BuildJournalEntry.column(entry, 'python')     # the interpreter the build ran in
 cluster = dbx.SshRay.session('host', python=python)
-block = entry.trueinst(address=cluster.address,
-                       gitrepo=dbx.BuildJournalEntry.column(entry, 'gitrepo'))
-block.hash, block.read('classes')                          # forwarded to the pinned worker there
+dblk = entry.trueinst(address=cluster.address,
+                      gitrepo=dbx.BuildJournalEntry.column(entry, 'gitrepo'))
+dblk.hash, dblk.read('classes')                          # forwarded to the pinned worker there
 ```
 
 - **`python`** is the interpreter on the host whose `ray` starts the head. Its
@@ -297,7 +297,7 @@ journaled, so a run is found and followed again from any process, any later sess
 dbx.pprint "(p := myproject.pipelines.train('preset', n_gpus=8)).runner('lambda').build_tree().wait() and p.entry.valid()"
 dbx.pprint "myproject.pipelines.train('preset').runner().runs()"           # its runs on every cluster, as a dash
 dbx.pprint "myproject.pipelines.train('preset').runner().runs()[-1].cancel()"   # cancel the dash's last row
-dbx.pprint "dbx.runner('myproject.blocks.Train').runs()"               # the runs of every Train, any hash
+dbx.pprint "dbx.runner('myproject.datablocks.Train').runs()"               # the runs of every Train, any hash
 dbx.kubejobs                       # every user's running Jobs on every cluster (-m: mine; -s all: every status)
 dbx.kubequeues -q myteam           # the clusters' Kueue queues: quota, use, pending
 ```
@@ -370,7 +370,7 @@ dbx.pprint --capture-output "dbx.eval('<the pipeline's quote>').entry.<method>(<
 ```
 
 with `DBX_DATALAKE` the run's datalake. The quote rebuilds the same pipeline -- the same hashes,
-the same operational kwargs -- so the run builds the very blocks the call would build here, in
+the same operational kwargs -- so the run builds the very datablocks the call would build here, in
 that datalake. It returns a `Run` (section 5).
 
 **The run's datalake**, its `DBX_DATALAKE`, is the most specific one given: the pipeline's own,
@@ -431,10 +431,10 @@ What the run imports and reads must be there, at the paths the expression names:
   the target's `.dbx-pack` names that digest already: the target BECOMES the tree, so a target that
   is a mount point, or holds one or the datalake, is refused. Over Lambda's tailnet SFTP (~0.12 s a
   file, ~1.6 MB/s), an 8,000-file, 160 MB venv is ~20 min file by file, ~2 min packed, and seconds
-  when unchanged. A block built there is copied back with
-  `UNSAFE_copy_from(cluster.url(block.anchorkeypath))` inside `with cluster.fsspec_defaults():` --
-  `UNSAFE_copy_from` opens its source with the block's own options, so the cluster's are set as
-  fsspec's defaults for its protocols, and only while the block copies. Its anchorkeypath is the
+  when unchanged. A datablock built there is copied back with
+  `UNSAFE_copy_from(cluster.url(dblk.anchorkeypath))` inside `with cluster.fsspec_defaults():` --
+  `UNSAFE_copy_from` opens its source with the datablock's own options, so the cluster's are set as
+  fsspec's defaults for its protocols, and only while the datablock copies. Its anchorkeypath is the
   same path on both sides.
 - **The code itself:** `revision` pins the dbx and project repos to commits, cloned in the Job.
 - **The code and the venv, as an image:** `image=dbx.image.build(venv, repo=..., anyscale=True)` --
@@ -563,7 +563,7 @@ work serially: one SFTP connection cannot serve several threads at once.
 | `run.wait(poll=30, timeout=None)` | until complete (True) or *timeout* (False); raises with the log tail on failure; journals END / ERROR |
 | `run.cancel()` | deletes the Job and its pod; journals CANCEL |
 | `run.command()` | the run's exec-journal row; `.output()` prints what it printed (section 5) |
-| `dbx.clusters.runs(block)` | the Runs of every submission of a block, from its journal |
+| `dbx.clusters.runs(dblk)` | the Runs of every submission of a datablock, from its journal |
 | `LAMBDA.jobs(user=, mine_only=, status=)` | the cluster's Jobs, every user's and running by default (`user=` one user's, `mine_only=True` mine, over any `user=`; `status='all'`, 'pending', 'complete', 'failed'), newest first: its user (the `dbx/user` label, else a `contact` annotation's name; Kubernetes keeps no creator, so often empty), status, GPUs (all its pods'), pods, times, the expression, and Kueue's reason for a pending one |
 | `LAMBDA.queues(resource=, queues=, all=)` | the Kueue queues the cluster sees: `n_gpus_quota, _used, _free, _borrowed, _cohort` (`n_cpus_...` for `cpu`, `mem_gib_...` for `memory`), and `n_workloads_pending, n_workloads_admitted` (one workload per Job). `borrowed` is borrowed *by* the queue, beyond its quota, so `used` = `quota + borrowed` when over it; `mine` marks the queues your namespace's LocalQueues feed; `_cohort` is the cohort's quota, what borrowing can take the queue to |
 | `dbx.kubejobs [CLUSTER ...] [-s STATUS\|all] [-u USER \| -m]` | `jobs` of the `dbx.clusters` entry points' clusters (or those named), as one table; `dbx.kube.jobs(...)` returns it |
@@ -589,7 +589,7 @@ the journal, `wait`, `runs`, `command` -- the same for every kind.
 ### 8. Not done
 
 - Slurm as a kind (`SlurmCluster`, `SlurmRunner`, `SlurmRun`), reusing `SlurmRayCluster`.
-- Resources declared by the blocks (`EXECUTORS.md` section 3): today `n_gpus` comes from the pipeline's `n_gpus`.
+- Resources declared by the datablocks (`EXECUTORS.md` section 3): today `n_gpus` comes from the pipeline's `n_gpus`.
 - Fan-out: one run per tree.
 - `UNSAFE_copy_from` given the source's storage options, rather than `fsspec_defaults`.
 
@@ -758,7 +758,7 @@ dbx.pprint "$P.runner().runs().dash()"            # every column, with the pod a
 dbx.pprint "$P.runner().runs()[-1].status()"      # also .logs(tail=200), .reason(), .wait(), .cancel()
 dbx.pprint "$P.runner().runs()[-1].output()"     # what it printed, once it ended (section 5)
 dbx.pprint "$P.runner('lambda').cancel()"         # every open run there
-dbx.pprint "dbx.runner('myproject.blocks.Train').runs()"   # every Train's, whatever its hash
+dbx.pprint "dbx.runner('myproject.datablocks.Train').runs()"   # every Train's, whatever its hash
 dbx.pprint "dbx.clusters.runs($P, 'lambda', open=True)"      # = $P.runner('lambda').runs(open=True)
 dbx.pprint "$P.runner('lambda').cluster.jobs()"             # the running Jobs there, anyone's, any pipeline: = dbx.kubejobs lambda
 ```

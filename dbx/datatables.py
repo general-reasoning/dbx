@@ -38,6 +38,7 @@ from .datablocks import (
     DATAFILE,
     DIRTOPIC,
     Datablock,
+    check_topic_doc,
     BuildJournalFrame,
     Datastack,
     TopicMarkerMeta,
@@ -105,17 +106,19 @@ class _DataSliceMeta_(_DirMarkerMeta_):
     __repr__ = TopicMarkerMeta.__repr__
     __str__ = TopicMarkerMeta.__repr__
 
-    def __call__(cls, *mapping, **typed):
+    def __call__(cls, *mapping, doc=None, **typed):
         if mapping and (typed or len(mapping) > 1 or not isinstance(mapping[0], dict)):
             raise TypeError(
                 f"{cls.__name__} takes its columns as keywords -- "
                 f"{cls.__name__}(idx='int', image='jpeg') -- or as a single mapping "
-                f"when a column name is not an identifier"
+                f"when a column name is not an identifier, or is `doc`"
             )
+        if doc is not None:
+            check_topic_doc(cls.__name__, doc)
         columns = dict(mapping[0]) if mapping else dict(typed)
         for name, coltype in columns.items():
             cls._check_column_(name, coltype)
-        return _DataSliceMeta_(cls.__name__, (cls,), {'columns': columns})
+        return _DataSliceMeta_(cls.__name__, (cls,), {'columns': columns, 'doc': doc})
 
 
 class DATASLICE(DATADIR, metaclass=_DataSliceMeta_):

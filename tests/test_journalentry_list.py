@@ -72,7 +72,7 @@ class TestRecordedFields:
         block, entry = _built(SingleTopicBlock, tmp_path)
         assert 'output' in entry.pretty.paths()
         assert os.path.basename(entry.pretty.paths()['output']) == 'output.txt'
-        assert entry.pretty.topics() == ['output']        # names, as Datablock
+        assert entry.pretty.topics(short=True) == ['output']   # names, as Datablock
         assert entry.pretty.TOPICS['output'] == 'output.txt'   # what each maps to
 
     def test_topics_marks_dir(self, tmp_path):

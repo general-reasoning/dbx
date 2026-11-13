@@ -33,6 +33,7 @@ import hashlib
 import inspect
 import os
 from pprint import pformat
+from string import Formatter as _Formatter_
 import time
 import random
 import re
@@ -253,10 +254,10 @@ class TopicMarkerMeta(type):
     def __init__(cls, name, bases, namespace, **kwargs):
         super().__init__(name, bases, namespace, **kwargs)
         # A parameterised marker -- DATASLICE(idx='int'), DATAFILE('m.json'),
-        # DATADIR('a note') -- is a subclass carrying `columns`, `filename` or
-        # `note`, and is not a name anything may be declared under: it renders
-        # as the call that made it and reads back through that call.
-        if not any(namespace.get(k) for k in ('columns', 'filename', 'note')):
+        # DATADIR('a note') -- is a subclass carrying one of `_MARKER_PARAMS_`,
+        # and is not a name anything may be declared under: it renders as the
+        # call that made it and reads back through that call.
+        if not any(namespace.get(k) for k in _MARKER_PARAMS_):
             TopicMarkerMeta.REGISTRY.setdefault(name, cls)
 
     def __repr__(cls):
@@ -267,21 +268,41 @@ class TopicMarkerMeta(type):
 
     __str__ = __repr__
 
+    def _render_(cls, doc: bool = False) -> str:
+        """This marker as the call that makes it: its identity, `repr` -- or, with *doc*, its documentation too.
+
+        `doc=` and `over=` are documentation: no identity holds them, so `repr`,
+        which the type string and the hash are made of, never shows them. The
+        journal records this rendering with *doc*, and `literal_topics` reads it
+        back into the marker, documentation and all.
+        """
+        text = repr(cls)
+        extra = _doc_args_(cls) if doc else []
+        if not extra:
+            return text
+        if text == cls.__name__:
+            return f"{text}({', '.join(extra)})"
+        return f"{text[:-1]}, {', '.join(extra)})"
+
     def __init_subclass__(meta, **kwargs):
         super().__init_subclass__(**kwargs)
         copyreg.pickle(meta, _reduce_marker_)
 
 
+# What a parameterised marker carries, one of them at least: a marker carrying none is a declared one.
+_MARKER_PARAMS_ = ('columns', 'filename', 'note', 'subdirs', 'schema', 'doc', 'over')
+
+
 def _reduce_marker_(marker):
     """Pickle a topic marker: a declared one by its name, a parameterised one as the call that made it.
 
-    `DATAFILE('tabs.json', 'a note')` is a class made on the call, under the name `DATAFILE`, which
-    is another class: pickled by name, it would be refused as "not the same object". Its rendering is
-    its identity and `literal_topics` reads it back, so that is what travels -- to a worker, say, inside
-    a specialization naming a narrower block's topics.
+    `DATAFILE('tabs.json', doc='a note')` is a class made on the call, under the name `DATAFILE`, which
+    is another class: pickled by name, it would be refused as "not the same object". Its rendering,
+    documentation included, is read back by `literal_topics`, so that is what travels -- to a worker,
+    say, inside a specialization naming a narrower block's topics.
     """
-    if any(marker.__dict__.get(k) for k in ('columns', 'filename', 'note')):
-        return _marker_from_rendering_, (repr(marker),)
+    if any(marker.__dict__.get(k) for k in _MARKER_PARAMS_):
+        return _marker_from_rendering_, (marker._render_(doc=True),)
     return marker.__qualname__
 
 
@@ -319,49 +340,277 @@ class TOPICMARKER(metaclass=TopicMarkerMeta):
     """
 
 
-def _render_subdirs_(subdirs) -> str:
-    """`((name, children), ...)` back as the positionals that spell it.
+class _VarRef_:
+    """A block's VAR, or something reached from it, named and not evaluated: what `VAR` in `over=` is.
 
-    A leaf is its name; a level with children is a dict. The rendering reaches the type
-    string, so it has to be injective -- which it is, because a name is a string and a
-    nesting is a dict, and the two never render alike.
+        DATADIR({'{split}': DATAFILE('{scene}.npz')}, over={'split': VAR.splits})
+
+    `VAR.splits` is recorded, not read: a class's TOPICS are declared before any
+    instance exists, so there is no VAR to read. It renders as itself --
+    `VAR.splits`, `VAR.scenery.scenes('name')` -- and an instance resolves it
+    (`_resolve_`) only when asked to, by `Pretty.topics(bound=True)` or a
+    validation. Attributes, indexing and calls with literal arguments are
+    recorded; a name starting with `_` is refused, so `copy`, `pickle` and
+    `hasattr` probes never record one.
+    """
+
+    __slots__ = ('_steps_',)
+
+    def __init__(self, steps=()):
+        object.__setattr__(self, '_steps_', tuple(steps))
+
+    def __getattr__(self, name):
+        if name.startswith('_'):
+            raise AttributeError(name)
+        return _VarRef_((*self._steps_, ('.', name)))
+
+    def __getitem__(self, key):
+        _check_literal_('VAR[...]', key)
+        return _VarRef_((*self._steps_, ('[]', key)))
+
+    def __call__(self, *args, **kwargs):
+        for value in (*args, *kwargs.values()):
+            _check_literal_('VAR...(...)', value)
+        return _VarRef_((*self._steps_, ('()', args, tuple(kwargs.items()))))
+
+    def __iter__(self):
+        # Without this, `__getitem__` makes it iterable -- endlessly, recording 0, 1, 2, ...
+        raise TypeError(f"{self!r} is a reference to a VAR, not a sequence: it is not iterated")
+
+    def __setattr__(self, name, value):
+        raise AttributeError(f"{self!r} is a reference to a VAR: nothing is set on it")
+
+    def __eq__(self, other):
+        return isinstance(other, _VarRef_) and self._steps_ == other._steps_
+
+    def __hash__(self):
+        return hash(self._steps_)
+
+    def __reduce__(self):
+        return _VarRef_, (self._steps_,)
+
+    def __repr__(self):
+        text = 'VAR'
+        for step in self._steps_:
+            if step[0] == '.':
+                text += f".{step[1]}"
+            elif step[0] == '[]':
+                text += f"[{step[1]!r}]"
+            else:
+                args = [repr(a) for a in step[1]] + [f"{k}={v!r}" for k, v in step[2]]
+                text += f"({', '.join(args)})"
+        return text
+
+    def _field_(self):
+        """The VAR field this starts from, or None for `VAR` itself."""
+        return self._steps_[0][1] if self._steps_ and self._steps_[0][0] == '.' else None
+
+    def _resolve_(self, dblk):
+        """What this names on *dblk*: its VAR, then each step."""
+        value = dblk.var
+        for step in self._steps_:
+            if step[0] == '.':
+                value = getattr(value, step[1])
+            elif step[0] == '[]':
+                value = value[step[1]]
+            else:
+                value = value(*step[1], **dict(step[2]))
+        return value
+
+
+# A block's VAR in a topic's `over=`: `VAR.splits` names the field without reading it. See `_VarRef_`.
+VAR = _VarRef_()
+
+
+def _check_literal_(where, value):
+    """Refuse *value* unless it is a literal: what renders, and reads back, as itself."""
+    try:
+        ok = ast.literal_eval(repr(value)) == value
+    except (ValueError, SyntaxError, TypeError):
+        ok = False
+    if not ok:
+        raise TypeError(f"{where}: {value!r} is not a literal -- a str, number, bool, None, or a tuple, "
+                        f"list or dict of them -- so it would not read back from the journal as itself")
+
+
+def _template_fields_(text) -> tuple:
+    """The placeholders of a name -- `'{scene}.cameras.json'` has `('scene',)` -- in order; `()` for a literal name.
+
+    A placeholder is a whole `{field}`, its field an identifier; `{{` and `}}`
+    are literal braces. A conversion or format spec is refused: a name is
+    matched, never formatted.
+    """
+    fields_ = []
+    try:
+        parsed = list(_Formatter_().parse(text))
+    except ValueError as e:
+        raise ValueError(f"{text!r} is not a name or a pattern: {e}") from None
+    for _, field_name, spec, conversion in parsed:
+        if field_name is None:
+            continue
+        if not field_name.isidentifier() or spec or conversion:
+            raise ValueError(f"{text!r}: a placeholder is {{name}}, a bare identifier -- not {{{field_name}"
+                             f"{'!' + conversion if conversion else ''}{':' + spec if spec else ''}}}")
+        fields_.append(field_name)
+    return tuple(fields_)
+
+
+def check_topic_doc(kind, doc):
+    """Refuse a doc that is not prose."""
+    if not isinstance(doc, str) or not doc.strip():
+        raise TypeError(f"{kind} doc must be a non-empty string, got {doc!r}")
+
+
+def _check_over_(kind, over, subdirs):
+    """*over* as `{field: binding}`, each field a placeholder somewhere under *subdirs*.
+
+    A binding says what a placeholder ranges over: a `VAR` reference, a tuple
+    of literal values, or a description in words.
+    """
+    if not isinstance(over, dict) or not over:
+        raise TypeError(f"{kind} over= is a non-empty dict of placeholder: binding, got {over!r}")
+    beneath = _fields_beneath_(subdirs or ())
+    out = {}
+    for field_name, binding in over.items():
+        if field_name not in beneath:
+            raise ValueError(f"{kind} over= binds {field_name!r}, which no name under it has as a "
+                             f"placeholder; it has {sorted(beneath) or 'none'}")
+        if isinstance(binding, (list, tuple)):
+            _check_literal_(f"{kind} over={{{field_name!r}: ...}}", tuple(binding))
+            binding = tuple(binding)
+        elif isinstance(binding, str):
+            check_topic_doc(f"{kind} over={{{field_name!r}: ...}}", binding)
+        elif not isinstance(binding, _VarRef_):
+            raise TypeError(f"{kind} over={{{field_name!r}: {binding!r}}}: a binding is a VAR reference "
+                            f"(VAR.splits), a tuple of literals, or a description in words")
+        out[field_name] = binding
+    return out
+
+
+def _fields_beneath_(subdirs) -> set:
+    """Every placeholder of every name in a canonical subdirectory tree."""
+    out = set()
+    for entry in subdirs:
+        if is_topicmarker(entry):
+            out.update(_template_fields_(entry.filename))
+            continue
+        name, node = entry
+        out.update(_template_fields_(name))
+        out |= _fields_beneath_(_children_(node))
+    return out
+
+
+def _children_(node) -> tuple:
+    """A canonical subdirectory level's children: given as such, or a directory marker's."""
+    return node if isinstance(node, tuple) else (node.subdirs or ())
+
+
+def _doc_args_(marker) -> list:
+    """A marker's documentation as call arguments: `doc=...`, `over={...}`. No identity holds them."""
+    doc, over = marker.__dict__.get('doc'), marker.__dict__.get('over')
+    return (([f"doc={doc!r}"] if doc is not None else []) +
+            ([f"over={{{', '.join(f'{k!r}: {v!r}' for k, v in over.items())}}}"] if over else []))
+
+
+def _documented_(marker) -> bool:
+    return bool(_doc_args_(marker))
+
+
+def _render_subdirs_(subdirs, doc: bool = False) -> str:
+    """A canonical subdirectory tree back as the positionals that spell it.
+
+    A directory without children is its name; one with children is a dict; a
+    file is its marker. The rendering reaches the type string, so it has to be
+    injective -- which it is, because a name is a string, a nesting a dict and a
+    file a marker, and the three never render alike. With *doc*, a level's
+    documentation is spelled too, as the `DATADIR(...)` that carries it; without,
+    a level renders the same however it was spelled, so documentation never
+    reaches the identity.
     """
     out = []
-    for name, children in subdirs:
-        out.append(repr(name) if not children
-                   else "{%r: (%s)}" % (name, _render_subdirs_(children) +
-                                        ("," if len(children) == 1 else "")))
+    for entry in subdirs:
+        if is_topicmarker(entry):
+            out.append(entry._render_(doc))
+            continue
+        name, node = entry
+        children = _children_(node)
+        if doc and not isinstance(node, tuple) and _documented_(node):
+            out.append(f"{{{name!r}: {node._render_(doc=True)}}}")
+        elif not children:
+            out.append(repr(name))
+        else:
+            out.append("{%r: (%s)}" % (name, _render_subdirs_(children, doc) +
+                                       ("," if len(children) == 1 else "")))
     return ", ".join(out)
 
 
 def _check_subdirs_(kind, subdirs):
-    """A declared subdirectory tree, canonicalised to `((name, children), ...)`.
+    """A declared subdirectory tree, canonicalised: each entry a directory `(name, children)` or a file marker.
 
-    Accepts a sequence of names, or a dict mapping a name to its own children --
-    `('meta', 'data')`, `{'videos': ('chunk-000',)}` -- and nests to any depth. The
-    canonical form is what renders into the type string, so two spellings of one tree
-    reach one hash.
+    Accepts a sequence of names, files and dicts, or a dict mapping a name to its
+    own children -- `('meta', 'data')`, `{'videos': ('chunk-000',)}`,
+    `{'{split}': DATAFILE('{scene}.npz')}` -- and nests to any depth. A
+    directory's children may be given as a `DATADIR(...)`, which may carry the
+    level's `doc=` and `over=`: kept as that marker when it does, and as its
+    children when it does not. A name or a filename holding a `{placeholder}`
+    is a pattern: any number of entries named so. The canonical form is what
+    renders into the type string, so two spellings of one tree reach one hash.
     """
-    if isinstance(subdirs, str):
+    if isinstance(subdirs, str) or is_topicmarker(subdirs):
         subdirs = (subdirs,)
     if isinstance(subdirs, dict):
         items = list(subdirs.items())
     else:
         items = []
         for entry in subdirs:
-            items.extend(entry.items() if isinstance(entry, dict) else [(entry, None)])
+            if isinstance(entry, dict):
+                items.extend(entry.items())
+            elif is_topicmarker(entry):
+                items.append((None, entry))
+            else:
+                items.append((entry, None))
     out = []
     for name, children in items:
+        if name is None:
+            out.append(_check_file_child_(kind, children))
+            continue
         if not isinstance(name, str) or not name:
             raise TypeError(f"{kind} subdir name must be a non-empty string, got {name!r}")
         if '/' in name:
             raise ValueError(
                 f"{kind} subdir {name!r} may not contain '/': declare the nesting -- "
                 f"subdirs={{{name.split('/')[0]!r}: ({name.split('/', 1)[1]!r},)}}")
-        out.append((name, () if children is None else _check_subdirs_(kind, children)))
+        _template_fields_(name)
+        if children is None:
+            out.append((name, ()))
+        elif is_topicmarker(children, DATAFILE):
+            out.append((name, (_check_file_child_(kind, children),)))
+        elif is_topicmarker(children):
+            if not is_topicmarker(children, DATADIR) or children.__dict__.get('columns') \
+                    or is_topicmarker(children, DIR):
+                raise TypeError(f"{kind} subdir {name!r}: {children!r} cannot be a level of a "
+                                f"directory -- give its children, or a DATADIR(...) of them")
+            if children.__dict__.get('note') is not None:
+                raise TypeError(f"{kind} subdir {name!r}: a level carries doc=, not a note")
+            out.append((name, children if _documented_(children) else (children.subdirs or ())))
+        else:
+            out.append((name, _check_subdirs_(kind, children)))
     if not out:
         raise ValueError(f"{kind} subdirs is empty: omit it, or name the subdirectories")
     return tuple(out)
+
+
+def _check_file_child_(kind, marker):
+    """A file a directory declares: a `DATAFILE`, `DATADICT` or `DATAFRAME` naming it."""
+    if not is_topicmarker(marker, DATAFILE):
+        raise TypeError(f"{kind}: a {marker!r} among its children needs a name -- "
+                        f"{{'name': {marker!r}}} -- as only a file marker names itself")
+    if not marker.filename:
+        raise ValueError(f"{kind}: a bare {marker!r} among its children names no file")
+    if marker.__dict__.get('note') is not None:
+        raise TypeError(f"{kind}: a file among its children carries doc=, not a note: {marker!r}")
+    _template_fields_(marker.filename)
+    return marker
 
 
 def _check_note_(kind, note):
@@ -388,17 +637,19 @@ class _NotedMarkerMeta_(TopicMarkerMeta):
     so `DATADIR() is DATADIR` and the two spell the same thing.
     """
 
-    def __call__(cls, note=None, *, subdirs=None):
-        if note is None and subdirs is None:
+    def __call__(cls, note=None, *, subdirs=None, doc=None):
+        if note is None and subdirs is None and doc is None:
             return cls
         if note is not None:
             _check_note_(cls.__name__, note)
+        if doc is not None:
+            check_topic_doc(cls.__name__, doc)
         if subdirs is not None:
             if not getattr(cls, 'SUBDIRS_OK', False):
                 raise TypeError(f"{cls.__name__} takes no subdirs: it is not a directory")
             subdirs = _check_subdirs_(cls.__name__, subdirs)
         return _NotedMarkerMeta_(cls.__name__, (cls,),
-                                 {'note': note, 'subdirs': subdirs})
+                                 {'note': note, 'subdirs': subdirs, 'doc': doc})
 
     def __repr__(cls):
         note, subdirs = cls.__dict__.get('note'), cls.__dict__.get('subdirs')
@@ -439,24 +690,30 @@ class _DirMarkerMeta_(_NotedMarkerMeta_):
     valid, both in silence.
     """
 
-    def __call__(cls, *subdirs, note=None):
+    def __call__(cls, *subdirs, note=None, doc=None, over=None):
         # One positional holding whitespace is the NOTE, as it was before subdirs
         # existed -- `DATADIR('one PNG per frame')`. A directory name has no spaces in
         # it, so the two never collide, and no declaration written before this re-keys.
         if (note is None and len(subdirs) == 1 and isinstance(subdirs[0], str)
                 and any(c.isspace() for c in subdirs[0])):
-            return super().__call__(subdirs[0])
+            note, subdirs = subdirs[0], ()
         for entry in subdirs:
             if isinstance(entry, str) and any(c.isspace() for c in entry):
                 raise TypeError(
                     f"{cls.__name__}({entry!r}): a subdirectory name may not hold "
-                    f"whitespace. For a note alongside subdirectories, say "
-                    f"{cls.__name__}(..., note={entry!r})")
-        if not subdirs:
-            return super().__call__(note)
+                    f"whitespace. For prose alongside subdirectories, say "
+                    f"{cls.__name__}(..., doc={entry!r})")
+        if note is not None:
+            _check_note_(cls.__name__, note)
+        if doc is not None:
+            check_topic_doc(cls.__name__, doc)
+        children = _check_subdirs_(cls.__name__, subdirs) if subdirs else None
+        if over is not None:
+            over = _check_over_(cls.__name__, over, children)
+        if note is None and children is None and doc is None and over is None:
+            return cls
         return _DirMarkerMeta_(cls.__name__, (cls,),
-                               {'note': note,
-                                'subdirs': _check_subdirs_(cls.__name__, subdirs)})
+                               {'note': note, 'subdirs': children, 'doc': doc, 'over': over})
 
     def __repr__(cls):
         note, subdirs = cls.__dict__.get('note'), cls.__dict__.get('subdirs')
@@ -476,6 +733,15 @@ class _DirMarkerMeta_(_NotedMarkerMeta_):
 
     __str__ = __repr__
 
+    def _render_(cls, doc: bool = False) -> str:
+        """As `TopicMarkerMeta._render_`, its children documented too when *doc* asks."""
+        subdirs = cls.__dict__.get('subdirs')
+        if not doc or not subdirs:
+            return super()._render_(doc)
+        note = cls.__dict__.get('note')
+        args = [_render_subdirs_(subdirs, doc=True)] + ([f"note={note!r}"] if note is not None else [])
+        return f"{cls.__name__}({', '.join(args + _doc_args_(cls))})"
+
 
 class DATADIR(TOPICMARKER, metaclass=_DirMarkerMeta_):
     """A directory topic: the topic IS the directory.  `DIRTOPIC` as a marker.
@@ -491,10 +757,19 @@ class DATADIR(TOPICMARKER, metaclass=_DirMarkerMeta_):
         TOPICS = {'data': DATADIR('meta', 'data', 'videos',
                                   note='a lerobot dataset')}
 
-    Nest by giving a dict: `DATADIR('meta', {'videos': ('chunk-000',)})`. The note is
-    a keyword, because a directory more often says what is under it than carries prose,
-    and a positional holding whitespace is refused rather than read as a directory name
-    -- see `_DirMarkerMeta_`. The topic stays ONE
+    Nest by giving a dict: `DATADIR('meta', {'videos': ('chunk-000',)})`. A child may
+    also be a file -- `DATAFILE`, `DATADICT`, `DATAFRAME` -- and a name or filename
+    holding a `{placeholder}` is a pattern, any number of entries named so, which
+    `over=` says the range of -- a `VAR` reference, literal values, or words:
+
+        TOPICS = {'sr': DATADIR({'{split}': DATAFILE('{scene}.npz', doc='one scene of SR')},
+                                over={'split': VAR.splits, 'scene': 'the scenes of the split'},
+                                doc='the scenes, by split')}
+
+    `doc=` and `over=` are documentation, and reach no identity; a level's own go on
+    the `DATADIR(...)` given as its children, `{'{split}': DATADIR(..., doc=...)}`.
+    The note -- a keyword, or one positional holding whitespace, as it was first --
+    is deprecated: it renders into the type string, so rewording it re-keys. The topic stays ONE
     topic -- one path, shipped and cleared whole -- unlike a nested dict in TOPICS,
     which makes a group whose leaves are separate topics and whose root is no topic at
     all. Declared subdirs render into the type string, so adding them re-keys.
@@ -529,12 +804,14 @@ class DIR(DATADIR):
 class _DataFileMeta_(TopicMarkerMeta):
     """Makes `DATAFILE('rows.csv', 'one row per frame')` a marker carrying both."""
 
-    def __call__(cls, filename, note=None):
+    def __call__(cls, filename, note=None, *, doc=None):
         cls._check_filename_(filename)
         if note is not None:
             _check_note_(cls.__name__, note)
+        if doc is not None:
+            check_topic_doc(cls.__name__, doc)
         return _DataFileMeta_(cls.__name__, (cls,),
-                             {'filename': filename, 'note': note})
+                             {'filename': filename, 'note': note, 'doc': doc})
 
     def __repr__(cls):
         filename = cls.__dict__.get('filename')
@@ -557,11 +834,10 @@ class DATAFILE(TOPICMARKER, metaclass=_DataFileMeta_):
     -- which is why adopting the marker re-keys the block, and why the bare
     string goes on working untouched for every block that has not.
 
-    The note is documentation that reaches the identity.  A topic's filename
-    says where the data is and nothing about what it holds; the note is the
-    sentence a reader would otherwise have to go and find, recorded where the
-    journal shows it.  It renders, so it is in the hash: changing the wording
-    re-keys the block, the same as changing anything else that renders.
+    `doc=` says what the file holds: the sentence a reader would otherwise have
+    to go and find, recorded where the journal shows it and kept out of the
+    identity, so rewording it re-keys nothing. The positional note before it
+    said the same and rendered into the hash; it is deprecated.
     """
 
     # Unset on the bare marker, and set by the call that parameterises it.
@@ -594,18 +870,20 @@ class _DataDictMeta_(_DataFileMeta_):
     and one test -- `is_topicmarker` -- recognises the lot of them.
     """
 
-    def __call__(cls, filename, *mapping, **typed):
+    def __call__(cls, filename, *mapping, doc=None, **typed):
         if mapping and (typed or len(mapping) > 1 or not isinstance(mapping[0], dict)):
             raise TypeError(
                 f"{cls.__name__} takes a filename and then its keys as keywords -- "
                 f"{cls.__name__}('meta.json', id='str') -- or as a single mapping "
-                f"when a key is not an identifier"
+                f"when a key is not an identifier, or is `doc`"
             )
         cls._check_filename_(filename)
+        if doc is not None:
+            check_topic_doc(cls.__name__, doc)
         schema = dict(mapping[0]) if mapping else dict(typed)
         cls._check_schema_(schema)
         return _DataDictMeta_(cls.__name__, (cls,),
-                             {'filename': filename, 'schema': schema})
+                             {'filename': filename, 'schema': schema, 'doc': doc})
 
     def __repr__(cls):
         filename = cls.__dict__.get('filename')
@@ -676,6 +954,37 @@ class DATADICT(DATAFILE, metaclass=_DataDictMeta_):
                     f"DATADICT dtype {dtype!r} for {where!r} may not contain '/': "
                     f"see the filename rule"
                 )
+
+
+class DATAFRAME(DATAFILE, metaclass=_DataDictMeta_):
+    """A topic stored as ONE FILE holding a table -- a parquet file, say -- declared with its columns:
+
+        TOPICS = {'scenes': DATAFRAME('scenes.parquet', split='str', scene_name='str',
+                                      n_keyframes='int', doc='one row per scene')}
+
+    What `DATADICT` is for a dict, for a table: the filename locates it, and
+    the columns -- each a dtype name, in order -- say what a reader will find,
+    and render into the type string, so adding, dropping, retyping or
+    reordering one re-keys the block. Documentation, not enforcement, as
+    `DATADICT`'s schema is.
+    """
+
+    # Unset on the bare marker, and set by the call that parameterises it.
+    filename = None
+
+    # `{column: dtype}`, in order.
+    schema = {}
+
+    @classmethod
+    def _check_schema_(cls, schema):
+        """Refuse a column or dtype that would render into an ambiguous type string."""
+        for column, dtype in schema.items():
+            if not isinstance(column, str) or not column:
+                raise TypeError(f"DATAFRAME column must be a non-empty string, got {column!r}")
+            if not isinstance(dtype, str) or not dtype:
+                raise TypeError(f"DATAFRAME dtype for {column!r} must be a non-empty string, got {dtype!r}")
+            if '/' in column or '/' in dtype:
+                raise ValueError(f"DATAFRAME column {column!r}: {dtype!r}: no '/' -- see DATAFILE's filename rule")
 
 
 # One node of a TOPICS declaration: a marker -- `DATAFILE('x')`, `DATADICT(...)`,
@@ -850,7 +1159,7 @@ def _render_columns_(columns):
     `DATADICT` nested key does; a column declared by its MDS type renders as it
     always has.
     """
-    if all(isinstance(name, str) and name.isidentifier() for name in columns):
+    if all(isinstance(name, str) and name.isidentifier() and name != 'doc' for name in columns):
         return ', '.join(f"{name}=dict({_render_schema_(coltype)})" if isinstance(coltype, dict)
                          else f"{name}={coltype!r}"
                          for name, coltype in columns.items())
@@ -868,7 +1177,7 @@ def _render_schema_(schema):
     """
     if not schema:
         return ''
-    if not all(isinstance(key, str) and key.isidentifier() for key in schema):
+    if not all(isinstance(key, str) and key.isidentifier() and key != 'doc' for key in schema):
         return repr(dict(schema))
     return ', '.join(
         f"{key}=dict({_render_schema_(dtype)})" if isinstance(dtype, dict)
@@ -912,6 +1221,84 @@ def _legacy_topics_(topics, prefix=()):
     return out
 
 
+def render_topics(topics, *, doc: bool = False) -> str:
+    """A TOPICS declaration as text: `str(topics)` -- its identity -- or, with *doc*, its documentation too.
+
+    What the journal records, with *doc*, and `literal_topics` reads back:
+    every marker's `doc=` and `over=` with it, which `str` leaves out because no
+    identity holds them.
+    """
+    if isinstance(topics, dict):
+        return '{' + ', '.join(f"{k!r}: {render_topics(v, doc=doc)}" for k, v in topics.items()) + '}'
+    if isinstance(topics, list):
+        return '[' + ', '.join(render_topics(v, doc=doc) for v in topics) + ']'
+    if is_topicmarker(topics):
+        return topics._render_(doc)
+    return repr(topics)
+
+
+def _topic_markers_(topics):
+    """Every marker of a declaration, each directory's documented levels and files included.
+
+    `[(path, marker, topic)]`: *topic* True for a topic's own marker, False for
+    one among a directory's children.
+    """
+    out = []
+
+    def levels(path, subdirs):
+        for entry in subdirs:
+            if is_topicmarker(entry):
+                out.append((path + (entry.filename,), entry, False))
+                continue
+            name, node = entry
+            if not isinstance(node, tuple):
+                out.append((path + (name,), node, False))
+            levels(path + (name,), _children_(node))
+
+    if isinstance(topics, dict):
+        for name, node in topics.items():
+            if isinstance(node, dict):
+                out.extend(((name, *p), m, t) for p, m, t in _topic_markers_(node))
+            elif is_topicmarker(node):
+                out.append(((name,), node, True))
+                levels((name,), node.__dict__.get('subdirs') or ())
+    return out
+
+
+def _check_topic_bindings_(cls):
+    """Refuse a TOPICS whose patterns or `over=` bindings cannot mean what they say.
+
+    A pattern names many files, so a topic -- one path -- cannot be one: it goes
+    among a DATADIR's children. And `VAR` in `over=` has to be `dbx.VAR`: in a
+    class body a name is the body's own before it is the module's, so a `class
+    VAR` declared before TOPICS would make `VAR.splits` the field's default value,
+    read on the spot, with nothing to say so. A reference's first name has to be
+    a field of the class's VAR -- read off its declaration, never off a value.
+    """
+    declaration = class_declaration(cls, 'TOPICS')
+    if not isinstance(declaration, dict):
+        return
+    bound = False
+    for path, marker, topic in _topic_markers_(declaration):
+        filename = marker.__dict__.get('filename')
+        if topic and filename and _template_fields_(filename):
+            raise TypeError(f"{cls.__qualname__}.TOPICS[{'/'.join(path)!r}] = {marker!r}: a pattern names many "
+                            f"files, and a topic is one path -- declare it among a DATADIR's children")
+        over = marker.__dict__.get('over') or {}
+        bound = bound or bool(over)
+        names = {f.name for f in fields(cls.VAR)} if over else set()
+        for field_name, binding in over.items():
+            if isinstance(binding, _VarRef_) and binding._field_() not in names:
+                raise TypeError(f"{cls.__qualname__}.TOPICS[{'/'.join(path)!r}]: over={{{field_name!r}: "
+                                f"{binding!r}}} names no field of {cls.__qualname__}.VAR; its fields are "
+                                f"{sorted(names)}")
+    order = list(cls.__dict__)
+    if bound and 'VAR' in cls.__dict__ and order.index('VAR') < order.index('TOPICS'):
+        raise TypeError(f"{cls.__qualname__} declares class VAR before TOPICS, whose over= names VAR: declare "
+                        f"TOPICS first, so that VAR there is dbx.VAR, a reference -- after class VAR, it is "
+                        f"your VAR class, and VAR.field its default value, read on the spot")
+
+
 def literal_topics(text):
     """A recorded `str(TOPICS)` back as a TOPICS declaration.
 
@@ -935,6 +1322,12 @@ def _topic_literal_(node):
     if isinstance(node, ast.Dict):
         return {_topic_literal_(k): _topic_literal_(v)
                 for k, v in zip(node.keys, node.values)}
+    if isinstance(node, (ast.Tuple, ast.List)):
+        # A directory's children: names, dicts, and file markers among them.
+        items = [_topic_literal_(e) for e in node.elts]
+        return tuple(items) if isinstance(node, ast.Tuple) else items
+    if _var_root_(node):
+        return _var_ref_literal_(node)
     if isinstance(node, ast.Name):
         return _marker_named_(node.id)
     if isinstance(node, ast.Call):
@@ -949,6 +1342,25 @@ def _topic_literal_(node):
         args = [_topic_literal_(arg) for arg in node.args]
         return marker(*args, **{kw.arg: _topic_literal_(kw.value) for kw in node.keywords})
     return ast.literal_eval(node)
+
+
+def _var_root_(node) -> bool:
+    """Whether *node* is `VAR`, or an attribute, index or call of one: a recorded `over=` binding."""
+    while isinstance(node, (ast.Attribute, ast.Subscript, ast.Call)):
+        node = node.func if isinstance(node, ast.Call) else node.value
+    return isinstance(node, ast.Name) and node.id == 'VAR'
+
+
+def _var_ref_literal_(node):
+    """A recorded `VAR...` back as the reference it renders: recorded again, step by step, never evaluated."""
+    if isinstance(node, ast.Name):
+        return VAR
+    if isinstance(node, ast.Attribute):
+        return getattr(_var_ref_literal_(node.value), node.attr)
+    if isinstance(node, ast.Subscript):
+        return _var_ref_literal_(node.value)[ast.literal_eval(node.slice)]
+    return _var_ref_literal_(node.func)(*[ast.literal_eval(a) for a in node.args],
+                                        **{kw.arg: ast.literal_eval(kw.value) for kw in node.keywords})
 
 
 def _marker_named_(name):
@@ -2064,6 +2476,7 @@ class Datablock:
                 f"SYNTHETIC. Respelling moves the hash, so keep the old spelling in a "
                 f"Specialization(spec={{}}, topics=<the old declaration>) to reach what was built.",
                 LegacyTopicsWarning, stacklevel=2)
+        _check_topic_bindings_(cls)
         if 'signature_topics' in cls.__dict__:
             # Renamed, and private: overridden, the old name would now be
             # ignored in silence -- and a block whose identity a subclass had
@@ -2811,16 +3224,29 @@ class Datablock:
         return valid
 
     def _valid_subdirs_(self, root, subdirs) -> bool:
-        """Whether every subdirectory a DATADIR declares is under *root*.
+        """Whether every subdirectory and file a DATADIR declares by name is under *root*.
 
         What makes a declared structure worth declaring: the directory existing says
-        nothing about a combination that died after writing the first of three.
+        nothing about a combination that died after writing the first of three. A
+        pattern -- a `{placeholder}` in a name -- asks for nothing here: any number
+        of entries match it, none included.
         """
-        for name, children in subdirs:
+        for entry in subdirs:
+            if is_topicmarker(entry):
+                # A file: one named so must be there; a pattern, any number of them, none included.
+                if not _template_fields_(entry.filename) \
+                        and not self.valid_path(os.path.join(str(root), entry.filename)):
+                    self.log.detailed(f"{self.anchor}: {root} is missing file {entry.filename!r}")
+                    return False
+                continue
+            name, node = entry
+            if _template_fields_(name):
+                continue
             path = os.path.join(str(root), name)
             if not self.valid_path(path):
                 self.log.detailed(f"{self.anchor}: {root} is missing subdir {name!r}")
                 return False
+            children = _children_(node)
             if children and not self._valid_subdirs_(path, children):
                 return False
         return True

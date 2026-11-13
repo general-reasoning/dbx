@@ -1919,6 +1919,8 @@ class Pretty:
 
     def __init__(self, entry: 'BuildJournalEntry'):
         self._entry = entry
+        # The live block a `Datablock.pretty` reads, for what only it can answer -- `topics(bound=True)`.
+        self._block = None
 
     def __repr__(self):
         return f"Pretty({self.anchor}/{self.hash})"
@@ -1934,8 +1936,10 @@ class Pretty:
         `quote()` of the entry its next build writes.
         """
         record = BuildJournal._block_record_(block)
-        return cls(BuildJournalEntry(pd.Series(record, dtype=object),
-                                     storage_options=getattr(block, 'storage_options', None)))
+        pretty = cls(BuildJournalEntry(pd.Series(record, dtype=object),
+                                       storage_options=getattr(block, 'storage_options', None)))
+        pretty._block = block
+        return pretty
 
     def signaturestr(self, *, deslash: bool = False, **kwargs):
         """The recorded signature TEXT.
@@ -2006,14 +2010,26 @@ class Pretty:
         """
         return self._dict_column_(self._entry, 'paths')
 
-    def topics(self) -> list:
-        """The recorded topic names, as `Datablock.topics` answers.
+    def topics(self, *, short: bool = False, doc: bool = False, bound: bool = False):
+        """The recorded TOPICS, laid out a topic a line -- or, *short*, their names, as `Datablock.topics` answers.
 
-        Names, not the `{name: filename}` mapping the column holds: this
-        mirrors the live API, and the mapping is the entry's own business --
-        read it off the row when you want it.
+        A directory's declared children are indented under it, a directory
+        ending in `/`, and a `{placeholder}` stands for any number of names.
+        *doc* adds each topic's and child's `doc=`, and the ranges its
+        placeholders take (`over=`), as a `#` comment; *bound* -- on a live
+        block's `pretty` only -- shows a `VAR` range's values, read off the
+        block. In declaration order throughout, as the identity takes them.
         """
-        return list(self._dict_column_(self._entry, 'topics', parse=datablocks.literal_topics))
+        topics = self._dict_column_(self._entry, 'topics', parse=datablocks.literal_topics)
+        if short:
+            return list(topics)
+        if bound and self._block is None:
+            raise ValueError("topics(bound=True) reads the block's VAR: ask a live block, dblk.pretty, "
+                             "not a journal entry's")
+        rows = []
+        Pretty._topic_rows_(topics, 0, rows, doc=doc, block=self._block if bound else None)
+        width = min(max((len(code) for code, _ in rows), default=0), 64)
+        return '\n'.join(f"{code:<{width}}  # {comment}" if comment else code for code, comment in rows)
 
     def quote(self, *, pretty: bool = True, deslash: bool | None = None, specline: bool = True):
         """The recorded `Datablock.quote`, laid out to be read as a cite is, or None.
@@ -2104,7 +2120,7 @@ class Pretty:
         d['cite'] = self.cite()
         d['repr'] = self.repr()
         d['paths'] = self.paths()
-        d['topics'] = self.topics()
+        d['topics'] = self.topics(short=True)
         if deslash:
             d = {k: v.replace('\\', '') if isinstance(v, str) else v for k, v in d.items()}
         return d
@@ -2341,6 +2357,60 @@ class Pretty:
             return val
         raw = BuildJournalEntry.column(entry, 'type')
         return str(raw) if raw is not None else None
+
+    @staticmethod
+    def _topic_rows_(topics, depth, rows, *, doc, block):
+        """`(code, comment)` for every topic of *topics*, and every child of a directory's, depth-first in order."""
+        pad = '  ' * depth
+        items = topics.items() if isinstance(topics, dict) else ((t, None) for t in topics)
+        for name, node in items:
+            if isinstance(node, dict):
+                rows.append((f"{pad}{name}:", ''))
+                Pretty._topic_rows_(node, depth + 1, rows, doc=doc, block=block)
+            elif datablocks.is_topicmarker(node):
+                subdirs = node.__dict__.get('subdirs')
+                note = node.__dict__.get('note')
+                code = (f"{node.__name__}" + (f"(note={note!r})" if note is not None else "")) if subdirs \
+                    else repr(node)
+                rows.append((f"{pad}{name}: {code}", Pretty._topic_comment_(node, doc, block)))
+                Pretty._child_rows_(subdirs or (), depth + 1, rows, doc=doc, block=block)
+            else:
+                rows.append((f"{pad}{name}: {node!r}" if node is not None or isinstance(topics, dict)
+                             else f"{pad}{name}", ''))
+
+    @staticmethod
+    def _child_rows_(subdirs, depth, rows, *, doc, block):
+        """The rows of a directory's declared children: a file as its marker, a level as its name and `/`."""
+        pad = '  ' * depth
+        for entry in subdirs:
+            if datablocks.is_topicmarker(entry):
+                rows.append((f"{pad}{entry!r}", Pretty._topic_comment_(entry, doc, block)))
+                continue
+            name, node = entry
+            marker = None if isinstance(node, tuple) else node
+            rows.append((f"{pad}{name}/", Pretty._topic_comment_(marker, doc, block) if marker else ''))
+            Pretty._child_rows_(datablocks._children_(node), depth + 1, rows, doc=doc, block=block)
+
+    @staticmethod
+    def _topic_comment_(marker, doc, block) -> str:
+        """A marker's documentation as a comment: its `doc=`, then each placeholder's range, bound on *block* if given."""
+        if not doc:
+            return ''
+        parts = [marker.__dict__.get('doc')] if marker.__dict__.get('doc') else []
+        for field_name, binding in (marker.__dict__.get('over') or {}).items():
+            if block is not None and isinstance(binding, datablocks._VarRef_):
+                try:
+                    values = binding._resolve_(block)
+                    values = list(values) if not isinstance(values, (str, dict)) else values
+                    shown = (repr(values) if not isinstance(values, list) or len(values) <= 6
+                             else f"[{', '.join(map(repr, values[:3]))}, ... {len(values)} in all]")
+                except Exception as e:
+                    shown = f"<{binding!r}: {type(e).__name__}: {e}>"
+                parts.append(f"{field_name} in {shown}")
+            else:
+                parts.append(f"{field_name} in {binding!r}" if not isinstance(binding, str)
+                             else f"{field_name}: {binding}")
+        return '; '.join(parts)
 
     @staticmethod
     def _dict_column_(entry, field, parse=None):
@@ -3570,7 +3640,7 @@ class BuildJournal:
                 'tree': block.tree,
                 'pipeline': block.pipeline,
                 'tag': block.tag,
-                'topics': str(topics),
+                'topics': datablocks.render_topics(topics, doc=True),
                 'paths': str(block.paths()),
                 'slices': str(slices) if slices is not None else None,
                 'spec': _yaml_text_(block.spec),

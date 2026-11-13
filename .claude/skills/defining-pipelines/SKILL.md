@@ -253,10 +253,39 @@ def __read__(self, topic):
 - **Return `None` when there is nothing to read, or reading makes no sense**
   (videos meant to be watched, a marker file).
 - **Read it even when it is large.** Whether something is too big to load is
-  the caller's call. Say so in the topic's note, e.g.
-  `DATADIR(note='... ~7 MB per scene, and read() loads every scene')`. Mind
-  that a note renders into the datablock's identity, so changing it re-keys the
-  datablock.
+  the caller's call. Say so in the topic's `doc=`, e.g.
+  `DATADIR(doc='~7 MB per scene, and read() loads every scene')`.
+
+## Say what each topic holds
+
+Declare the shape of a topic, not only where it is, and say in words what it
+holds -- a reader then knows the data from `dblk.pretty.topics(doc=True)`, or a
+journal entry's, without opening a file or reading `__build__`:
+
+```python
+TOPICS = {
+    'config': DATADICT('config.yaml', n_scenes='int', cameras='list', doc='what the build resolved'),
+    'scenes': DATAFRAME('scenes.parquet', split='str', scene_name='str', doc='one row per scene'),
+    'sr': DATADIR({'{split}': DATAFILE('{scene}.npz', doc='one scene of SR')},
+                  over={'split': VAR.splits, 'scene': 'the scenes of the split'}, doc='the scenes, by split'),
+    'logs': DATADIR,
+}
+```
+
+- **`doc=` is documentation and reaches no identity**: reword it freely. The
+  older note -- `DATAFILE('x', 'a note')`, `DATADIR(note=...)` -- renders into
+  the hash and is deprecated; a datablock declared with one keeps it until it is
+  migrated, with a `Specialization(spec={}, topics=<the noted declaration>)` --
+  and its parents' `nested=` -- to reach what was built.
+- **The shape does reach it**: `DATADICT` keys, `DATAFRAME` columns, a
+  `DATADIR`'s declared files and levels. Declaring them re-keys, as the note
+  did; do it when a datablock is migrated anyway.
+- **A `{placeholder}` in a name is a pattern**: any number of entries named
+  so. `over=` says what it ranges over -- `VAR.field` (`dbx.VAR`, recorded and
+  never read at declaration; declare TOPICS before `class VAR`), literal
+  values, or words. Also documentation, out of the identity.
+- **Detail where readers need it**: a bare `DATADIR` stays valid -- logs and
+  videos rarely need more.
 
 ## Use `@dbx.pipeline` for the entrypoint function
 

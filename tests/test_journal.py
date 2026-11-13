@@ -601,7 +601,7 @@ class TestDatablockJournalArgThreading:
         assert block.typestr() == b.typestr()
         assert block.tpstr() == b.tpstr()
         assert block.paths() == b.paths()
-        assert block.topics() == b.topics()
+        assert block.topics(short=True) == b.topics()   # names; topics() lays out the declaration
 
         # The entry is NOT mirrored: the Datablock-shaped API lives on the
         # Pretty. Note hasattr() cannot tell you that -- a pandas Series
@@ -610,7 +610,7 @@ class TestDatablockJournalArgThreading:
         for name in ('paths', 'topics', 'signature', 'type', 'ls', 'anchor'):
             assert name not in type(entry).__dict__, f"{name!r} belongs on Pretty"
         assert isinstance(entry.get('topics'), str)        # the column, unparsed
-        assert block.topics() == ['output']                # parsed, Datablock-shaped
+        assert block.topics(short=True) == ['output']      # parsed, Datablock-shaped
 
         assert isinstance(block.to_dict(), dict)
         assert 'signature' in block.fields() and 'type' in block.fields()

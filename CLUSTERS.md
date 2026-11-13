@@ -20,6 +20,7 @@ Contents:
 - [A Ray head on the datalake's host: SshRay](#a-ray-head-on-the-datalakes-host-sshray)
 - [Slurm](#slurm)
 - [Submitting a pipeline's call to a cluster, and watching it](#submitting-a-pipelines-call-to-a-cluster-and-watching-it)
+- [Datablock locks across processes and clusters: dbx.db](#datablock-locks-across-processes-and-clusters-dbxdb)
 
 ## The datalake: DBX_DATALAKE and DBX_STORAGE_OPTIONS
 
@@ -592,6 +593,128 @@ the journal, `wait`, `runs`, `command` -- the same for every kind.
 - Fan-out: one run per tree.
 - `UNSAFE_copy_from` given the source's storage options, rather than `fsspec_defaults`.
 
+## Datablock locks across processes and clusters: dbx.db
+
+Two processes whose trees share a datablock -- two Jobs built over the same dataset -- would each
+find it unbuilt and build it into the same directory at once. `dbx.db` makes them take turns. It
+locks datablocks in a Postgres database named by `DBX_DB`:
+
+- `build()` takes an exclusive lock on its datablock. A second builder waits for the first, then
+  finds the datablock valid and skips it.
+- `read()`, `ls()` and `paths()` take shared locks, held for the call: they wait for a build in
+  progress and not for each other.
+- With `DBX_DB` unset, every lock is a no-op and nothing else changes. With it set and the database
+  unreachable, the first lock raises, saying how to bring the database up or unset `DBX_DB`.
+
+### What a lock is on
+
+A datablock's full, absolute `anchorkeypath`, datalake included:
+- an fsspec URL (`gs://...`, `abfss://...`, `sftp://...`) as it is;
+- a local path with symlinks resolved, and its mount point replaced by the source of the network
+  filesystem mounted there (`/proc/mounts`: `server:/export`), or prefixed with the host name on a
+  local disk.
+
+Machines that mount one share contend for its datablocks, wherever each mounts it. Two clusters
+that mount different shares at the same path do not. Two spellings of one URL (a host alias and its
+IP) are two keys.
+
+### Who holds a lock, and for how long
+
+A lock is a Postgres advisory lock, held by the process's connection: one per thread, so threads
+exclude each other as processes do, and a thread re-taking a lock it holds gets it at once. A lock is
+released when its call returns, at exit, or when the process dies: the server notices the connection
+is gone within a minute or two (TCP keepalives).
+
+Taking and releasing one is logged at VERBOSE, as a `Datalog.section`:
+
+```
+main:-------- ...: VERBOSE: <anchor>/<key>: >>>--- LOCK exclusive: <anchorkeypath>
+main:-------- ...: VERBOSE: <anchor>/<key>: <<<--- LOCK exclusive: <anchorkeypath>
+```
+
+A process that has to wait says so first, with who holds the lock: `LOCK exclusive: <anchorkeypath>:
+waiting -- held by <host>:<pid> (run <run>) [exclusive]`.
+
+### Setting it up
+
+The server runs on one machine every client can reach. Its data directory is on that machine's
+local disk, so restarting the machine clears every lock; Postgres does not run reliably on NFS.
+
+1. **PostgreSQL's programs** (`pg_ctl`, `initdb`, `postgres`), from anywhere. Without root, a conda
+   environment holding PostgreSQL alone works:
+   `mamba create -p <env> -c conda-forge postgresql=17`. A conda environment cannot be moved, since
+   its path is written into its files: to rename one, create it again.
+2. **The client**, `psycopg`, in every environment that builds or reads datablocks with `DBX_DB`
+   set, Jobs' included: dbx's `db` extra, `pip install 'datablocks[db]'`.
+3. **`DBX_DB`**, written once to a file, with a new password, readable by you alone:
+   ```bash
+   dbx.db init ~/.dbx-db --host <the server's name as every client reaches it>   # --port, --user, --database
+   ```
+   The file is one line, `export DBX_DB=postgresql://dbx:<password>@<host>:5432/dbx`. `source` it
+   before `dbx.db up`, and in every shell whose builds should lock. A Job inherits the submitter's
+   `DBX_DB`. `init` refuses to replace an existing file without `--force`: a new password locks out
+   every shell and Job holding the old one until they source the file again and `up` has run.
+4. **The server**:
+   ```bash
+   source ~/.dbx-db
+   dbx.db up --bin-dir <env>/bin                     # --data-dir, default /tmp/dbx-db
+   dbx.db status
+   ```
+   `up` initializes a new data directory with:
+   - the role, password, port and database from `DBX_DB`;
+   - password logins over TCP;
+   - your OS user as superuser over a socket in the data directory.
+
+   It then starts the server, or leaves a running one as it is, sets the role's password to
+   `DBX_DB`'s, and creates the `dbx_locks` table. `--bin-dir` is where `pg_ctl` and `initdb` are;
+   without it they are looked up on `PATH`. After the machine restarts, run the same two lines again.
+
+### Reaching it from a Kubernetes cluster
+
+Make `DBX_DB`'s host a Service in the cluster's namespace, `<service>.<namespace>.svc.cluster.local`.
+Then the URL is the same in every pod, and on the server's machine when that is a pod of the
+cluster. `up --expose CLUSTER:VIA ...` deletes and recreates it, for each `dbx.kube` cluster named.
+It deletes and recreates rather than patches because a Kueue team namespace may not allow patch.
+The Service is an ExternalName pointing at:
+
+- **`pod`**: this machine's pod IP, as `<ip-with-dashes>.<namespace>.pod.cluster.local`. For a cluster
+  the server's machine is a pod of, such as a workspace on it. The IP changes when the pod restarts,
+  so run `up --expose` again after each restart.
+- **`tailnet`**: this machine's Tailscale name, which the cluster's Tailscale operator proxies to
+  (`tailscale.com/tailnet-fqdn`). For a cluster on another network. The tailnet's ACL must let the
+  operator's tag reach this machine on the port: until it does, the proxy's packets are dropped at
+  the server's tailscaled ("no rules matched" in its log) and the cluster's Jobs fail at their first
+  lock.
+
+```bash
+dbx.db up --bin-dir <env>/bin --expose mycluster:pod othercluster:tailnet
+```
+
+### Looking at locks, and forcing them free
+
+```bash
+dbx.db locks                     # every lock held or waited for: state, mode, path, host, pid, cluster, run, since
+dbx.db unlock <run|host|session|pid|part of a path>
+dbx.db unlock --all
+dbx.db down --bin-dir <env>/bin  # stop the server, and with it every lock; its data stay for the next up
+```
+
+`unlock` ends the connection that holds a matching lock. That frees every lock of that process, not
+only the matching one, and does not stop the process: it goes on unprotected. From Python:
+`dbx.db.locks()` (a DataFrame), `dbx.db.unlock(...)`, `dbx.db.status()`.
+
+### Caveats
+
+- **Workers.** A process holding an exclusive lock waits forever on a worker of its own that reads
+  the same datablock through dbx, and neither dbx nor the server can see it. Work a build hands to
+  workers should read and write plain paths.
+- **NFS.** After waiting, a lock walks the datablock's directory, so an NFS client sees what the
+  holder wrote rather than its cached "not there", and the build is skipped, not repeated
+  (READDIRPLUS refreshes the cache).
+- **Cost.** An uncontended lock is one round trip to take and one to release, on every `read()`, `ls()`
+  and `paths()`. Over a slow link, such as a relayed tailnet, that adds up for code reading many
+  topics.
+
 ## Appendix: cheatsheet
 
 `dbx`, `dbx.exec` and `dbx.pprint` evaluate their argument as Python statements and return the last one's
@@ -690,3 +813,15 @@ What `jobs()` takes from a Job: `metadata.name`; its status from `status.conditi
 `metadata.creationTimestamp`, `status.startTime`, `status.completionTime`; the command from the container's
 `DBX_SUBMIT_EXPRESSION`, or the `dbx/command` annotation; and whether it is yours from the `dbx/user` label or the name's
 `<user>-` prefix.
+
+**Datablock locks** ([dbx.db](#datablock-locks-across-processes-and-clusters-dbxdb)).
+
+```bash
+dbx.db init ~/.dbx-db --host <host>          # once: DBX_DB with a new password, mode 600
+source ~/.dbx-db                             # every shell that locks, and before up
+dbx.db up --bin-dir <env>/bin --expose <cluster>:pod <cluster>:tailnet   # after every restart of its machine
+dbx.db status                                # up? how many locks held and waiting
+dbx.db locks                                 # who holds or waits for what
+dbx.db unlock <run|host|session|pid|path part>   # or --all; ends the holders' connections
+dbx.db down --bin-dir <env>/bin
+```

@@ -157,31 +157,31 @@ def unlock(*targets: str, all: bool = False, url: str | None = None) -> pd.DataF
 # The server
 # --------------------------------------------------------------------------------------------- #
 
-def up(*, datadir: str = '/tmp/dbx-db', bindir: str | None = None, expose: list | None = None) -> str:
-    """Start the database `DBX_DB` names on this machine, its data in *datadir*; `DBX_DB`, password hidden.
+def up(*, data_dir: str = '/tmp/dbx-db', bin_dir: str | None = None, expose: list | None = None) -> str:
+    """Start the database `DBX_DB` names on this machine, its data in *data_dir*; `DBX_DB`, password hidden.
 
-    Initializes *datadir* when it is new: the role, password, port and database of `DBX_DB`,
-    reachable over TCP with that password, and over a socket in *datadir* by this user alone.
-    Started already, it is left as it is. *bindir* holds `pg_ctl` and `initdb` (default: on
+    Initializes *data_dir* when it is new: the role, password, port and database of `DBX_DB`,
+    reachable over TCP with that password, and over a socket in *data_dir* by this user alone.
+    Started already, it is left as it is. *bin_dir* holds `pg_ctl` and `initdb` (default: on
     `PATH`). *expose* is `['cluster:via', ...]`, via `pod` or `tailnet`: see `expose`.
     """
     url = _url_()
-    pg_ctl = _program_('pg_ctl', bindir)
-    if not os.path.exists(os.path.join(datadir, 'PG_VERSION')):
-        _initdb_(datadir, url, bindir)
-    if subprocess.run([pg_ctl, '-D', datadir, 'status'], capture_output=True).returncode != 0:
-        subprocess.run([pg_ctl, '-D', datadir, '-l', os.path.join(datadir, 'server.log'), '-w', 'start'],
+    pg_ctl = _program_('pg_ctl', bin_dir)
+    if not os.path.exists(os.path.join(data_dir, 'PG_VERSION')):
+        _initdb_(data_dir, url, bin_dir)
+    if subprocess.run([pg_ctl, '-D', data_dir, 'status'], capture_output=True).returncode != 0:
+        subprocess.run([pg_ctl, '-D', data_dir, '-l', os.path.join(data_dir, 'server.log'), '-w', 'start'],
                        check=True, capture_output=True)
-    _bootstrap_(datadir, url)
+    _bootstrap_(data_dir, url)
     for spec in expose or ():
         name, _, via = spec.partition(':')
         expose_to(name, via or 'tailnet')
     return _redacted_(url)
 
 
-def down(*, datadir: str = '/tmp/dbx-db', bindir: str | None = None) -> None:
-    """Stop the database in *datadir*: every lock it holds goes with it. Its data stays, for the next `up`."""
-    subprocess.run([_program_('pg_ctl', bindir), '-D', datadir, '-m', 'fast', '-w', 'stop'],
+def down(*, data_dir: str = '/tmp/dbx-db', bin_dir: str | None = None) -> None:
+    """Stop the database in *data_dir*: every lock it holds goes with it. Its data stays, for the next `up`."""
+    subprocess.run([_program_('pg_ctl', bin_dir), '-D', data_dir, '-m', 'fast', '-w', 'stop'],
                    check=True, capture_output=True)
 
 
@@ -234,8 +234,8 @@ def main(argv: list | None = None) -> None:
     sub = p.add_subparsers(dest='command', required=True)
     for name in ('up', 'down'):
         s = sub.add_parser(name, help=(up if name == 'up' else down).__doc__.split('\n')[0])
-        s.add_argument('--datadir', default='/tmp/dbx-db', help="the server's data directory, on local disk")
-        s.add_argument('--bindir', help="where pg_ctl and initdb are (default: on PATH)")
+        s.add_argument('--data-dir', default='/tmp/dbx-db', help="the server's data directory, on local disk")
+        s.add_argument('--bin-dir', help="where pg_ctl and initdb are (default: on PATH)")
         if name == 'up':
             s.add_argument('--expose', nargs='*', default=[], metavar='CLUSTER[:pod|tailnet]',
                            help="make DBX_DB's host reach this machine from these clusters' pods (default via: tailnet)")
@@ -246,9 +246,9 @@ def main(argv: list | None = None) -> None:
     s.add_argument('--all', action='store_true', help="every lock")
     a = p.parse_args(argv)
     if a.command == 'up':
-        print(up(datadir=a.datadir, bindir=a.bindir, expose=a.expose))
+        print(up(data_dir=a.data_dir, bin_dir=a.bin_dir, expose=a.expose))
     elif a.command == 'down':
-        down(datadir=a.datadir, bindir=a.bindir)
+        down(data_dir=a.data_dir, bin_dir=a.bin_dir)
     elif a.command == 'status':
         print(json.dumps(status(), indent=2, default=str))
     else:
@@ -376,43 +376,43 @@ def _lock_id_(key: str) -> int:
     return int.from_bytes(hashlib.blake2b(key.encode(), digest_size=8).digest(), 'big', signed=True)
 
 
-def _program_(name: str, bindir: str | None) -> str:
-    found = os.path.join(bindir, name) if bindir else shutil.which(name)
+def _program_(name: str, bin_dir: str | None) -> str:
+    found = os.path.join(bin_dir, name) if bin_dir else shutil.which(name)
     if not found or not os.path.exists(found):
-        raise RuntimeError(f"{name} not found {'in ' + bindir if bindir else 'on PATH'}: pass --bindir, "
+        raise RuntimeError(f"{name} not found {'in ' + bin_dir if bin_dir else 'on PATH'}: pass --bin-dir, "
                            f"the bin directory of a PostgreSQL install")
     return found
 
 
-def _initdb_(datadir: str, url: str, bindir: str | None) -> None:
-    """A new cluster in *datadir*: TCP with a password on `DBX_DB`'s port; a socket in *datadir*, where this
+def _initdb_(data_dir: str, url: str, bin_dir: str | None) -> None:
+    """A new cluster in *data_dir*: TCP with a password on `DBX_DB`'s port; a socket in *data_dir*, where this
     OS user is the superuser (peer authentication), and the superuser has a random password no one keeps."""
     parts = urllib.parse.urlsplit(url)
-    pwfile = os.path.join(os.path.dirname(datadir.rstrip('/')) or '.', f".dbx-db-pw-{secrets.token_hex(4)}")
+    pwfile = os.path.join(os.path.dirname(data_dir.rstrip('/')) or '.', f".dbx-db-pw-{secrets.token_hex(4)}")
     with open(os.open(pwfile, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), 'w') as f:
         f.write(secrets.token_urlsafe(24))
     try:
-        subprocess.run([_program_('initdb', bindir), '-D', datadir, '-U', getpass.getuser(), f"--pwfile={pwfile}",
+        subprocess.run([_program_('initdb', bin_dir), '-D', data_dir, '-U', getpass.getuser(), f"--pwfile={pwfile}",
                         '--auth-local=peer', '--auth-host=scram-sha-256', '--encoding=UTF8'],
                        check=True, capture_output=True)
     finally:
         os.remove(pwfile)
-    with open(os.path.join(datadir, 'postgresql.conf'), 'a') as f:
+    with open(os.path.join(data_dir, 'postgresql.conf'), 'a') as f:
         f.write(f"\n# dbx.db\nlisten_addresses = '*'\nport = {parts.port or 5432}\n"
-                f"unix_socket_directories = '{datadir}'\nmax_connections = 500\n"
+                f"unix_socket_directories = '{data_dir}'\nmax_connections = 500\n"
                 f"tcp_keepalives_idle = 30\ntcp_keepalives_interval = 10\ntcp_keepalives_count = 6\n"
                 f"client_connection_check_interval = '10s'\n")
-    with open(os.path.join(datadir, 'pg_hba.conf'), 'a') as f:
+    with open(os.path.join(data_dir, 'pg_hba.conf'), 'a') as f:
         f.write("\n# dbx.db\nhost all all 0.0.0.0/0 scram-sha-256\nhost all all ::/0 scram-sha-256\n")
 
 
-def _bootstrap_(datadir: str, url: str) -> None:
+def _bootstrap_(data_dir: str, url: str) -> None:
     """`DBX_DB`'s role, with its password, its database and the lock table: whichever are missing."""
     import psycopg  # Only `up` needs it here.
     from psycopg import sql
     parts = urllib.parse.urlsplit(url)
     role, password, dbname = parts.username, parts.password, parts.path.lstrip('/')
-    socket_kwargs = dict(host=datadir, port=parts.port or 5432, user=getpass.getuser(), autocommit=True)
+    socket_kwargs = dict(host=data_dir, port=parts.port or 5432, user=getpass.getuser(), autocommit=True)
     with psycopg.connect(dbname='postgres', **socket_kwargs) as conn:
         if not conn.execute("SELECT 1 FROM pg_roles WHERE rolname = %s", (role,)).fetchone():
             conn.execute(sql.SQL("CREATE ROLE {} LOGIN").format(sql.Identifier(role)))

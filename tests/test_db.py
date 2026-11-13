@@ -6,7 +6,7 @@ do not, a lock dies with its process or is forced free by `unlock`, and two proc
 one datablock build it once: the second waits, then finds it valid.
 
 The server needs PostgreSQL's programs, `pg_ctl` and `initdb`: on `PATH`, or in
-`DBX_TEST_PG_BINDIR`. They are not a Python package, so they cannot be declared in
+`DBX_TEST_PG_BIN_DIR`. They are not a Python package, so they cannot be declared in
 `pyproject.toml`; the tests that need a server skip, saying so, when they are missing.
 """
 import os
@@ -45,8 +45,8 @@ class SlowDatablock(Datablock):
 '''
 
 
-def _bindir_():
-    found = os.environ.get('DBX_TEST_PG_BINDIR') or (os.path.dirname(shutil.which('pg_ctl') or '') or None)
+def _bin_dir_():
+    found = os.environ.get('DBX_TEST_PG_BIN_DIR') or (os.path.dirname(shutil.which('pg_ctl') or '') or None)
     return found if found and os.path.exists(os.path.join(found, 'pg_ctl')) else None
 
 
@@ -59,20 +59,20 @@ def _free_port_():
 @pytest.fixture(scope='module')
 def server(tmp_path_factory):
     """`DBX_DB` of a server of this module's own, up for its tests and down after."""
-    bindir = _bindir_()
-    if bindir is None:
-        pytest.skip("PostgreSQL's pg_ctl is neither on PATH nor in DBX_TEST_PG_BINDIR")
+    bin_dir = _bin_dir_()
+    if bin_dir is None:
+        pytest.skip("PostgreSQL's pg_ctl is neither on PATH nor in DBX_TEST_PG_BIN_DIR")
     # Short: a Unix socket's path is limited to about 100 characters.
-    datadir = os.path.join('/tmp', f"dbx-db-test-{os.getpid()}-{_free_port_()}")
+    data_dir = os.path.join('/tmp', f"dbx-db-test-{os.getpid()}-{_free_port_()}")
     url = f"postgresql://dbxtest:pw-{os.getpid()}@127.0.0.1:{_free_port_()}/dbxtest"
     old = os.environ.get('DBX_DB')
     os.environ['DBX_DB'] = url
     try:
-        db.up(datadir=datadir, bindir=bindir)
+        db.up(data_dir=data_dir, bin_dir=bin_dir)
         yield url
     finally:
-        db.down(datadir=datadir, bindir=bindir)
-        shutil.rmtree(datadir, ignore_errors=True)
+        db.down(data_dir=data_dir, bin_dir=bin_dir)
+        shutil.rmtree(data_dir, ignore_errors=True)
         if old is None:
             os.environ.pop('DBX_DB', None)
         else:

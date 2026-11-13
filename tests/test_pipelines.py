@@ -9,7 +9,7 @@ import pytest
 import dbx
 from dbx.datablocks import DATAFILE, Datablock
 from dbx.journals import BuildJournal, BuildJournalEntry, BuildJournalFrame
-from dbx.journals import PipeJournal
+from dbx.journals import PipeJournal, PipeJournalEntry, PipeJournalFrame
 from dbx.pipelines import Pipeline
 
 
@@ -284,6 +284,48 @@ def test_pipejournal_is_collect(lake):
     entry = dbx.pipejournal(iloc=1)
     assert isinstance(entry, BuildJournalEntry) and entry['entrypaths'] == [a_entrypath]
     assert dbx.pipejournal(loc=0)['hash'] == b.hash
+
+
+def test_a_pipeline_goes_on_to_its_entrypoints_builds(lake):
+    a, b = Flat(spec={'n': 1}), Flat(spec={'n': 2})
+    for p in (a, b):
+        p.create()
+    a.entrypoint.build_tree()
+    entry = dbx.pipejournal(hash=a.hash, iloc=0)
+    assert isinstance(entry, PipeJournalEntry)
+    j = entry.buildjournal()
+    assert set(j['hash']) == {a.entrypoint.hash} and set(j['anchor']) == {Root().anchor}
+    assert 'build:end' in set(j['event']) and list(j['datetime']) == sorted(j['datetime'], reverse=True)
+    assert entry.buildjournal(loc=j.index[0])['id'] == j.index[0]
+    assert entry.buildjournal(iloc=0)['id'] == j.iloc[0]['id']
+    assert len(entry.buildjournal(Leaf)) == 0 and entry.anchors() == [Root().anchor]
+    assert [e['event'] for e in entry.dataentries(event='build:end')] == ['build:end']
+    assert set(entry.constructed(Root().anchor)['event']) == {'build:end'}
+    assert len(dbx.pipejournal(hash=b.hash, iloc=0).buildjournal()) == 0
+
+
+def test_a_frame_of_pipelines_goes_on_to_all_their_entrypoints_builds(lake):
+    a, b = Flat(spec={'n': 1}), Flat(spec={'n': 2})
+    for p in (a, b):
+        p.create()
+        p.entrypoint.build_tree()
+    Flat(spec={'n': 1}).create()  # Again: its entrypoint is read once.
+    frame = dbx.pipejournal()
+    assert isinstance(frame, PipeJournalFrame) and isinstance(frame.get(0), PipeJournalEntry)
+    assert isinstance(frame[frame['hash'] == a.hash], PipeJournalFrame)
+    j = frame.buildjournal(event='build:end')
+    assert sorted(j['hash']) == sorted([a.entrypoint.hash, b.entrypoint.hash]) and j.index.is_unique
+    assert set(frame[frame['hash'] == b.hash].buildjournal()['hash']) == {b.entrypoint.hash}
+    assert len(frame.dataentries(event='build:end')) == 2
+
+
+def test_an_entrypoints_builds_are_found_in_its_compacted_journal(lake):
+    p = Flat()
+    p.create()
+    p.entrypoint.build_tree()
+    before = sorted(dbx.pipejournal(iloc=0).buildjournal()['id'])
+    BuildJournal.UNSAFE_compact([Root().anchor], OVERRIDE=True)
+    assert sorted(dbx.pipejournal(iloc=0).buildjournal()['id']) == before
 
 
 def test_journal_dispatches_pipelines(lake):

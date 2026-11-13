@@ -6,9 +6,10 @@
   view of the block it recorded. `buildjournal` / `journal` read one.
 - `execjournal` / `ExecJournalFrame` / `ExecJournalEntry` --
   the record of each `dbx.exec()` run, written by `write_exec_journal`.
-- `PipeJournal` / `pipejournal` -- a BuildJournal kept under
-  `{datalake}/.pipelines`: each creation of a `Pipeline`, with the
-  `entrypath` it led to.
+- `PipeJournal` / `pipejournal` / `PipeJournalFrame` / `PipeJournalEntry` --
+  a BuildJournal kept under `{datalake}/.pipelines`: each creation of a
+  `Pipeline`, with the `entrypath` it led to; a frame or row of pipelines
+  goes on to its entrypoints' build journal entries (`buildjournal`).
 - `filter_journal_frame` -- the column filters (regex, glob, dates) both
   journals are queried with.
 - `Datalog` -- the log: level-gated lines, led by the worker that
@@ -4087,8 +4088,8 @@ class PipeJournal(BuildJournal):
 
     @classmethod
     def collect(cls, *, construct_only: bool = False, extra_construction_events=(), datalake=None,
-                storage_options=None, log=None, n_workers=None, progress=None, **filters) -> BuildJournalFrame:
-        """Every pipeline in the journal, one row each, with every entrypath it was created to.
+                storage_options=None, log=None, n_workers=None, progress=None, **filters) -> 'PipeJournalFrame':
+        """Every pipeline in the journal, one row each, with every entrypath it was created to: a `PipeJournalFrame`.
 
         Only its `create` entries count -- not the `job:*` entries of its runs (`dbx.clusters`).
         The entries are read and *filters* applied as `BuildJournal.read`
@@ -4127,7 +4128,7 @@ class PipeJournal(BuildJournal):
         if not df.empty and 'event' in df.columns:  # Creations only: a pipeline's runs are journaled here too.
             df = df[df['event'] == 'create']
         if df.empty or 'entrypath' not in df.columns:
-            return BuildJournalFrame(pd.DataFrame(), storage_options=storage_options, unnormalized=True)
+            return PipeJournalFrame(pd.DataFrame(), storage_options=storage_options, unnormalized=True)
 
         keys = [c for c in cls._PIPELINE_COLUMNS_ if c in df.columns]
         rows, entrypaths = [], []
@@ -4145,7 +4146,7 @@ class PipeJournal(BuildJournal):
         out = pd.DataFrame(list(rows)).reset_index(drop=True).drop(columns=['entrypath'], errors='ignore')
         at = out.columns.get_loc('event') if 'event' in out.columns else len(out.columns)
         out.insert(at, 'entrypaths', pd.Series(list(entrypaths), index=out.index, dtype=object))
-        return BuildJournalFrame(out, storage_options=storage_options, unnormalized=True)
+        return PipeJournalFrame(out, storage_options=storage_options, unnormalized=True)
 
     @classmethod
     def UNSAFE_compact(cls, anchors=None, *, unjournaled: bool = False, spare=(), datalake=None, storage_options=None,
@@ -4275,6 +4276,36 @@ class PipeJournal(BuildJournal):
                 fs_full_path(block.fs, os.path.join(block.root, cls.ANCHOR, block.anchorkey)))
 
     @classmethod
+    def _entrypoint_entries_(cls, entrypath, datalake, *, storage_options, n_workers, log) -> 'pd.DataFrame | None':
+        """The build journal entries of the block at *entrypath*, as read from its files; None for none.
+
+        Its own, under `{entrypath}/.journal/`, and its anchor's compacted
+        journal's rows of it (`BuildJournal.UNSAFE_compact`), by `anchorkeypath`.
+        A bare *entrypath* is on *datalake*'s filesystem, as
+        `_constructed_entrypaths_` looks for one.
+        """
+        lake_fs, lake_root = fsspec.url_to_fs(datalake, **storage_options)
+        fs, root = fsspec.url_to_fs(entrypath, **storage_options) if '://' in entrypath else (lake_fs, entrypath)
+        files = _expand_levels_(fs, root, ['.journal', '*', 'journal', '*', '*.parquet'])
+        dfs = [d for d in BuildJournal._read_files_(fs, files, n_workers=n_workers, log=log,
+                                                    desc=f"Reading the journal of {entrypath}") if d is not None]
+        rel = os.path.relpath(root, lake_root)
+        if fs is lake_fs and not rel.startswith('..'):
+            anchor = rel.split(os.sep)[0]
+            path = os.path.join(lake_root, anchor, BuildJournal.COMPACTED.format(anchor=anchor))
+            try:
+                whole = BuildJournal._compacted_frame_(fs, path) if fs.exists(path) else None
+            except Exception as e:
+                log.warning(f"PipeJournal: skipping unreadable compacted journal {path}: {e}")
+                whole = None
+            if whole is not None and 'anchorkeypath' in whole.columns:
+                rows = whole[whole['anchorkeypath'] == root].reset_index(drop=True)
+                if len(rows):
+                    rows['entry_path'] = fs_full_path(fs, path)
+                    dfs.insert(0, rows)
+        return pd.concat(dfs, ignore_index=True) if dfs else None
+
+    @classmethod
     def _constructed_entrypaths_(cls, entrypaths, *, datalake, storage_options, n_workers, log, extra_events=()) -> set:
         """The *entrypaths* whose own journal holds an `ENTRYPOINT_EVENTS` entry, or one `_is_event_` of *extra_events*.
 
@@ -4333,15 +4364,167 @@ class PipeJournal(BuildJournal):
             return {p for p, yes in zip(entrypaths, ex.map(constructed, entrypaths)) if yes}
 
 
+class PipeJournalEntry(BuildJournalEntry):
+    """One pipeline, as `PipeJournal.collect` gathers it: its newest `create` entry, with its `entrypaths`.
+
+    The counterpart of `ExecJournalEntry` for the pipeline journal: as an
+    exec entry follows its command to the build journal entries written
+    under it, `buildjournal` and `dataentries` follow the pipeline to those
+    of its entrypoints -- every block it was created to, read where each
+    files its entries. A raw pipeline journal row, with one `entrypath`,
+    is followed to that one.
+    """
+
+    # 2. Declared API ------------------------------------------------------
+
+    def dataentries(self, anchor=None, *, datalake=None, storage_options=None, log=None,
+                    n_workers: int | None = None, unnormalized: bool = False, **filter_kwargs) -> list:
+        """The `BuildJournalEntry` of every build journal entry of this pipeline's entrypoints, newest first.
+
+        Narrowed as `buildjournal` narrows them.
+        """
+        frame = self.buildjournal(anchor, datalake=datalake, storage_options=storage_options, log=log,
+                                 n_workers=n_workers, index=None, unnormalized=unnormalized, **filter_kwargs)
+        return [frame.get(i, dropna=True) for i in range(len(frame))]
+
+    def buildjournal(self, anchor=None, loc=None, *, iloc=None, datalake=None, storage_options=None,
+                    log=None, n_workers: int | None = None, index: 'str | None' = ...,
+                    unnormalized: bool = False, **filter_kwargs):
+        """The build journal entries of this pipeline's entrypoints, as one `BuildJournalFrame`, newest first.
+
+        Takes what `buildjournal` takes, and means the same by it, over the
+        entries of the pipeline's entrypoints -- each of its `entrypaths` --
+        instead of an anchor's whole journal. *anchor* -- a Datablock class,
+        an anchor string or a block -- keeps that anchor's entries, and None
+        all of them; *filter_kwargs* are build journal filters; *loc* /
+        *iloc* answer with the one `BuildJournalEntry`; *index* defaults to
+        `'id'`, as there. *datalake* is where an entrypath recorded without a
+        protocol is looked for: the pipeline's own, its `datalake` column,
+        unless given.
+        """
+        return _entrypoint_buildjournal_(
+            PipeJournalEntry._places_(self, datalake), anchor, loc, iloc,
+            storage_options=self.storage_options if storage_options is None else storage_options,
+            log=log, n_workers=n_workers, index=index, unnormalized=unnormalized, filters=filter_kwargs)
+
+    def anchors(self) -> list:
+        """Every anchor of this pipeline's entrypoints' build journal entries, sorted."""
+        return _anchors_(self.buildjournal(index=None))
+
+    def constructed(self, anchor: str | None = None, **filters):
+        """As `ExecJournalEntry.constructed`, over this pipeline's entrypoints' entries."""
+        return _constructed_(self.buildjournal(index=None), anchor, filters)
+
+    # 4. Helpers -----------------------------------------------------------
+
+    @staticmethod
+    def _places_(row, datalake=None) -> list:
+        """`[(entrypath, datalake), ...]` of *row*: its `entrypaths` -- or its one `entrypath` -- and where to look for each."""
+        paths = row.get('entrypaths')
+        if paths is None or (isinstance(paths, float) and pd.isna(paths)):
+            one = row.get('entrypath')
+            paths = [one] if isinstance(one, str) and one else []
+        lake = datalake or BuildJournalEntry.column(row, 'datalake') or default_datalake()
+        return [(str(p), lake) for p in paths]
+
+
+class PipeJournalFrame(BuildJournalFrame):
+    """The pipeline journal as `PipeJournal.collect` gathers it: one pipeline per row, newest first.
+
+    The counterpart of `ExecJournalFrame`. `get` answers with a
+    `PipeJournalEntry`, and `buildjournal` and `dataentries` with the build
+    journal entries of every pipeline's entrypoints -- so a filter narrows to
+    the pipelines and `.buildjournal()` goes on to their builds:
+
+        dbx.pipejournal(tag='nuplan-v1.1_test_hard.*').buildjournal(event='build:end')
+
+    A frame pandas derives from this one -- a selection, a slice, a sort --
+    is a `PipeJournalFrame` too.
+    """
+
+    # 2. Declared API ------------------------------------------------------
+
+    def get(self, entry, *, dropna: bool = False) -> PipeJournalEntry:
+        """The pipeline at LABEL *entry*, as a `PipeJournalEntry`. As `BuildJournalFrame.get`."""
+        return PipeJournalEntry(super().get(entry, dropna=dropna), storage_options=self.storage_options)
+
+    def dataentries(self, anchor=None, *, datalake=None, storage_options=None, log=None,
+                    n_workers: int | None = None, unnormalized: bool = False, **filter_kwargs) -> list:
+        """The build journal entries of every pipeline's entrypoints here, newest first. As `PipeJournalEntry.dataentries`."""
+        frame = self.buildjournal(anchor, datalake=datalake, storage_options=storage_options, log=log,
+                                 n_workers=n_workers, index=None, unnormalized=unnormalized, **filter_kwargs)
+        return [frame.get(i, dropna=True) for i in range(len(frame))]
+
+    def buildjournal(self, anchor=None, loc=None, *, iloc=None, datalake=None, storage_options=None,
+                    log=None, n_workers: int | None = None, index: 'str | None' = ...,
+                    unnormalized: bool = False, **filter_kwargs):
+        """What `dataentries` reads, as one `BuildJournalFrame`. Takes what `PipeJournalEntry.buildjournal` takes."""
+        places = [p for _, row in self.iterrows() for p in PipeJournalEntry._places_(row, datalake)]
+        return _entrypoint_buildjournal_(
+            places, anchor, loc, iloc,
+            storage_options=self.storage_options if storage_options is None else storage_options,
+            log=log, n_workers=n_workers, index=index, unnormalized=unnormalized, filters=filter_kwargs)
+
+    def anchors(self) -> list:
+        """Every anchor of the entrypoints' build journal entries here, sorted."""
+        return _anchors_(self.buildjournal(index=None))
+
+    def constructed(self, anchor: str | None = None, **filters):
+        """As `ExecJournalEntry.constructed`, over every pipeline's entrypoints here."""
+        return _constructed_(self.buildjournal(index=None), anchor, filters)
+
+
+def _entrypoint_buildjournal_(places, anchor, loc, iloc, *, storage_options, log, n_workers, index,
+                              unnormalized, filters):
+    """The build journal entries of the blocks *places* name -- `(entrypath, datalake)` -- newest first, narrowed and indexed as `buildjournal` would be.
+
+    *anchor* is matched exactly, as in `_written_buildjournal_`. An entry
+    read twice -- an entrypath two pipelines share -- is kept once.
+    """
+    if loc is not None and iloc is not None:
+        raise ValueError("Specify at most one of 'loc' and 'iloc', not both.")
+    if anchor is not None:
+        name = _anchor_of_(anchor)
+        filters = {'anchor': lambda a: a == name, **filters}
+    log = log or Datalog()
+    if storage_options is None:
+        storage_options = default_storage_options()
+    n_workers = n_workers or 8
+    places = list(dict.fromkeys(places))
+    df = None
+    if places:
+        with ThreadPoolExecutor(max_workers=min(n_workers, len(places))) as ex:
+            dfs = [d for d in ex.map(lambda p: PipeJournal._entrypoint_entries_(
+                       *p, storage_options=storage_options, n_workers=n_workers, log=log), places)
+                   if d is not None]
+        if dfs:
+            df = BuildJournal._normalize_columns_(pd.concat(dfs, ignore_index=True))
+            if 'id' in df.columns:
+                df = df.drop_duplicates('id')
+            if 'datetime' in df.columns:
+                df = df.sort_values('datetime', ascending=False, kind='stable')
+            df = df.reset_index(drop=True)
+    frame = BuildJournalFrame(df, storage_options=storage_options, index=index, unnormalized=unnormalized,
+                              **filters)
+    if loc is not None:
+        return frame.get(loc, dropna=True)
+    if iloc is not None:
+        return BuildJournalEntry(frame.iloc[iloc].dropna(), storage_options=frame.storage_options)
+    return frame
+
+
 def pipejournal(loc=None, *, iloc=None, construct_only: bool = False, extra_construction_events=(), datalake=None,
                 storage_options=None, log=None, n_workers=8, progress=None, **filter_kwargs):
     """Read the pipeline journal: every `Pipeline` created, one row each, newest first, then filtered.
 
-    `PipeJournal.collect`: a `BuildJournalFrame` with an `entrypaths` column,
+    `PipeJournal.collect`: a `PipeJournalFrame` with an `entrypaths` column,
     every entrypath the pipeline was created to -- with *construct_only*,
     only those built, redirected or noted, or with an event of
-    *extra_construction_events* (`'ckpt'`, say) -- or the `BuildJournalEntry` at *loc* /
-    *iloc*, both positions here, as the rows are numbered. Filters are
+    *extra_construction_events* (`'ckpt'`, say) -- or the `PipeJournalEntry` at *loc* /
+    *iloc*, both positions here, as the rows are numbered. Either goes on to
+    the build journal entries of its entrypoints, `buildjournal`:
+
+        dbx.pipejournal(id='82f6c', iloc=0).buildjournal() Filters are
     patterns, as on a build journal -- see `buildjournal`. *datalake*
     defaults to `DBX_DATALAKE`. *progress* is taken
     as `BuildJournal.read` takes it.
@@ -4355,7 +4538,7 @@ def pipejournal(loc=None, *, iloc=None, construct_only: bool = False, extra_cons
     if loc is not None:
         return frame.get(loc, dropna=True)
     if iloc is not None:
-        return BuildJournalEntry(frame.iloc[iloc].dropna(), storage_options=frame.storage_options)
+        return PipeJournalEntry(frame.iloc[iloc].dropna(), storage_options=frame.storage_options)
     return frame
 
 

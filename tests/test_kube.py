@@ -184,6 +184,29 @@ class TestRevision:
         assert 'dbx' in exports[-1] and 'proj' in exports[0]
         assert m['metadata']['annotations']['dbx/revision'] == f"{repos[0]}@{dsha} {repos[1]}@{psha}"
 
+    def test_from_a_work_repo_the_job_is_pinned_to_its_commits_not_the_sources_heads(self, cluster, repos,
+                                                                                     tmp_path, monkeypatch):
+        work = [str(tmp_path / 'work' / os.path.basename(r)) for r in repos]
+        for r, w in zip(repos, work):
+            subprocess.run(['git', 'clone', '-q', r, w], check=True)
+        cloned = [self._sha_(w) for w in work]
+        subprocess.run(['git', '-C', repos[1], '-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-q',
+                        '--allow-empty', '-m', 'after'], check=True)
+        monkeypatch.setattr(dbx.databits, 'DBX_USE_WORK_REPO', ':'.join(work))
+        m = cluster.job('true', cwd=os.path.join(repos[1], 'sub'))
+        script = _container_(m)['command'][2]
+        assert m['metadata']['annotations']['dbx/revision'] == f"{repos[0]}@{cloned[0]} {repos[1]}@{cloned[1]}"
+        clones = [f"/tmp/dbx-pins/{os.path.basename(r)}-{sha[:12]}" for r, sha in zip(repos, cloned)]
+        assert f"export DBX_GIT_REPO={clones[0]}:{clones[1]}" in script
+        assert f"export DBX_PINNED_REVISION={cloned[0]}:{cloned[1]}" in script
+        assert script.splitlines()[-1].startswith('exec') and f"cd {clones[1]}/sub" in script
+        assert 'dbx/revision' not in cluster.job('true', revision=False)['metadata']['annotations']
+
+    def test_not_from_a_work_repo_the_job_runs_the_checkouts_unpinned(self, cluster, repos, monkeypatch):
+        monkeypatch.setattr(dbx.databits, 'DBX_USE_WORK_REPO', None)
+        m = cluster.job('true')
+        assert 'dbx/revision' not in m['metadata']['annotations'] and 'git clone' not in _container_(m)['command'][2]
+
     def test_revision_true_refuses_a_dirty_checkout(self, cluster, repos):
         with open(os.path.join(repos[1], 'f'), 'w') as f:
             f.write('x')

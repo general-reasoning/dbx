@@ -24,7 +24,11 @@ runs *command* with bash, after:
 - *revision*: `'dbx_rev:project_rev'` (or True: both repos' HEADs) cloned from *pin_source* (default
   the repos' own paths, which a cluster mounting them reaches; give git URLs otherwise) and put
   first on `PYTHONPATH`, as `dbx.remote(revision=...)` pins a Ray worker -- so the code it ran is
-  the code its record names;
+  the code its record names. Not given, it is the commits this process's work repos were cloned at
+  (`DBX_USE_WORK_REPO`), if it runs from them: the Job runs what this process does, not the shared
+  checkouts as they are by the time it starts; False runs those. A pinned Job's `DBX_GIT_REPO` is its
+  clones, and a *cwd* inside a pinned repo is the same place in its clone -- Ray puts a driver's
+  working directory first on its workers' paths;
 - *ray*: a single-node Ray head, for code that farms out tasks with `ray.init(address='auto')`
   (`dbx.gpu`).
 
@@ -75,6 +79,7 @@ import tqdm
 from . import anyscale
 from . import clusters as _clusters_
 from .clusters import Run, Runner
+from . import databits
 from .databits import dbx_repos, dbx_revisions
 
 
@@ -507,15 +512,23 @@ def _manifest_(command: str, c: KubeCluster, *, name: str = 'dbx', n_gpus: int =
     mem = mem_gib or (c.mem_gib_per_gpu * n_gpus if n_gpus else 32)
     user = _slug_(c.user or os.environ.get('USER') or 'dbx', 16)
     jobname = f"{user}-{_slug_(name, 40)}-{uuid.uuid4().hex[:5]}"
-    pins = _pins_(revision, pin_source) if revision is not None else []
+    if revision is None and databits.DBX_USE_WORK_REPO is not None:
+        revision = databits.gitrevision()
+    pins = _pins_(revision, pin_source) if revision else []
 
     script = ['set -euo pipefail', *(_unpack_lines_(packs) if packs else []), *setup]
     if venv:
         script.append(f"source {shlex.quote(os.path.join(venv, 'bin', 'activate'))}")
-    for source, sha in reversed(pins):  # dbx first on PYTHONPATH: prepended last.
-        d = f"/tmp/dbx-pins/{_slug_(os.path.basename(source.rstrip('/')).removesuffix('.git'), 40)}-{sha[:12]}"
+    clones = [f"/tmp/dbx-pins/{_slug_(os.path.basename(source.rstrip('/')).removesuffix('.git'), 40)}-{sha[:12]}"
+              for source, sha in pins]
+    for (source, sha), d in reversed(list(zip(pins, clones))):  # dbx first on PYTHONPATH: prepended last.
         script += [f"git clone --quiet {shlex.quote(source)} {d}", f"git -C {d} checkout --quiet {sha}",
                    f'export PYTHONPATH={d}${{PYTHONPATH:+:$PYTHONPATH}}']
+    if pins:
+        script += [f"export DBX_GIT_REPO={':'.join(clones)}",
+                   f"export DBX_PINNED_REVISION={':'.join(sha for _, sha in pins)}"]
+        if cwd and (moved := _in_clone_(cwd, pins, clones)) != cwd:
+            script.append(f"cd {shlex.quote(moved)}")
     if ray:
         script.append(f"{ray_bin} start --head --num-gpus={n_gpus} --num-cpus={cpu} --disable-usage-stats")
     script.append('exec bash -c "$DBX_KUBE_COMMAND"')
@@ -570,6 +583,15 @@ def _manifest_(command: str, c: KubeCluster, *, name: str = 'dbx', n_gpus: int =
 def _anyscale_options_() -> dict:
     # `_manifest_`'s *anyscale* argument shadows the module there.
     return anyscale.job_options()
+
+
+def _in_clone_(path: str, pins: list, clones: list) -> str:
+    """*path* in the clone of the pinned source it is inside (`(source, sha)` of *pins*, cloned at *clones*); else *path*."""
+    for (source, _), clone in zip(pins, clones):
+        source = os.path.abspath(source)
+        if os.path.commonpath([source, os.path.abspath(path)]) == source:
+            return os.path.normpath(os.path.join(clone, os.path.relpath(path, source)))
+    return path
 
 
 def _pins_(revision, pin_source) -> list:

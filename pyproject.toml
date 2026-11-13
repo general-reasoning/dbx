@@ -108,6 +108,10 @@ hyp-deepseek = [
     "datablocks[hyp,torch]",
     "transformers>=4.40",
 ]
+db = [
+    # dbx.db: datablock locks in the Postgres database DBX_DB names.
+    "psycopg[binary]>=3.2",
+]
 dev = [
     "build",
     "pytest>=8.0",
@@ -115,7 +119,7 @@ dev = [
     "twine",
 ]
 all = [
-    "datablocks[ray,torch,streaming,lightning,anyscale,azure,hyp,dev]",
+    "datablocks[ray,torch,streaming,lightning,anyscale,azure,hyp,db,dev]",
 ]
 
 [project.urls]
@@ -138,6 +142,7 @@ dbx = "dbx:exec"
 "dbx.slurm.pprint" = "dbx:slurm_pprint"
 "dbx.kubequeues" = "dbx.kube:queues_main"
 "dbx.kubejobs" = "dbx.kube:jobs_main"
+"dbx.db" = "dbx.db:main"
 "dbx.anyscale_storage_options" = "dbx.anyscale:storage_options_main"
 "dbx.anyscale_datalake" = "dbx.anyscale:datalake_main"
 "dbx.hyp" = "hyp.app:main"

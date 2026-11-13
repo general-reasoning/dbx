@@ -497,6 +497,9 @@ def _manifest_(command: str, c: KubeCluster, *, name: str = 'dbx', n_gpus: int =
     unpacks first (*packs*, the plan, is made by `KubeRunner._prepare_`; see `_pack_plan_`).
     """
     env, setup = dict(env or {}), list(setup or [])
+    # The datablock locks' database (`dbx.db`): a Job locks where its submitter does.
+    if os.environ.get('DBX_DB') and 'DBX_DB' not in env:
+        env['DBX_DB'] = os.environ['DBX_DB']
     if anyscale:
         a = _anyscale_options_()
         image = image or a['image']

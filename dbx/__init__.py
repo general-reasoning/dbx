@@ -35,6 +35,10 @@ pipelines
     `Pipeline`, a Datablock tree defined flat; every creation of
     one is recorded in the `PipeJournal`, read with
     `pipejournal`.
+db
+    `dbx.db`: datablock locks in the Postgres database `DBX_DB` names --
+    exclusive for `build`, shared for `read`, `ls` and `paths`, none
+    without it -- and `dbx.db up|down|status|locks|unlock`, its server.
 cluster, kube, gpu, image, anyscale
     `dbx.clusters`: a pipeline's call (`Pipeline.runner`) run on a
     `Cluster`, and journaled; `dbx.runner`, the runs of a pipeline, a

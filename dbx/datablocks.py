@@ -116,6 +116,7 @@ from .journals import (
     write_exec_journal,
     filter_journal_frame,
 )
+from . import db
 __version__ = "0.2.0"
 
 class _SentinelMeta_(type):
@@ -3043,59 +3044,63 @@ class Datablock:
         if not deep and self.valid() and not self.owedtopics():
             self.log.selected(f"Skipping existing datablock: {self.anchorkeypath}")
             return self
-        # A SPECIALIZATION is installed here: an older build of a
-        # narrower block that covers what this build would produce is adopted
-        # rather than recomputed -- recorded, so every later construction reads
-        # through it -- and the topics it does not cover are built. After
-        # __post_init__, as construction is complete, since a class may compute
-        # its TOPICS there and a specialization is named in terms of them.
-        if not kwargs.pop('_specialized_', False):
-            self.specialize(journal=self.__dict__.get('__specialization_journal__'))
-        if self._redirected_paths_ is not None and not self.ownedtopics():
-            entry = self.redirection.entry if self.redirection is not None else None
-            whither = (f"journal entry {entry.pretty.id} (hash {entry.pretty.hash})"
-                       if entry is not None else f"the paths {self._redirected_paths_}")
-            self.log.verbose(
-                f"BUILD ELIDED: {self.anchorkeypath} is REDIRECTED to {whither}, and reads "
-                f"from there instead: nothing would read what a build of it wrote. Undo the "
-                f"redirection, or construct with redirect=False, to build it anyway."
-            )
-            return self
-        if self._redirected_paths_ is not None:
-            # A PARTIAL redirection -- a specialization, or an explicit
-            # topics= -- leaves topics with no data and no one else to read
-            # them from, so this build is the thing that produces them.
-            # Declining here is what made the whole point of a specialization
-            # (reuse what did not change, build what did) unreachable.
-            self.log.info(
-                f"BUILD PARTIAL: {self.anchorkeypath} reads {self.redirected_topics()} "
-                f"through a redirection and builds {self.ownedtopics()}."
-            )
-        try:
-            # `owedtopics()` as well as `valid()`: a PARTIALLY redirected block
-            # can be valid() by its own definition and still owe topics that
-            # only this build will produce -- see owedtopics(). Empty for every
-            # block that is not partially redirected, so nothing else moves.
-            owed = self.owedtopics()
-            if not self.valid() or owed:
-                if owed and self.valid():
-                    self.log.info(
-                        f"BUILD OWED: {self.anchorkeypath} reports valid(), but "
-                        f"{owed} are its own to build and are not there -- building "
-                        f"rather than skipping."
-                    )
-                self.__pre_build__(*args, **kwargs)
-                self.__build__(*args, **kwargs)
-                self._build_end_dt = datetime.datetime.now().isoformat().replace(' ', '-').replace(':', '-')
-                self.__post_build__(*args, **kwargs)
-            else:
-                self.log.selected(f"Skipping existing datablock: {self.anchorkeypath}")
-        except KeyboardInterrupt as e:
-            self.__post_build__(*args, event="build:keyboard_interrupt", failure=e, **kwargs)
-            raise(e)
-        except Exception as e:
-            self.__post_build__(*args, event="build:exception", failure=e, **kwargs)
-            raise(e)
+        # Exclusive from here: a process building the same datablock -- another Job whose tree
+        # shares it -- is waited for, and its build then found valid below and skipped, rather
+        # than built over (`dbx.db`; a no-op without `DBX_DB`).
+        with self._lock_('exclusive'):
+            # A SPECIALIZATION is installed here: an older build of a
+            # narrower block that covers what this build would produce is adopted
+            # rather than recomputed -- recorded, so every later construction reads
+            # through it -- and the topics it does not cover are built. After
+            # __post_init__, as construction is complete, since a class may compute
+            # its TOPICS there and a specialization is named in terms of them.
+            if not kwargs.pop('_specialized_', False):
+                self.specialize(journal=self.__dict__.get('__specialization_journal__'))
+            if self._redirected_paths_ is not None and not self.ownedtopics():
+                entry = self.redirection.entry if self.redirection is not None else None
+                whither = (f"journal entry {entry.pretty.id} (hash {entry.pretty.hash})"
+                           if entry is not None else f"the paths {self._redirected_paths_}")
+                self.log.verbose(
+                    f"BUILD ELIDED: {self.anchorkeypath} is REDIRECTED to {whither}, and reads "
+                    f"from there instead: nothing would read what a build of it wrote. Undo the "
+                    f"redirection, or construct with redirect=False, to build it anyway."
+                )
+                return self
+            if self._redirected_paths_ is not None:
+                # A PARTIAL redirection -- a specialization, or an explicit
+                # topics= -- leaves topics with no data and no one else to read
+                # them from, so this build is the thing that produces them.
+                # Declining here is what made the whole point of a specialization
+                # (reuse what did not change, build what did) unreachable.
+                self.log.info(
+                    f"BUILD PARTIAL: {self.anchorkeypath} reads {self.redirected_topics()} "
+                    f"through a redirection and builds {self.ownedtopics()}."
+                )
+            try:
+                # `owedtopics()` as well as `valid()`: a PARTIALLY redirected block
+                # can be valid() by its own definition and still owe topics that
+                # only this build will produce -- see owedtopics(). Empty for every
+                # block that is not partially redirected, so nothing else moves.
+                owed = self.owedtopics()
+                if not self.valid() or owed:
+                    if owed and self.valid():
+                        self.log.info(
+                            f"BUILD OWED: {self.anchorkeypath} reports valid(), but "
+                            f"{owed} are its own to build and are not there -- building "
+                            f"rather than skipping."
+                        )
+                    self.__pre_build__(*args, **kwargs)
+                    self.__build__(*args, **kwargs)
+                    self._build_end_dt = datetime.datetime.now().isoformat().replace(' ', '-').replace(':', '-')
+                    self.__post_build__(*args, **kwargs)
+                else:
+                    self.log.selected(f"Skipping existing datablock: {self.anchorkeypath}")
+            except KeyboardInterrupt as e:
+                self.__post_build__(*args, event="build:keyboard_interrupt", failure=e, **kwargs)
+                raise(e)
+            except Exception as e:
+                self.__post_build__(*args, event="build:exception", failure=e, **kwargs)
+                raise(e)
         return self
 
     def pull(self, src, dest, *, show_progress: bool = False):
@@ -3540,9 +3545,10 @@ class Datablock:
         """
         topicpath = self._normtopic_(topicpath)
         self._topicnode_(*topicpath)      # raises KeyError if it does not exist
-        if len(topicpath) == 1:
-            return self.__read__(topicpath[0])
-        return self.__read__(*topicpath)
+        with self._lock_('shared'):
+            if len(topicpath) == 1:
+                return self.__read__(topicpath[0])
+            return self.__read__(*topicpath)
 
     def get_redirection(self, journal=None):
         """Where this block reads from instead, as a `Redirection`, or None.
@@ -5263,13 +5269,14 @@ class Datablock:
         """
         fs = self.localfs if local else self.fs
         topicpath = self._normtopic_(topicpath)
-        if self.is_topicgroup(*topicpath):
-            # A group has no listing of its own: concatenate its leaves'.
-            return [entry
-                    for tp in self._leaves_under_(*topicpath)
-                    for entry in self.ls(*tp, detail=detail, local=local)]
-        p = self.path(*topicpath, local=local)
-        return ls_path(fs, p, self._is_dir_topic_(*topicpath), detail=detail)
+        with self._lock_('shared'):
+            if self.is_topicgroup(*topicpath):
+                # A group has no listing of its own: concatenate its leaves'.
+                return [entry
+                        for tp in self._leaves_under_(*topicpath)
+                        for entry in self.ls(*tp, detail=detail, local=local)]
+            p = self.path(*topicpath, local=local)
+            return ls_path(fs, p, self._is_dir_topic_(*topicpath), detail=detail)
 
     def list(self, *topicpath, local: bool = False):
         """Detailed, recursive listing of every file under `.path(*topicpath)`.
@@ -5425,7 +5432,8 @@ class Datablock:
 
     def paths(self):
         """`{topic: path}`, nested wherever TOPICS is."""
-        return {topic: self.path(topic) for topic in self.topics()}
+        with self._lock_('shared'):
+            return {topic: self.path(topic) for topic in self.topics()}
 
     def anchorpath(self):
         return self._anchorpath_()
@@ -8169,6 +8177,10 @@ class Datablock:
     def _anchorkey_(self, anchor=None):
         anchor = anchor or self.anchor
         return os.path.join(anchor, self.key) if self.key else anchor
+
+    def _lock_(self, mode: str):
+        """A *mode* lock on this datablock in `DBX_DB`'s database, logged at VERBOSE; a no-op without it. See `dbx.db`."""
+        return db.lock(self.anchorkeypath, mode, log=self.log)
 
     def _anchorkeypath_(self, anchor=None, *, local: bool = False):
         anchorkey = self._anchorkey_(anchor)

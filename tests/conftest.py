@@ -31,6 +31,7 @@ _TESTROOT = tempfile.mkdtemp(prefix='dbx-tests-')
 os.environ['DBX_DATALAKE'] = _TESTROOT
 os.environ['DBX_LOCAL'] = os.path.join(_TESTROOT, 'local')
 os.environ.pop('DBX_CACHE', None)        # else streaming caches land in the developer's
+os.environ.pop('DBX_DB', None)           # else every build and read locks in the developer's database
 os.environ.setdefault('DBX_DIRTY_REPO_OK', '1')
 
 

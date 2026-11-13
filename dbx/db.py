@@ -6,7 +6,8 @@ trees share a subtree -- take turns: the second waits for the first, then finds 
 and skips it, rather than building into the same directory at the same time. With `DBX_DB` unset,
 every lock is a no-op.
 
-    export DBX_DB=postgresql://dbx:<password>@dbx-db.kueue-team-x.svc.cluster.local:5432/dbx
+    dbx.db init ~/.dbx-db --host dbx-db.kueue-team-x.svc.cluster.local   # once: DBX_DB, a new password
+    source ~/.dbx-db                                  # in every shell that locks, and before up
     dbx.db up --expose crusoe:pod lambda:tailnet      # on the machine that serves it
     dbx.db locks                                      # who holds what, and who waits
     dbx.db unlock dmitry-scqaeval-build-tree-479c1    # force: a run, host, path or backend pid
@@ -53,7 +54,7 @@ import pandas as pd
 from .journals import SESSION_ENV, log_section
 
 
-__all__ = ['lock', 'locks', 'unlock', 'up', 'down', 'status', 'main']
+__all__ = ['lock', 'locks', 'unlock', 'init', 'up', 'down', 'status', 'main']
 
 # What a datablock can be locked as.
 MODES = ('shared', 'exclusive')
@@ -157,6 +158,30 @@ def unlock(*targets: str, all: bool = False, url: str | None = None) -> pd.DataF
 # The server
 # --------------------------------------------------------------------------------------------- #
 
+def init(file: str, *, host: str, port: int = 5432, user: str = 'dbx', database: str = 'dbx',
+         force: bool = False) -> str:
+    """Write *file*: `export DBX_DB=postgresql://<user>:<password>@<host>:<port>/<database>`, a new password, mode 600.
+
+    Source it before `up` and in every shell whose builds lock: `up` takes the role, password,
+    port and database from `DBX_DB`, and sets the server's password to it each time. An existing
+    *file* is refused unless *force*: its new password locks out every shell and Job still holding
+    the old one, until they source it again and `up` runs. `DBX_DB`, password hidden.
+    """
+    file = os.path.expanduser(file)
+    url = urllib.parse.urlunsplit(('postgresql', f"{user}:{secrets.token_urlsafe(18)}@{host}:{port}", f"/{database}",
+                                   '', ''))
+    flags = os.O_WRONLY | os.O_CREAT | (os.O_TRUNC if force else os.O_EXCL)
+    try:
+        fd = os.open(file, flags, 0o600)
+    except FileExistsError:
+        raise FileExistsError(f"{file} exists: its password is what the server and every Job use. "
+                              f"Pass --force to replace it") from None
+    os.chmod(file, 0o600)
+    with open(fd, 'w') as f:
+        f.write(f"export DBX_DB={url}\n")
+    return _redacted_(url)
+
+
 def up(*, data_dir: str = '/tmp/dbx-db', bin_dir: str | None = None, expose: list | None = None) -> str:
     """Start the database `DBX_DB` names on this machine, its data in *data_dir*; `DBX_DB`, password hidden.
 
@@ -229,9 +254,16 @@ def expose_to(cluster: str, via: str = 'tailnet') -> str:
 
 
 def main(argv: list | None = None) -> None:
-    """`dbx.db up|down|status|locks|unlock`: the database of datablock locks that `DBX_DB` names."""
+    """`dbx.db init|up|down|status|locks|unlock`: the database of datablock locks that `DBX_DB` names."""
     p = argparse.ArgumentParser(prog='dbx.db', description=main.__doc__.split('\n')[0])
     sub = p.add_subparsers(dest='command', required=True)
+    s = sub.add_parser('init', help=init.__doc__.split('\n')[0])
+    s.add_argument('file', help="where to write it, e.g. ~/.dbx-db; then: source FILE")
+    s.add_argument('--host', required=True, help="the server's name as every client reaches it, e.g. a cluster Service's")
+    s.add_argument('--port', type=int, default=5432)
+    s.add_argument('--user', default='dbx', help="the role (default: dbx)")
+    s.add_argument('--database', default='dbx', help="the database (default: dbx)")
+    s.add_argument('--force', action='store_true', help="replace FILE, and with it the password")
     for name in ('up', 'down'):
         s = sub.add_parser(name, help=(up if name == 'up' else down).__doc__.split('\n')[0])
         s.add_argument('--data-dir', default='/tmp/dbx-db', help="the server's data directory, on local disk")
@@ -245,7 +277,10 @@ def main(argv: list | None = None) -> None:
     s.add_argument('targets', nargs='*', help="a run, host, session or backend pid, or part of a datablock's path")
     s.add_argument('--all', action='store_true', help="every lock")
     a = p.parse_args(argv)
-    if a.command == 'up':
+    if a.command == 'init':
+        print(init(a.file, host=a.host, port=a.port, user=a.user, database=a.database, force=a.force))
+        print(f"source {a.file}   # before dbx.db up, and in every shell whose builds should lock")
+    elif a.command == 'up':
         print(up(data_dir=a.data_dir, bin_dir=a.bin_dir, expose=a.expose))
     elif a.command == 'down':
         down(data_dir=a.data_dir, bin_dir=a.bin_dir)

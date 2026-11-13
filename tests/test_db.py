@@ -248,3 +248,35 @@ def test_two_processes_build_one_datablock_once(with_db, tmp_path):
     for out in outs:
         assert '>>>--- LOCK exclusive: ' in out and '<<<--- LOCK exclusive: ' in out, out
     assert sum('waiting -- held by' in out for out in outs) == 1, outs
+
+
+# --------------------------------------------------------------------------------------------- #
+# init
+# --------------------------------------------------------------------------------------------- #
+
+def test_init_writes_dbx_db_with_a_new_password_for_this_user_alone(tmp_path):
+    f = tmp_path / 'dbx-db'
+    shown = db.init(str(f), host='dbx-db.ns.svc.cluster.local', port=6543, user='u', database='d')
+    line = f.read_text()
+    assert line.startswith('export DBX_DB=postgresql://u:') and line.endswith('@dbx-db.ns.svc.cluster.local:6543/d\n')
+    assert oct(f.stat().st_mode & 0o777) == '0o600'
+    password = line.split('postgresql://u:')[1].split('@')[0]
+    assert len(password) >= 20 and password not in shown and ':***@' in shown
+
+
+def test_init_refuses_to_replace_a_password_unless_forced(tmp_path):
+    f = tmp_path / 'dbx-db'
+    db.init(str(f), host='h')
+    first = f.read_text()
+    with pytest.raises(FileExistsError, match='--force'):
+        db.init(str(f), host='h')
+    assert f.read_text() == first
+    db.init(str(f), host='h', force=True)
+    assert f.read_text() != first and oct(f.stat().st_mode & 0o777) == '0o600'
+
+
+def test_a_file_init_wrote_is_what_up_reads(tmp_path):
+    f = tmp_path / 'dbx-db'
+    db.init(str(f), host='127.0.0.1', port=_free_port_())
+    out = subprocess.run(['bash', '-c', f"source {f} && echo $DBX_DB"], capture_output=True, text=True).stdout.strip()
+    assert out == f.read_text().split('=', 1)[1].strip()

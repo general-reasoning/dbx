@@ -1,6 +1,10 @@
-"""`BuildJournal.diff` -- the datablocks of one journal, side by side: a column per hash, a row per difference."""
+"""`BuildJournalFrame.diff` -- the datablocks of one journal, side by side: a column per hash, a row per difference.
+
+`BuildJournal.diff` is the same over an anchor's whole journal, read for it.
+"""
 from dataclasses import dataclass
 
+import pandas as pd
 import pytest
 
 from dbx.datablocks import DATAFILE, BuildJournal, Datablock
@@ -131,3 +135,33 @@ class TestRefusals:
         a = built(tmp_path)
         with pytest.raises(LookupError):
             BuildJournal.diff('signature', a.hash, 'f' * 64, anchor=ANCHOR, datalake=str(tmp_path))
+
+
+class TestOnTheFrame:
+    """A datablock's `buildjournal()` is a `BuildJournalFrame`, and its `diff` takes the hashes alone."""
+
+    def test_a_datablocks_journal(self, tmp_path):
+        a, b = built(tmp_path, spec=dict(x=1)), built(tmp_path, spec=dict(x=2))
+        d = a.buildjournal().diff(a.hash[:14], b.hash[:11])
+        assert list(d.columns) == [a.hash[:14], b.hash[:11]] and list(d.loc['spec.x']) == [1, 2]
+
+    def test_a_mode(self, tmp_path):
+        a, b = built(tmp_path), built(tmp_path, cls=Extra)
+        assert list(a.buildjournal().diff(a.hash, b.hash, mode='version').loc['version']) == [1, 2]
+
+    def test_a_hash_is_a_pattern_as_a_filter_is(self, tmp_path):
+        a, b = built(tmp_path, spec=dict(x=1)), built(tmp_path, spec=dict(x=2))
+        d = a.buildjournal().diff(f"^{a.hash[:6]}", f"{b.hash[:6]}*")
+        assert list(d.loc['spec.x']) == [1, 2]
+
+    def test_a_pattern_matching_several_hashes_is_refused(self, tmp_path):
+        a, b = built(tmp_path, spec=dict(x=1)), built(tmp_path, spec=dict(x=2))
+        with pytest.raises(LookupError, match='matches 2 hashes'):
+            a.buildjournal().diff('.*', b.hash)
+
+    def test_pandas_diff_is_still_pandas(self, tmp_path):
+        a = built(tmp_path)
+        frame = a.buildjournal()
+        numbers = frame.assign(n=range(len(frame)))[['n']]
+        pd.testing.assert_frame_equal(pd.DataFrame(numbers.diff()), pd.DataFrame(numbers).diff())
+        pd.testing.assert_frame_equal(pd.DataFrame(numbers.diff(periods=2)), pd.DataFrame(numbers).diff(periods=2))

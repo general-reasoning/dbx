@@ -375,11 +375,14 @@ paths that hold nothing. Use `rinst()` when that matters.
 
 ### Diffing hashes
 
-`BuildJournal.diff(mode, *hashes, anchor=..., transpose=False, datalake=None)`
-puts datablocks of one anchor side by side: a column per hash, a row per
-difference. Each hash is read from its newest entry, and may be given by any
-prefix that no other hash in the journal shares. A hash that lacks a row's key
-shows `N/A`.
+`dj.diff(*hashes, mode='signature', transpose=False)`, on a `BuildJournalFrame`,
+puts datablocks of that journal side by side: a column per hash, a row per
+difference. Each hash is a pattern, matched as a [filter](#filters) on `hash` is,
+so a truncated hash, a regex or a glob will do, as long as it matches exactly
+one hash of the frame. Each hash is read from its newest entry. A hash that
+lacks a row's key shows `N/A`. With no hashes, or with `periods=`/`axis=`, it
+is pandas' `DataFrame.diff`. `BuildJournal.diff(mode, *hashes, anchor=...)` is
+the same over an anchor's whole journal, read for it.
 
 | `mode` | rows |
 |---|---|
@@ -389,7 +392,7 @@ shows `N/A`.
 | `'ops'` | each leaf of the recorded ops whose values differ |
 
 ```python
-BuildJournal.diff('signature', '2e3ec8ff', '3c293846', anchor='demo_blocks.Apple')
+dbx.buildjournal(Apple).diff('2e3ec8ff', '3c293846')
 #           2e3ec8ff  3c293846
 # signature
 # spec.n           2         1

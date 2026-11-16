@@ -2772,6 +2772,10 @@ class BuildJournalEntry(pd.Series):
 class BuildJournalFrame(pd.DataFrame):
     _metadata = ['storage_options', 'logger', 'read_anchor', 'read_datalake', 'by_hash']
 
+    # What `diff` compares, and what it shows for a hash that lacks a row's key.
+    DIFF_MODES = ('signature', 'topics', 'version', 'ops')
+    DIFF_NA = 'N/A'
+
     # 1. Protocol and hooks ------------------------------------------------
 
     def __init__(self, df: pd.DataFrame|None, *, storage_options: dict = None,
@@ -2844,6 +2848,62 @@ class BuildJournalFrame(pd.DataFrame):
             entry = entry.dropna()
         return BuildJournalEntry(entry, storage_options=self.storage_options)
 
+    def diff(self, *hashes, mode: str = 'signature', transpose: bool = False, **kwargs) -> pd.DataFrame:
+        """How the datablocks *hashes* of this journal differ, as a frame: a column per hash, a row per difference.
+
+        *mode* says what is compared:
+
+            'signature'  the recorded signature, parsed, one row per leaf -- `spec.x`, `spec.up.spec.y`
+            'topics'     the recorded TOPICS, one row per leaf topic that NOT every hash declares
+            'version'    the recorded `version`, one row
+            'ops'        the recorded ops -- the operational kwargs -- one row per leaf
+
+        A row is listed only when its values are not all the same, and a hash
+        lacking that row's key holds `DIFF_NA`. Values are compared by their
+        `repr`, so `1` and `'1'` differ, as they do in a signature. 'topics'
+        lists the topics missing from some hash and no others: one that every
+        hash declares is there in each, whatever its file is called. Nothing
+        differing is an empty frame, its columns still the hashes as given.
+
+        A hash is a pattern, matched as a filter on `hash` matches -- see
+        `filter_journal_frame` -- so a truncated hash, a regex or a glob will
+        do, as long as it matches exactly one hash of the frame. Each is read
+        from its newest entry, which is the only one that matters for 'ops': a
+        hash's signature, topics and version are the same in every entry, its
+        ops are not. *transpose* puts the hashes in the rows instead.
+
+        Called as pandas calls it -- no hashes, or `periods=`/`axis=` -- it
+        is pandas' `DataFrame.diff`.
+        """
+        if not hashes or kwargs or all(isinstance(h, int) for h in hashes):
+            return super().diff(*hashes, **kwargs)
+        if mode not in self.DIFF_MODES:
+            raise ValueError(f"BuildJournalFrame.diff: unknown mode {mode!r}: one of {self.DIFF_MODES}")
+        if len(hashes) < 2:
+            raise ValueError(f"BuildJournalFrame.diff: needs at least two hashes to compare, got {len(hashes)}")
+        known = list(dict.fromkeys(self['hash'].dropna())) if 'hash' in self.columns else []
+        leaves = {}
+        for given in hashes:
+            matches = [h for h in known if _match_journal_filter_(h, given)]
+            if len(matches) != 1:
+                raise LookupError(f"BuildJournalFrame.diff: {given!r} matches {len(matches)} hashes of the journal, "
+                                  f"not one" + (f": {', '.join(str(h)[:12] for h in matches[:5])}" if matches else ''))
+            rows = self[self['hash'] == matches[0]]
+            if 'datetime' in rows.columns:
+                rows = rows.sort_values('datetime', ascending=False)
+            entry = BuildJournalEntry(pd.Series(rows.iloc[0]).dropna(), storage_options=self.storage_options)
+            leaves[given] = self._diff_leaves_(entry, mode)
+        keys = list(dict.fromkeys(key for values in leaves.values() for key in values))
+        if mode == 'topics':
+            differing = [key for key in keys if not all(key in values for values in leaves.values())]
+        else:
+            differing = [key for key in keys
+                         if len({repr(values.get(key, self.DIFF_NA)) for values in leaves.values()}) > 1]
+        diff = pd.DataFrame({given: [values.get(key, self.DIFF_NA) for key in differing]
+                             for given, values in leaves.items()},
+                            index=pd.Index(differing, name=mode), dtype=object)
+        return diff.T if transpose else diff
+
     def list(self, thing, *, take: str = 'last', sortby: Optional[str] = None, ascending: bool = False, raw: bool = False, safe: bool = False, dropna: bool = False):
         if take == 'last':
             unique_rows = self.groupby('hash').last()
@@ -2884,6 +2944,27 @@ class BuildJournalFrame(pd.DataFrame):
         return thingsframe
 
     # 4. Helpers -----------------------------------------------------------
+
+    @staticmethod
+    def _diff_leaves_(entry, mode) -> dict:
+        """What `diff` compares of *entry* under *mode*, flattened: `{dotted path: value}`."""
+        def flatten(node, prefix, out, sep):
+            if isinstance(node, dict) and node:
+                for key, child in node.items():
+                    flatten(child, prefix + (str(key),), out, sep)
+            elif prefix:
+                out[sep.join(prefix)] = node
+            return out
+
+        if mode == 'version':
+            return {'version': entry.get('version')}
+        if mode == 'topics':
+            topics = entry.pretty.TOPICS
+            return flatten(topics, (), {}, '/') if isinstance(topics, dict) else {}
+        if mode == 'ops':
+            ops = entry.read('ops')
+            return flatten(ops, (), {}, '.') if isinstance(ops, dict) else {}
+        return flatten(entry.pretty.signature(), (), {}, '.')
 
     @classmethod
     def _derived_(cls, *args, **kwargs) -> 'BuildJournalFrame':
@@ -2961,9 +3042,9 @@ class BuildJournal:
     executor -- and `session_entries` reads it back.
     """
 
-    # What `diff` compares, and what it shows for a hash that lacks a row's key.
-    DIFF_MODES = ('signature', 'topics', 'version', 'ops')
-    DIFF_NA = 'N/A'
+    # What `diff` compares, and what it shows for a hash that lacks a row's key: `BuildJournalFrame`'s.
+    DIFF_MODES = BuildJournalFrame.DIFF_MODES
+    DIFF_NA = BuildJournalFrame.DIFF_NA
 
     # 1. Protocol and hooks ------------------------------------------------
 
@@ -3252,54 +3333,10 @@ class BuildJournal:
     @classmethod
     def diff(cls, mode='signature', *hashes, anchor, transpose: bool = False, datalake=None,
              storage_options=None, log=None, n_workers=None) -> pd.DataFrame:
-        """How the datablocks *hashes* of *anchor*'s journal differ, as a frame: a column per hash, a row per difference.
-
-        *mode* says what is compared:
-
-            'signature'  the recorded signature, parsed, one row per leaf -- `spec.x`, `spec.up.spec.y`
-            'topics'     the recorded TOPICS, one row per leaf topic that NOT every hash declares
-            'version'    the recorded `version`, one row
-            'ops'        the recorded ops -- the operational kwargs -- one row per leaf
-
-        A row is listed only when its values are not all the same, and a hash
-        lacking that row's key holds `DIFF_NA`. Values are compared by their
-        `repr`, so `1` and `'1'` differ, as they do in a signature. 'topics'
-        lists the topics missing from some hash and no others: one that every
-        hash declares is there in each, whatever its file is called. Nothing
-        differing is an empty frame, its columns still the hashes.
-
-        A hash may be given by any prefix no other hash of the journal shares.
-        Each is read from its newest entry, which is the only one that matters
-        for 'ops': a hash's signature, topics and version are the same in every
-        entry, its ops are not. The whole of *anchor*'s journal is read to find
-        them. *transpose* puts the hashes in the rows instead.
-        """
-        if mode not in cls.DIFF_MODES:
-            raise ValueError(f"BuildJournal.diff: unknown mode {mode!r}: one of {cls.DIFF_MODES}")
-        if len(hashes) < 2:
-            raise ValueError(f"BuildJournal.diff: needs at least two hashes to compare, got {len(hashes)}")
+        """`BuildJournalFrame.diff` of *anchor*'s whole journal: how the datablocks *hashes* differ in *mode*."""
         frame = cls.read(anchor, datalake=datalake, storage_options=storage_options, log=log,
                          n_workers=n_workers, index=None)
-        known = list(dict.fromkeys(frame['hash'])) if 'hash' in frame.columns else []
-        leaves = {}
-        for given in hashes:
-            matches = [h for h in known if str(h).startswith(given)]
-            if len(matches) != 1:
-                raise LookupError(f"BuildJournal.diff: {anchor}'s journal holds {len(matches)} hashes "
-                                  f"starting with {given!r}, not one")
-            entry = BuildJournalEntry(frame[frame['hash'] == matches[0]].iloc[0].dropna(),
-                                      storage_options=frame.storage_options)
-            leaves[given] = cls._diff_leaves_(entry, mode)
-        rows = list(dict.fromkeys(key for values in leaves.values() for key in values))
-        if mode == 'topics':
-            differing = [key for key in rows if not all(key in values for values in leaves.values())]
-        else:
-            differing = [key for key in rows
-                         if len({repr(values.get(key, cls.DIFF_NA)) for values in leaves.values()}) > 1]
-        diff = pd.DataFrame({given: [values.get(key, cls.DIFF_NA) for key in differing]
-                             for given, values in leaves.items()},
-                            index=pd.Index(differing, name=mode), dtype=object)
-        return diff.T if transpose else diff
+        return frame.diff(*hashes, mode=mode, transpose=transpose)
 
     @classmethod
     def read_frame(cls, paths, *, storage_options=None, log=None, n_workers=None,
@@ -3663,27 +3700,6 @@ class BuildJournal:
         return self._session
 
     # 4. Helpers -----------------------------------------------------------
-
-    @staticmethod
-    def _diff_leaves_(entry, mode) -> dict:
-        """What `diff` compares of *entry* under *mode*, flattened: `{dotted path: value}`."""
-        def flatten(node, prefix, out, sep):
-            if isinstance(node, dict) and node:
-                for key, child in node.items():
-                    flatten(child, prefix + (str(key),), out, sep)
-            elif prefix:
-                out[sep.join(prefix)] = node
-            return out
-
-        if mode == 'version':
-            return {'version': entry.get('version')}
-        if mode == 'topics':
-            topics = entry.pretty.TOPICS
-            return flatten(topics, (), {}, '/') if isinstance(topics, dict) else {}
-        if mode == 'ops':
-            ops = entry.read('ops')
-            return flatten(ops, (), {}, '.') if isinstance(ops, dict) else {}
-        return flatten(entry.pretty.signature(), (), {}, '.')
 
     @staticmethod
     def _block_record_(block) -> dict:

@@ -36,7 +36,7 @@ class Extra(Built):
 
 
 ANCHOR = 'diffed'
-HEADERS = ['VERSION', 'TOPICS', 'tag']
+HEADERS = ['tag', 'VERSION', 'TOPICS']
 
 
 def built(tmp_path, cls=Built, **kwargs):
@@ -82,7 +82,7 @@ class TestSignature:
 
 
 class TestTheHeaders:
-    """`VERSION`, `TOPICS` and `tag` are always there, the same in every hash or not."""
+    """`tag`, `VERSION` and `TOPICS` are always there, first, the same in every hash or not."""
 
     def test_version_topics_and_tag(self, tmp_path):
         a, b = built(tmp_path, tag='first'), built(tmp_path, cls=Extra)

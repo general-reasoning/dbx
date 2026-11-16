@@ -381,7 +381,7 @@ list, each a pattern matched as a [filter](#filters) on `hash` is, so a truncate
 hash, a regex or a glob will do, as long as it matches exactly one hash of the
 frame. Each hash is read from its newest entry.
 
-The first rows are each hash's `VERSION`, `TOPICS` (their names) and `tag`,
+The first rows are each hash's `tag`, `VERSION` and `TOPICS` (their names),
 always. Then one row per leaf whose values differ, of the recorded signature
 (`mode='signature'`: `spec.x`, `spec.up.spec.y`) or ops (`mode='ops'`). A hash
 that lacks a row's key shows `N/A`. A signature records an upstream datablock's
@@ -394,9 +394,9 @@ anchor=...)` is the same over an anchor's whole journal, read for it.
 dbx.buildjournal(Apple).diff(['2e3ec8ff', '3c293846'])
 #              2e3ec8ff  3c293846
 # signature
+# tag               N/A       N/A
 # VERSION             1         1
 # TOPICS           (x,)      (x,)
-# tag               N/A       N/A
 # spec.n              2         1
 ```
 

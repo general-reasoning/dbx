@@ -2851,8 +2851,8 @@ class BuildJournalFrame(pd.DataFrame):
     def diff(self, hashes=None, *args, mode: str = 'signature', **kwargs) -> pd.DataFrame:
         """How the datablocks *hashes* of this journal differ, as a frame: a column per hash, a row per difference.
 
-        The first rows are each hash's `VERSION`, `TOPICS` -- their names --
-        and `tag`, always, whether or not they differ. Then one row per leaf
+        The first rows are each hash's `tag`, `VERSION` and `TOPICS` --
+        their names -- always, whether or not they differ. Then one row per leaf
         of what *mode* compares whose values are not all the same:
 
             'signature'  the recorded signature, parsed -- `spec.x`, `spec.up.spec.y`
@@ -2893,15 +2893,15 @@ class BuildJournalFrame(pd.DataFrame):
             if 'datetime' in rows.columns:
                 rows = rows.sort_values('datetime', ascending=False)
             entry = BuildJournalEntry(pd.Series(rows.iloc[0]).dropna(), storage_options=self.storage_options)
-            headers[given] = {'VERSION': entry.get('version', self.DIFF_NA),
-                              'TOPICS': tuple(entry.pretty.topics(short=True) or ()),
-                              'tag': entry.get('tag', self.DIFF_NA)}
+            headers[given] = {'tag': entry.get('tag', self.DIFF_NA),
+                              'VERSION': entry.get('version', self.DIFF_NA),
+                              'TOPICS': tuple(entry.pretty.topics(short=True) or ())}
             leaves[given] = self._diff_leaves_(entry, mode)
         keys = list(dict.fromkeys(key for values in leaves.values() for key in values))
         differing = [key for key in keys
                      if len({repr(values.get(key, self.DIFF_NA)) for values in leaves.values()}) > 1]
-        index = ['VERSION', 'TOPICS', 'tag'] + differing
-        return pd.DataFrame({given: [headers[given][key] for key in ('VERSION', 'TOPICS', 'tag')]
+        index = list(headers[hashes[0]]) + differing
+        return pd.DataFrame({given: list(headers[given].values())
                                     + [leaves[given].get(key, self.DIFF_NA) for key in differing]
                              for given in hashes},
                             index=pd.Index(index, name=mode), dtype=object)

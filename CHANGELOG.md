@@ -33,7 +33,7 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 - **`BuildJournalFrame.diff(hashes, mode=...)`: datablocks side by side.** `dblk.buildjournal().diff([h1, h2, ...])`
-  is a frame with a column per hash: first its `VERSION`, `TOPICS` and `tag`, always, then a row per leaf that
+  is a frame with a column per hash: first its `tag`, `VERSION` and `TOPICS`, always, then a row per leaf that
   differs, of the recorded `signature` or `ops`. A hash is a pattern, as a filter on `hash` is: truncated, a regex or
   a glob, matching one hash. `.transpose()` puts the hashes in the rows. Without a list of hashes it is pandas'
   `diff`. `BuildJournal.diff(hashes, mode, anchor=...)` reads an anchor's journal for it. See JOURNALS.md.

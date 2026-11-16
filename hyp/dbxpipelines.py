@@ -728,11 +728,11 @@ def tail_text(text, n):
     return one if len(one) <= n else one[: n - 1] + "…"
 
 
-# What a diff window compares, as its mode menu offers it: BuildJournal.DIFF_MODES, each said.
+# What a diff window compares, as its mode menu offers it: BuildJournalFrame.DIFF_MODES, each said.
 DIFF_MODES = (("signature", "signature: the leaves of the recorded signature"),
-              ("topics", "topics: those some hash lacks"),
-              ("version", "version"),
               ("ops", "ops: the operational kwargs"))
+# The rows BuildJournalFrame.diff puts first, in every mode, whether or not they differ.
+DIFF_HEADERS = ("tag", "VERSION", "TOPICS")
 
 
 def diff_hashes(journal, row, tag_only=True):
@@ -763,23 +763,30 @@ def diff_label(h, newest, shown=None):
     return "   ".join(p for p in parts if p)
 
 
+def diff_frame(journal, hashes, mode):
+    """How the *hashes* of *journal* -- rows already read, the pipeline journal's -- differ in *mode*: `BuildJournalFrame.diff`."""
+    dbx = _dbx_()
+    rows = dbx.BuildJournalFrame(pd.DataFrame(journal).reset_index(drop=True), storage_options=dbx.default_storage_options())
+    return rows.diff(list(hashes), mode=mode)
+
+
 def diff_text(diff, legend, mode):
-    """`BuildJournal.diff`'s frame -- a column per hash, a row per difference -- as text: the hashes, then a block per row.
+    """`diff_frame`'s frame -- a column per hash, `DIFF_HEADERS` then a row per difference -- as text: the hashes, then a block per row.
 
     *legend* is `{hash: its label}`. A value is its repr where a string, so
     `'1'` reads apart from `1`, as the diff tells them apart; a hash lacking a
-    row's key reads `N/A`.
+    row's key reads `N/A`. With no row past the headers, it says so last.
     """
-    na = _dbx_().BuildJournal.DIFF_NA
+    na = _dbx_().BuildJournalFrame.DIFF_NA
     lines = [legend.get(h, h) for h in diff.columns] + [""]
-    if diff.empty:
-        return "\n".join(lines + [f"no difference in {mode} among these {len(diff.columns)}"])
     for key, values in diff.iterrows():
         lines.append(str(key))
         for h, v in values.items():
             shown = "N/A" if isinstance(v, str) and v == na else (repr(v) if isinstance(v, str) else str(v))
             lines.append(f"    {str(h)[:8]}   {shown}")
         lines.append("")
+    if all(key in DIFF_HEADERS for key in diff.index):
+        lines.append(f"no difference in {mode} among these {len(diff.columns)}")
     return "\n".join(lines)
 
 
@@ -1832,7 +1839,7 @@ class HypDbxJournal(Hyp):
                       visible=lambda: len(diff_hashes(self.journal, getattr(viewer, "row", None) or {}, tag_only=False)) > 1)
 
     def _open_diff_(self, row):
-        """Open how the pipeline *row*'s hashes differ -- `BuildJournal.diff` over the journal read -- over the window it was asked from.
+        """Open how the pipeline *row*'s hashes differ -- `diff_frame` over the journal read -- over the window it was asked from.
 
         Its header: the mode, as its title; a selector keeping to *row*'s tag
         or taking its whole anchor; and the hashes, each toggled in or out,
@@ -1864,7 +1871,7 @@ class HypDbxJournal(Hyp):
             window.set_text(f"comparing {len(hashes)} hashes …")
             legend = {h: diff_label(h, r, shown) for h, r in hashes.items()}
             journal = self.journal[self.journal["hash"].astype(str).isin(list(hashes))]
-            diff = lambda: _dbx_().PipeJournal.diff(state["mode"], list(hashes), journal=journal)
+            diff = lambda: diff_frame(journal, list(hashes), state["mode"])
 
             def then(frame):
                 if asked == state["asked"]:

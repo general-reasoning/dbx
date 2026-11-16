@@ -1,10 +1,13 @@
-"""`BuildJournal.diff` -- the datablocks of one journal, side by side: a column per hash, a row per difference."""
+"""`BuildJournalFrame.diff` -- the datablocks of one journal, side by side: a column per hash, a row per difference.
+
+`BuildJournal.diff` is the same over an anchor's whole journal, read for it.
+"""
 from dataclasses import dataclass
 
 import pandas as pd
 import pytest
 
-from dbx.datablocks import DATAFILE, BuildJournal, Datablock
+from dbx.datablocks import DATAFILE, BuildJournal, BuildJournalFrame, Datablock
 
 
 @pytest.fixture(autouse=True)
@@ -33,6 +36,7 @@ class Extra(Built):
 
 
 ANCHOR = 'diffed'
+HEADERS = ['tag', 'VERSION', 'TOPICS']
 
 
 def built(tmp_path, cls=Built, **kwargs):
@@ -41,8 +45,8 @@ def built(tmp_path, cls=Built, **kwargs):
     return dblk
 
 
-def diff(tmp_path, mode, *dblks, **kwargs):
-    return BuildJournal.diff(mode, [d.hash for d in dblks], anchor=ANCHOR, datalake=str(tmp_path), **kwargs)
+def diff(tmp_path, dblks, mode='signature'):
+    return BuildJournal.diff([d.hash for d in dblks], mode, anchor=ANCHOR, datalake=str(tmp_path))
 
 
 class TestSignature:
@@ -50,60 +54,46 @@ class TestSignature:
     def test_a_row_per_differing_leaf_a_column_per_hash(self, tmp_path):
         a = built(tmp_path, spec=dict(x=1, y='a'))
         b = built(tmp_path, spec=dict(x=2, y='a'))
-        d = diff(tmp_path, 'signature', a, b)
+        d = diff(tmp_path, [a, b])
         assert list(d.columns) == [a.hash, b.hash]
-        assert list(d.index) == ['spec.x']
+        assert list(d.index) == HEADERS + ['spec.x']
         assert list(d.loc['spec.x']) == [1, 2]
 
     def test_values_are_typed(self, tmp_path):
         a = built(tmp_path, spec=dict(x=1, y='1'))
         b = built(tmp_path, spec=dict(x=1, y='a'))
-        assert list(diff(tmp_path, 'signature', a, b).loc['spec.y']) == ['1', 'a']
+        assert list(diff(tmp_path, [a, b]).loc['spec.y']) == ['1', 'a']
 
     def test_three_hashes(self, tmp_path):
-        dblks = [built(tmp_path, spec=dict(x=x)) for x in (1, 1, 3)]
-        dblks[1] = built(tmp_path, spec=dict(x=1, y='b'))
-        d = diff(tmp_path, 'signature', *dblks)
-        assert sorted(d.index) == ['spec.x', 'spec.y']
+        dblks = [built(tmp_path, spec=spec) for spec in (dict(x=1), dict(x=1, y='b'), dict(x=3))]
+        d = diff(tmp_path, dblks)
+        assert list(d.index) == HEADERS + ['spec.x', 'spec.y']
         assert list(d.loc['spec.x']) == [1, 1, 3]
 
-    def test_transpose(self, tmp_path):
+    def test_transposed(self, tmp_path):
         a, b = built(tmp_path, spec=dict(x=1)), built(tmp_path, spec=dict(x=2))
-        d = diff(tmp_path, 'signature', a, b, transpose=True)
-        assert list(d.index) == [a.hash, b.hash] and list(d.columns) == ['spec.x']
+        d = diff(tmp_path, [a, b]).transpose()
+        assert list(d.index) == [a.hash, b.hash] and list(d.columns) == HEADERS + ['spec.x']
 
-    def test_nothing_differing_is_empty(self, tmp_path):
+    def test_nothing_differing_is_the_headers_alone(self, tmp_path):
         a = built(tmp_path)
-        d = BuildJournal.diff('signature', [a.hash, a.hash[:12]], anchor=ANCHOR, datalake=str(tmp_path))
-        assert d.empty and list(d.columns) == [a.hash, a.hash[:12]]
+        d = BuildJournal.diff([a.hash, a.hash[:12]], anchor=ANCHOR, datalake=str(tmp_path))
+        assert list(d.index) == HEADERS and list(d.columns) == [a.hash, a.hash[:12]]
 
-    def test_a_hash_prefix(self, tmp_path):
+
+class TestTheHeaders:
+    """`tag`, `VERSION` and `TOPICS` are always there, first, the same in every hash or not."""
+
+    def test_version_topics_and_tag(self, tmp_path):
+        a, b = built(tmp_path, tag='first'), built(tmp_path, cls=Extra)
+        d = diff(tmp_path, [a, b])
+        assert list(d.loc['VERSION']) == [1, 2]
+        assert list(d.loc['TOPICS']) == [('out', 'data'), ('out', 'data', 'log')]
+        assert list(d.loc['tag']) == ['first', BuildJournal.DIFF_NA]
+
+    def test_in_ops_too(self, tmp_path):
         a, b = built(tmp_path, spec=dict(x=1)), built(tmp_path, spec=dict(x=2))
-        d = BuildJournal.diff('signature', [a.hash[:10], b.hash[:10]], anchor=ANCHOR, datalake=str(tmp_path))
-        assert list(d.columns) == [a.hash[:10], b.hash[:10]]
-
-
-class TestTopics:
-
-    def test_only_the_topics_some_hash_lacks(self, tmp_path):
-        a, b = built(tmp_path), built(tmp_path, cls=Extra)
-        d = diff(tmp_path, 'topics', a, b)
-        # 'out' is in both, under different files: present in every hash, so not listed.
-        assert list(d.index) == ['log']
-        assert d.loc['log', a.hash] == BuildJournal.DIFF_NA
-        assert d.loc['log', b.hash] != BuildJournal.DIFF_NA
-
-
-class TestVersion:
-
-    def test_one_row(self, tmp_path):
-        a, b = built(tmp_path), built(tmp_path, cls=Extra)
-        d = diff(tmp_path, 'version', a, b)
-        assert list(d.index) == ['version'] and list(d.loc['version']) == [1, 2]
-
-    def test_the_same_version_is_empty(self, tmp_path):
-        a, b = built(tmp_path, spec=dict(x=1)), built(tmp_path, spec=dict(x=2))
-        assert diff(tmp_path, 'version', a, b).empty
+        assert list(diff(tmp_path, [a, b], mode='ops').index) == HEADERS
 
 
 class TestOps:
@@ -111,72 +101,82 @@ class TestOps:
     def test_the_ops_of_each_hash(self, tmp_path):
         a = built(tmp_path, spec=dict(x=1), n_viz_workers=3)
         b = built(tmp_path, spec=dict(x=2))
-        d = diff(tmp_path, 'ops', a, b)
-        assert list(d.index) == ['n_viz_workers']
+        d = diff(tmp_path, [a, b], mode='ops')
+        assert list(d.index) == HEADERS + ['n_viz_workers']
         assert list(d.loc['n_viz_workers']) == [3, BuildJournal.DIFF_NA]
 
 
 class TestRefusals:
 
-    def test_an_unknown_mode(self, tmp_path):
+    @pytest.mark.parametrize('mode', ['hash', 'version', 'topics'])
+    def test_an_unknown_mode(self, tmp_path, mode):
         a = built(tmp_path)
         with pytest.raises(ValueError):
-            BuildJournal.diff('hash', [a.hash, a.hash], anchor=ANCHOR, datalake=str(tmp_path))
+            BuildJournal.diff([a.hash, a.hash], mode, anchor=ANCHOR, datalake=str(tmp_path))
 
     def test_one_hash(self, tmp_path):
         a = built(tmp_path)
         with pytest.raises(ValueError):
-            BuildJournal.diff('signature', [a.hash], anchor=ANCHOR, datalake=str(tmp_path))
+            BuildJournal.diff([a.hash], anchor=ANCHOR, datalake=str(tmp_path))
 
     def test_an_unknown_hash(self, tmp_path):
         a = built(tmp_path)
         with pytest.raises(LookupError):
-            BuildJournal.diff('signature', [a.hash, 'f' * 64], anchor=ANCHOR, datalake=str(tmp_path))
+            BuildJournal.diff([a.hash, 'f' * 64], anchor=ANCHOR, datalake=str(tmp_path))
+
+    def test_hashes_after_the_list(self, tmp_path):
+        a, b = built(tmp_path, spec=dict(x=1)), built(tmp_path, spec=dict(x=2))
+        with pytest.raises(TypeError):
+            a.buildjournal().diff([a.hash], b.hash)
 
 
-class TestAJournalAlreadyRead:
-    """`journal=`: the hashes found in entries already read, and nothing read again."""
+class TestOnTheFrame:
+    """A datablock's `buildjournal()` is a `BuildJournalFrame`, and its `diff` takes the list of hashes alone."""
+
+    def test_a_datablocks_journal(self, tmp_path):
+        a, b = built(tmp_path, spec=dict(x=1)), built(tmp_path, spec=dict(x=2))
+        d = a.buildjournal().diff([a.hash[:14], b.hash[:11]])
+        assert list(d.columns) == [a.hash[:14], b.hash[:11]] and list(d.loc['spec.x']) == [1, 2]
+
+    def test_a_hash_is_a_pattern_as_a_filter_is(self, tmp_path):
+        a, b = built(tmp_path, spec=dict(x=1)), built(tmp_path, spec=dict(x=2))
+        d = a.buildjournal().diff([f"^{a.hash[:6]}", f"{b.hash[:6]}*"])
+        assert list(d.loc['spec.x']) == [1, 2]
+
+    def test_a_pattern_matching_several_hashes_is_refused(self, tmp_path):
+        a, b = built(tmp_path, spec=dict(x=1)), built(tmp_path, spec=dict(x=2))
+        with pytest.raises(LookupError, match='matches 2 hashes'):
+            a.buildjournal().diff(['.*', b.hash])
+
+    def test_pandas_diff_is_still_pandas(self, tmp_path):
+        a = built(tmp_path)
+        frame = a.buildjournal()
+        numbers = frame.assign(n=range(len(frame)))[['n']]
+        pd.testing.assert_frame_equal(pd.DataFrame(numbers.diff()), pd.DataFrame(numbers).diff())
+        pd.testing.assert_frame_equal(pd.DataFrame(numbers.diff(2)), pd.DataFrame(numbers).diff(2))
+        pd.testing.assert_frame_equal(pd.DataFrame(numbers.diff(periods=2)), pd.DataFrame(numbers).diff(periods=2))
+
+
+class TestRowsAlreadyRead:
+    """Rows read once, wrapped as a `BuildJournalFrame`, diff as the journal read for it would -- nothing read again."""
 
     @pytest.fixture
     def read(self, tmp_path):
         a, b, c = (built(tmp_path, spec=dict(x=x)) for x in (1, 2, 3))
         return (a, b, c), BuildJournal.read(ANCHOR, datalake=str(tmp_path), index=None)
 
-    def test_reads_nothing(self, read, monkeypatch):
+    def test_reads_nothing_again(self, read, monkeypatch):
         (a, b, _), journal = read
         monkeypatch.setattr(BuildJournal, 'read', classmethod(lambda cls, *a, **k: pytest.fail('read again')))
-        d = BuildJournal.diff('signature', [a.hash, b.hash], journal=journal)
-        assert list(d.loc['spec.x']) == [1, 2]
+        assert list(journal.diff([a.hash, b.hash]).loc['spec.x']) == [1, 2]
 
     def test_as_reading_it_would(self, read, tmp_path):
         (a, b, c), journal = read
         hashes = [a.hash[:8], b.hash[:8], c.hash[:8]]
-        given = BuildJournal.diff('signature', hashes, journal=journal)
-        assert given.equals(BuildJournal.diff('signature', hashes, anchor=ANCHOR, datalake=str(tmp_path)))
-
-    def test_no_hashes_is_every_hash_newest_first(self, read):
-        (a, b, c), journal = read
-        d = BuildJournal.diff('signature', journal=journal)
-        assert list(d.columns) == [c.hash, b.hash, a.hash]
-        assert list(d.loc['spec.x']) == [3, 2, 1]
+        assert journal.diff(hashes).equals(BuildJournal.diff(hashes, anchor=ANCHOR, datalake=str(tmp_path)))
 
     def test_a_plain_frame_of_rows(self, read):
-        """As hyp holds the pipeline journal: a DataFrame, not a BuildJournalFrame."""
+        """As hyp holds the pipeline journal: a DataFrame, wrapped."""
         (a, b, _), journal = read
-        d = BuildJournal.diff('signature', [a.hash, b.hash], journal=pd.DataFrame(journal))
+        d = BuildJournalFrame(pd.DataFrame(journal).reset_index(drop=True)).diff([a.hash, b.hash])
         assert list(d.loc['spec.x']) == [1, 2]
-
-    def test_anchor_narrows_it(self, read):
-        (a, b, _), journal = read
-        assert len(BuildJournal.diff('signature', [a.hash, b.hash], anchor=ANCHOR, journal=journal).columns) == 2
-        with pytest.raises(LookupError):
-            BuildJournal.diff('signature', [a.hash, b.hash], anchor='elsewhere', journal=journal)
-
-    def test_neither_is_refused(self):
-        with pytest.raises(ValueError):
-            BuildJournal.diff('signature', ['a', 'b'])
-
-    def test_a_bare_hash_is_refused(self, read):
-        (a, _, _), journal = read
-        with pytest.raises(TypeError):
-            BuildJournal.diff('signature', a.hash, journal=journal)

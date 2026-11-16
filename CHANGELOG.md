@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Changed
+- **`PipeJournal.UNSAFE_compact()` compacts: each pipeline class's journal as one parquet file.** As before it drops
+  every `create` entry but the newest per pipeline and entrypath, with their side files, and keeps every `job:*`
+  entry; now the entries it keeps are written to the class's compacted file, checked against them first, and the
+  entry files are removed -- `SCQAEvalPipeline`'s 11,912 files become 31: that file, and the side files its kept
+  entries name. Compacting again merges what was written since and drops its duplicates. It removes files only,
+  never a directory: an unjournaled class's directory stays, empty. Its rows gain `entries` and `dropped`.
+  `read_hash` finds a pipeline's entry in that file, so `read_refs` does not read the whole journal for it.
 - **`dbx.cluster` is `dbx.clusters`; `dbx.cluster('crusoe')` is the cluster.** The module of clusters, runners and runs
   is `dbx.clusters`, and its `cluster()` -- the one typed most -- is re-exported, beside `runner()`: `dbx.cluster(name)`
   for `dbx.cluster.cluster(name)`. The rest is reached through the module (`dbx.clusters.runs`, `dbx.clusters.Runner`,
@@ -25,9 +32,11 @@ All notable changes to this project will be documented in this file.
   `subsignature` or `norm` column.
 
 ### Added
-- **`BuildJournal.diff(mode, hashes, anchor=..., journal=...)`: datablocks side by side.** A frame with a column per
-  hash and a row per difference, in the recorded `signature`, `topics` (those some hash lacks), `version` or `ops`;
-  any number of hashes, found in *anchor*'s journal or in a *journal* already read. See JOURNALS.md.
+- **`BuildJournalFrame.diff(hashes, mode=...)`: datablocks side by side.** `dblk.buildjournal().diff([h1, h2, ...])`
+  is a frame with a column per hash: first its `tag`, `VERSION` and `TOPICS`, always, then a row per leaf that
+  differs, of the recorded `signature` or `ops`. A hash is a pattern, as a filter on `hash` is: truncated, a regex or
+  a glob, matching one hash. `.transpose()` puts the hashes in the rows. Without a list of hashes it is pandas'
+  `diff`. `BuildJournal.diff(hashes, mode, anchor=...)` reads an anchor's journal for it. See JOURNALS.md.
 - **`DBX_DIRTY=True`: the working tree, as it is.** One variable for the pair a dirty run needs,
   `DBX_USE_WORK_REPO=False` and `DBX_DIRTY_REPO_OK=True`; set when `dbx.databits` is imported, so every reader and
   every child process sees them, and it overrides a `DBX_USE_WORK_REPO=True` a shell profile exports.

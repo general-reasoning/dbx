@@ -1198,8 +1198,7 @@ def test_the_hashes_a_diff_chooses_among_are_the_tags_newest_first(diffed):
 
 
 def test_diff_text_says_each_differing_leaf_hash_by_hash(diffed):
-    dbx = dbxpipelines._dbx_()
-    frame = dbx.PipeJournal.diff("signature", ["hcccc", "hbbbb", "haaaa"], journal=diffed)
+    frame = dbxpipelines.diff_frame(diffed, ["hcccc", "hbbbb", "haaaa"], "signature")
     legend = {h: f"legend {h}" for h in frame.columns}
     text = dbxpipelines.diff_text(frame, legend, "signature")
     assert text.split("\n")[:3] == ["legend hcccc", "legend hbbbb", "legend haaaa"]
@@ -1208,8 +1207,10 @@ def test_diff_text_says_each_differing_leaf_hash_by_hash(diffed):
 
 
 def test_diff_text_of_nothing_differing(diffed):
-    frame = dbxpipelines._dbx_().PipeJournal.diff("version", ["hcccc", "haaaa"], journal=diffed)
-    assert dbxpipelines.diff_text(frame, {}, "version").endswith("no difference in version among these 2")
+    frame = dbxpipelines.diff_frame(diffed, ["hcccc", "haaaa"], "ops")
+    text = dbxpipelines.diff_text(frame, {}, "ops")
+    assert text.startswith("hcccc\nhaaaa\n\ntag\n")       # the headers, there in every mode
+    assert text.endswith("no difference in ops among these 2")
 
 
 def test_the_diff_window_compares_what_is_picked(pipelines_app, diffed):
@@ -1236,8 +1237,8 @@ def test_the_diff_window_compares_what_is_picked(pipelines_app, diffed):
     assert marks["haaaa"] == "[x] * haaaa", "the window's own hash, starred"
     assert marks["hbbbb"] == "[ ]   hbbbb" and marks["hdddd"] == "[x]   hdddd"
 
-    mode.select("version")
-    assert mode.label == "diff · version" and "no difference in version" in window.text
+    mode.select("ops")
+    assert mode.label == "diff · ops" and "no difference in ops" in window.text
 
 
 def test_a_toggling_menu_stays_open_as_items_are_picked():

@@ -375,29 +375,31 @@ paths that hold nothing. Use `rinst()` when that matters.
 
 ### Diffing hashes
 
-`BuildJournal.diff(mode, hashes, anchor=..., journal=None, transpose=False, datalake=None)`
-puts datablocks side by side: a column per hash, a row per difference. The
-hashes are found in *journal*, entries already read -- a frame of journal rows,
-such as hyp holds -- or else in *anchor*'s journal, read whole. *hashes* is a
-list, as many as you like; each may be given by any prefix that no other hash
-in the journal shares, and None is every hash in it, newest first. Each hash is
-read from its newest entry. A hash that lacks a row's key shows `N/A`.
+`dj.diff(hashes, mode='signature')`, on a `BuildJournalFrame`, puts datablocks of
+that journal side by side: a column per hash, a row per difference. *hashes* is a
+list, each a pattern matched as a [filter](#filters) on `hash` is, so a truncated
+hash, a regex or a glob will do, as long as it matches exactly one hash of the
+frame. Each hash is read from its newest entry.
+Any frame of journal rows already read -- a pipeline journal's, such as hyp
+holds -- is diffed the same way once wrapped: `BuildJournalFrame(rows).diff(hashes)`.
 
-| `mode` | rows |
-|---|---|
-| `'signature'` | each leaf of the recorded signature whose values differ: `spec.x`, `spec.up.spec.y` |
-| `'topics'` | each leaf topic that some hash does not declare |
-| `'version'` | `version`, when it differs |
-| `'ops'` | each leaf of the recorded ops whose values differ |
+The first rows are each hash's `tag`, `VERSION` and `TOPICS` (their names),
+always. Then one row per leaf whose values differ, of the recorded signature
+(`mode='signature'`: `spec.x`, `spec.up.spec.y`) or ops (`mode='ops'`). A hash
+that lacks a row's key shows `N/A`. A signature records an upstream datablock's
+spec, not its class: a different upstream class shows as the keys one has and
+the other lacks. `.transpose()` puts the hashes in the rows. Without a list of
+hashes it is pandas' `DataFrame.diff`. `BuildJournal.diff(hashes, mode,
+anchor=...)` is the same over an anchor's whole journal, read for it.
 
 ```python
-BuildJournal.diff('signature', ['2e3ec8ff', '3c293846'], anchor='demo_blocks.Apple')
-#           2e3ec8ff  3c293846
+dbx.buildjournal(Apple).diff(['2e3ec8ff', '3c293846'])
+#              2e3ec8ff  3c293846
 # signature
-# spec.n           2         1
-
-journal = BuildJournal.read('demo_blocks.Apple', index=None)
-BuildJournal.diff('signature', journal=journal)    # every hash in it, nothing read again
+# tag               N/A       N/A
+# VERSION             1         1
+# TOPICS           (x,)      (x,)
+# spec.n              2         1
 ```
 
 `entry.pretty` is read **off the row**, not recomputed:
@@ -446,8 +448,10 @@ A journal read often and written in many small files can be compacted:
 `BuildJournal.UNSAFE_compact(anchors)` rewrites each anchor's entries as one parquet
 file, where `read` finds it, and `ExecJournal.UNSAFE_compact()` does the same for
 the exec journal. No entry is dropped, and entries recording a redirection stay in
-their datablock's own journal. `PipeJournal.UNSAFE_compact()` instead keeps one entry per
-pipeline and entrypath -- all `collect` reads.
+their datablock's own journal. `PipeJournal.UNSAFE_compact()` does the same for each
+pipeline class under `.pipelines`, but first drops the `create` entries that `collect`
+would read only to drop: it keeps the newest one per pipeline and entrypath, and every
+run's `job:*` entry. No compaction removes a directory, only files.
 
 `PipeJournal` is a `BuildJournal` whose entries are laid out exactly as a
 datablock's are, under `<datalake>/.pipelines` instead of the datalake itself:

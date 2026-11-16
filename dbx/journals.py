@@ -3250,9 +3250,9 @@ class BuildJournal:
         return BuildJournalFrame(df, storage_options=storage_options, hash=hash)
 
     @classmethod
-    def diff(cls, mode='signature', *hashes, anchor, transpose: bool = False, datalake=None,
-             storage_options=None, log=None, n_workers=None) -> pd.DataFrame:
-        """How the datablocks *hashes* of *anchor*'s journal differ, as a frame: a column per hash, a row per difference.
+    def diff(cls, mode='signature', hashes=None, *, anchor=None, journal=None, transpose: bool = False,
+             datalake=None, storage_options=None, log=None, n_workers=None) -> pd.DataFrame:
+        """How the datablocks *hashes* differ, as a frame: a column per hash, a row per difference.
 
         *mode* says what is compared:
 
@@ -3268,33 +3268,53 @@ class BuildJournal:
         hash declares is there in each, whatever its file is called. Nothing
         differing is an empty frame, its columns still the hashes.
 
-        A hash may be given by any prefix no other hash of the journal shares.
-        Each is read from its newest entry, which is the only one that matters
-        for 'ops': a hash's signature, topics and version are the same in every
-        entry, its ops are not. The whole of *anchor*'s journal is read to find
-        them. *transpose* puts the hashes in the rows instead.
+        Where the hashes are found: *journal*, entries already read -- a
+        `BuildJournalFrame`, or any frame of journal rows, a pipeline journal's
+        say -- or else *anchor*'s journal under *datalake*, read whole. Given
+        both, *anchor* narrows *journal* to its rows.
+
+        *hashes* is a list of them, each given by any prefix no other hash of
+        the journal shares, and each column is labeled as it was given. None is
+        every hash of the journal, newest first, each its own label. Either way
+        there must be two. Each is read from its newest entry, which is the only
+        one that matters for 'ops': a hash's signature, topics and version are
+        the same in every entry, its ops are not. *transpose* puts the hashes
+        in the rows instead.
         """
         if mode not in cls.DIFF_MODES:
             raise ValueError(f"BuildJournal.diff: unknown mode {mode!r}: one of {cls.DIFF_MODES}")
+        if isinstance(hashes, str):
+            raise TypeError(f"BuildJournal.diff: hashes is a list of hashes, not one: [{hashes!r}, ...]")
+        if journal is None and anchor is None:
+            raise ValueError("BuildJournal.diff: pass anchor= to read its journal, or journal= already read")
+        if journal is None:
+            journal = cls.read(anchor, datalake=datalake, storage_options=storage_options, log=log,
+                               n_workers=n_workers, index=None)
+        elif anchor is not None and 'anchor' in journal.columns:
+            journal = journal[journal['anchor'].astype(str) == str(anchor)]
+        options = storage_options if storage_options is not None else (
+            getattr(journal, 'storage_options', None) or default_storage_options())
+        rows = pd.DataFrame(journal).reset_index(drop=True)
+        if 'datetime' in rows.columns:
+            rows = rows.sort_values('datetime', ascending=False, kind='stable')     # newest first
+        known = [str(h) for h in dict.fromkeys(rows['hash'].dropna())] if 'hash' in rows.columns else []
+        hashes = known if hashes is None else [str(h) for h in hashes]
         if len(hashes) < 2:
             raise ValueError(f"BuildJournal.diff: needs at least two hashes to compare, got {len(hashes)}")
-        frame = cls.read(anchor, datalake=datalake, storage_options=storage_options, log=log,
-                         n_workers=n_workers, index=None)
-        known = list(dict.fromkeys(frame['hash'])) if 'hash' in frame.columns else []
+        where = anchor if anchor is not None else 'the journal given'
         leaves = {}
         for given in hashes:
-            matches = [h for h in known if str(h).startswith(given)]
+            matches = [h for h in known if h.startswith(given)]
             if len(matches) != 1:
-                raise LookupError(f"BuildJournal.diff: {anchor}'s journal holds {len(matches)} hashes "
+                raise LookupError(f"BuildJournal.diff: {where} holds {len(matches)} hashes "
                                   f"starting with {given!r}, not one")
-            entry = BuildJournalEntry(frame[frame['hash'] == matches[0]].iloc[0].dropna(),
-                                      storage_options=frame.storage_options)
-            leaves[given] = cls._diff_leaves_(entry, mode)
-        rows = list(dict.fromkeys(key for values in leaves.values() for key in values))
+            newest = rows[rows['hash'].astype(str) == matches[0]].iloc[0].dropna()
+            leaves[given] = cls._diff_leaves_(BuildJournalEntry(newest, storage_options=options), mode)
+        keys = list(dict.fromkeys(key for values in leaves.values() for key in values))
         if mode == 'topics':
-            differing = [key for key in rows if not all(key in values for values in leaves.values())]
+            differing = [key for key in keys if not all(key in values for values in leaves.values())]
         else:
-            differing = [key for key in rows
+            differing = [key for key in keys
                          if len({repr(values.get(key, cls.DIFF_NA)) for values in leaves.values()}) > 1]
         diff = pd.DataFrame({given: [values.get(key, cls.DIFF_NA) for key in differing]
                              for given, values in leaves.items()},

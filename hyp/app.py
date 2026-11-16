@@ -303,14 +303,17 @@ class Dropdown:
     saying what it copied, in a footer that otherwise says *copy_hint*. With
     *on_context* instead, right-clicking an item closes the list and calls
     `on_context(value, pos)` -- the points menu's, a point's own right click.
+    With *keep_open*, picking an item leaves the list open, for picking
+    several in turn -- items that toggle, say -- and a click off it closes it.
     """
 
     ROWS = 16
     NOTE_S = 2.5
 
     def __init__(self, label, items, on_select, empty="none", value=None, match=None, visible=lambda: True,
-                 enabled=lambda: True, on_context=None, copy=None, copy_hint="right-click: copy"):
+                 enabled=lambda: True, on_context=None, copy=None, copy_hint="right-click: copy", keep_open=False):
         self.label = label
+        self.keep_open = keep_open
         # Right click on an item: `on_context(value, pos)`; None, and a right click only closes the list.
         self.on_context = on_context
         self.visible = visible
@@ -361,10 +364,11 @@ class Dropdown:
                 return True
             if not self.open:
                 return False
-            self.open = False
             items = self.current() or []
             i = self._row_at_(ev.pos)
-            if i is not None and i < len(items):
+            picked = i is not None and i < len(items)
+            self.open = picked and self.keep_open
+            if picked:
                 self.select(items[i][1])
             return True
         if ev.type == pygame.MOUSEBUTTONDOWN and ev.button == 3 and self.open and self.copy is not None:

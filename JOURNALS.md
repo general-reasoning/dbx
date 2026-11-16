@@ -375,11 +375,13 @@ paths that hold nothing. Use `rinst()` when that matters.
 
 ### Diffing hashes
 
-`BuildJournal.diff(mode, *hashes, anchor=..., transpose=False, datalake=None)`
-puts datablocks of one anchor side by side: a column per hash, a row per
-difference. Each hash is read from its newest entry, and may be given by any
-prefix that no other hash in the journal shares. A hash that lacks a row's key
-shows `N/A`.
+`BuildJournal.diff(mode, hashes, anchor=..., journal=None, transpose=False, datalake=None)`
+puts datablocks side by side: a column per hash, a row per difference. The
+hashes are found in *journal*, entries already read -- a frame of journal rows,
+such as hyp holds -- or else in *anchor*'s journal, read whole. *hashes* is a
+list, as many as you like; each may be given by any prefix that no other hash
+in the journal shares, and None is every hash in it, newest first. Each hash is
+read from its newest entry. A hash that lacks a row's key shows `N/A`.
 
 | `mode` | rows |
 |---|---|
@@ -389,10 +391,13 @@ shows `N/A`.
 | `'ops'` | each leaf of the recorded ops whose values differ |
 
 ```python
-BuildJournal.diff('signature', '2e3ec8ff', '3c293846', anchor='demo_blocks.Apple')
+BuildJournal.diff('signature', ['2e3ec8ff', '3c293846'], anchor='demo_blocks.Apple')
 #           2e3ec8ff  3c293846
 # signature
 # spec.n           2         1
+
+journal = BuildJournal.read('demo_blocks.Apple', index=None)
+BuildJournal.diff('signature', journal=journal)    # every hash in it, nothing read again
 ```
 
 `entry.pretty` is read **off the row**, not recomputed:

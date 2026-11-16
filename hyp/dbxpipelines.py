@@ -728,6 +728,61 @@ def tail_text(text, n):
     return one if len(one) <= n else one[: n - 1] + "…"
 
 
+# What a diff window compares, as its mode menu offers it: BuildJournal.DIFF_MODES, each said.
+DIFF_MODES = (("signature", "signature: the leaves of the recorded signature"),
+              ("topics", "topics: those some hash lacks"),
+              ("version", "version"),
+              ("ops", "ops: the operational kwargs"))
+
+
+def diff_hashes(journal, row, tag_only=True):
+    """The hashes a diff of the pipeline *row* chooses among, newest first: `{hash: its newest entry}`.
+
+    Every hash of *row*'s anchor in *journal*, or with *tag_only*, of its tag too.
+    """
+    if journal is None or "hash" not in journal.columns:
+        return {}
+    rows = journal[journal["anchor"].astype(str) == str(row.get("anchor"))] if "anchor" in journal.columns else journal
+    if tag_only and "tag" in rows.columns:
+        rows = rows[rows["tag"].astype(str) == str(row.get("tag"))]
+    if "datetime" in rows.columns:
+        rows = rows.sort_values("datetime", ascending=False, kind="stable")
+    out = {}
+    for _, r in rows.iterrows():
+        h = r.get("hash")
+        if not _is_blank_(h) and str(h) not in out:
+            out[str(h)] = dict(r)
+    return out
+
+
+def diff_label(h, newest, shown=None):
+    """One hash of a diff, as its menu and its legend say it: short hash, when, VAR name, tag; `*` marks *shown*, the window's own."""
+    name = newest.get("name")
+    parts = [f"{'*' if h == shown else ' '} {h[:8]}", when(newest.get("datetime", ""), seconds=True),
+             name if isinstance(name, str) and name else None, tail(newest.get("tag", ""))]
+    return "   ".join(p for p in parts if p)
+
+
+def diff_text(diff, legend, mode):
+    """`BuildJournal.diff`'s frame -- a column per hash, a row per difference -- as text: the hashes, then a block per row.
+
+    *legend* is `{hash: its label}`. A value is its repr where a string, so
+    `'1'` reads apart from `1`, as the diff tells them apart; a hash lacking a
+    row's key reads `N/A`.
+    """
+    na = _dbx_().BuildJournal.DIFF_NA
+    lines = [legend.get(h, h) for h in diff.columns] + [""]
+    if diff.empty:
+        return "\n".join(lines + [f"no difference in {mode} among these {len(diff.columns)}"])
+    for key, values in diff.iterrows():
+        lines.append(str(key))
+        for h, v in values.items():
+            shown = "N/A" if isinstance(v, str) and v == na else (repr(v) if isinstance(v, str) else str(v))
+            lines.append(f"    {str(h)[:8]}   {shown}")
+        lines.append("")
+    return "\n".join(lines)
+
+
 def exec_text(command):
     """A `dbx.exec` command, as an exec journal recorded it, as text: a table of its columns, then its exception and traceback."""
 
@@ -1348,7 +1403,8 @@ class HypDbxJournal(Hyp):
             visible=lambda: bool(viewer.row) and not _is_blank_(viewer.row.get("session")),
             **self._copies_anchorkey_(viewer.row),
         )
-        viewer.menus = [times, roots, session, self._pipeline_exec_menu_(viewer), self._output_button_(viewer), *self._rerun_buttons_(viewer)]
+        viewer.menus = [times, roots, session, self._pipeline_exec_menu_(viewer), self._diff_button_(viewer), self._output_button_(viewer),
+                        *self._rerun_buttons_(viewer)]
         self.viewers = [viewer]
 
     # Helpers -----------------------------------------------------------------
@@ -1769,6 +1825,77 @@ class HypDbxJournal(Hyp):
         self.push_viewer(window)
         self.run_async(lambda: output_text(row), window.set_text,
                        failed=lambda line: window.set_text(f"could not read the captured output:\n\n{line}"))
+
+    def _diff_button_(self, viewer):
+        """The `diff` button of a pipeline's window: shown once the journal is read, when the pipeline has another hash to compare."""
+        return Button("diff", lambda: self._open_diff_(viewer.row),
+                      visible=lambda: len(diff_hashes(self.journal, getattr(viewer, "row", None) or {}, tag_only=False)) > 1)
+
+    def _open_diff_(self, row):
+        """Open how the pipeline *row*'s hashes differ -- `BuildJournal.diff` over the journal read -- over the window it was asked from.
+
+        Its header: the mode, as its title; a selector keeping to *row*'s tag
+        or taking its whole anchor; and the hashes, each toggled in or out,
+        every one in at first. The diff is worked out off the UI thread, and
+        again on every change; a result overtaken by a later change is dropped.
+        """
+        state = {"mode": "signature", "tag_only": True, "off": set(), "asked": 0}
+        shown = str(row.get("hash", ""))
+
+        def chosen():
+            return {h: r for h, r in diff_hashes(self.journal, row, state["tag_only"]).items() if h not in state["off"]}
+
+        def hash_items():
+            hashes = diff_hashes(self.journal, row, state["tag_only"])
+            return [("all", "all"), ("none", "none")] + [
+                (f"[{' ' if h in state['off'] else 'x'}] {diff_label(h, r, shown)}", h) for h, r in hashes.items()]
+
+        def show():
+            hashes = chosen()
+            every = diff_hashes(self.journal, row, state["tag_only"])
+            mode.label = f"diff · {state['mode']}"
+            scope.label = f"[{'x' if state['tag_only'] else ' '}]  tag {tail(row.get('tag', ''))} only"
+            picks.label = f"hashes · {len(hashes)} of {len(every)}"
+            state["asked"] += 1
+            asked = state["asked"]
+            if len(hashes) < 2:
+                window.set_text(f"pick at least two hashes to compare: {len(hashes)} picked of {len(every)}")
+                return
+            window.set_text(f"comparing {len(hashes)} hashes …")
+            legend = {h: diff_label(h, r, shown) for h, r in hashes.items()}
+            journal = self.journal[self.journal["hash"].astype(str).isin(list(hashes))]
+            diff = lambda: _dbx_().PipeJournal.diff(state["mode"], list(hashes), journal=journal)
+
+            def then(frame):
+                if asked == state["asked"]:
+                    window.set_text(diff_text(frame, legend, state["mode"]))
+
+            def failed(line):
+                if asked == state["asked"]:
+                    window.set_text(f"could not compare them:\n\n{line}")
+
+            self.run_async(diff, then, failed=failed)
+
+        def pick_mode(value):
+            state["mode"] = value
+            show()
+
+        def toggle_tag():
+            state["tag_only"] = not state["tag_only"]
+            show()
+
+        def toggle(h):
+            every = set(diff_hashes(self.journal, row, state["tag_only"]))
+            state["off"] = (set() if h == "all" else every if h == "none"
+                            else state["off"] ^ {h})
+            show()
+
+        mode = Dropdown("diff", list(DIFF_MODES), pick_mode, value="signature")
+        scope = Button("", toggle_tag)
+        picks = Dropdown("hashes", hash_items, toggle, keep_open=True)
+        window = TextViewer("diff", "", menus=[mode, scope, picks])
+        self.push_viewer(window)
+        show()
 
     def _anchor_blocks_(self, row):
         """The anchor's blocks -- the points -- as dropdown items, newest first."""

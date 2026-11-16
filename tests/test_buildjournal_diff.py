@@ -1,6 +1,7 @@
 """`BuildJournal.diff` -- the datablocks of one journal, side by side: a column per hash, a row per difference."""
 from dataclasses import dataclass
 
+import pandas as pd
 import pytest
 
 from dbx.datablocks import DATAFILE, BuildJournal, Datablock
@@ -41,7 +42,7 @@ def built(tmp_path, cls=Built, **kwargs):
 
 
 def diff(tmp_path, mode, *dblks, **kwargs):
-    return BuildJournal.diff(mode, *(d.hash for d in dblks), anchor=ANCHOR, datalake=str(tmp_path), **kwargs)
+    return BuildJournal.diff(mode, [d.hash for d in dblks], anchor=ANCHOR, datalake=str(tmp_path), **kwargs)
 
 
 class TestSignature:
@@ -73,12 +74,12 @@ class TestSignature:
 
     def test_nothing_differing_is_empty(self, tmp_path):
         a = built(tmp_path)
-        d = BuildJournal.diff('signature', a.hash, a.hash[:12], anchor=ANCHOR, datalake=str(tmp_path))
+        d = BuildJournal.diff('signature', [a.hash, a.hash[:12]], anchor=ANCHOR, datalake=str(tmp_path))
         assert d.empty and list(d.columns) == [a.hash, a.hash[:12]]
 
     def test_a_hash_prefix(self, tmp_path):
         a, b = built(tmp_path, spec=dict(x=1)), built(tmp_path, spec=dict(x=2))
-        d = BuildJournal.diff('signature', a.hash[:10], b.hash[:10], anchor=ANCHOR, datalake=str(tmp_path))
+        d = BuildJournal.diff('signature', [a.hash[:10], b.hash[:10]], anchor=ANCHOR, datalake=str(tmp_path))
         assert list(d.columns) == [a.hash[:10], b.hash[:10]]
 
 
@@ -120,14 +121,62 @@ class TestRefusals:
     def test_an_unknown_mode(self, tmp_path):
         a = built(tmp_path)
         with pytest.raises(ValueError):
-            BuildJournal.diff('hash', a.hash, a.hash, anchor=ANCHOR, datalake=str(tmp_path))
+            BuildJournal.diff('hash', [a.hash, a.hash], anchor=ANCHOR, datalake=str(tmp_path))
 
     def test_one_hash(self, tmp_path):
         a = built(tmp_path)
         with pytest.raises(ValueError):
-            BuildJournal.diff('signature', a.hash, anchor=ANCHOR, datalake=str(tmp_path))
+            BuildJournal.diff('signature', [a.hash], anchor=ANCHOR, datalake=str(tmp_path))
 
     def test_an_unknown_hash(self, tmp_path):
         a = built(tmp_path)
         with pytest.raises(LookupError):
-            BuildJournal.diff('signature', a.hash, 'f' * 64, anchor=ANCHOR, datalake=str(tmp_path))
+            BuildJournal.diff('signature', [a.hash, 'f' * 64], anchor=ANCHOR, datalake=str(tmp_path))
+
+
+class TestAJournalAlreadyRead:
+    """`journal=`: the hashes found in entries already read, and nothing read again."""
+
+    @pytest.fixture
+    def read(self, tmp_path):
+        a, b, c = (built(tmp_path, spec=dict(x=x)) for x in (1, 2, 3))
+        return (a, b, c), BuildJournal.read(ANCHOR, datalake=str(tmp_path), index=None)
+
+    def test_reads_nothing(self, read, monkeypatch):
+        (a, b, _), journal = read
+        monkeypatch.setattr(BuildJournal, 'read', classmethod(lambda cls, *a, **k: pytest.fail('read again')))
+        d = BuildJournal.diff('signature', [a.hash, b.hash], journal=journal)
+        assert list(d.loc['spec.x']) == [1, 2]
+
+    def test_as_reading_it_would(self, read, tmp_path):
+        (a, b, c), journal = read
+        hashes = [a.hash[:8], b.hash[:8], c.hash[:8]]
+        given = BuildJournal.diff('signature', hashes, journal=journal)
+        assert given.equals(BuildJournal.diff('signature', hashes, anchor=ANCHOR, datalake=str(tmp_path)))
+
+    def test_no_hashes_is_every_hash_newest_first(self, read):
+        (a, b, c), journal = read
+        d = BuildJournal.diff('signature', journal=journal)
+        assert list(d.columns) == [c.hash, b.hash, a.hash]
+        assert list(d.loc['spec.x']) == [3, 2, 1]
+
+    def test_a_plain_frame_of_rows(self, read):
+        """As hyp holds the pipeline journal: a DataFrame, not a BuildJournalFrame."""
+        (a, b, _), journal = read
+        d = BuildJournal.diff('signature', [a.hash, b.hash], journal=pd.DataFrame(journal))
+        assert list(d.loc['spec.x']) == [1, 2]
+
+    def test_anchor_narrows_it(self, read):
+        (a, b, _), journal = read
+        assert len(BuildJournal.diff('signature', [a.hash, b.hash], anchor=ANCHOR, journal=journal).columns) == 2
+        with pytest.raises(LookupError):
+            BuildJournal.diff('signature', [a.hash, b.hash], anchor='elsewhere', journal=journal)
+
+    def test_neither_is_refused(self):
+        with pytest.raises(ValueError):
+            BuildJournal.diff('signature', ['a', 'b'])
+
+    def test_a_bare_hash_is_refused(self, read):
+        (a, _, _), journal = read
+        with pytest.raises(TypeError):
+            BuildJournal.diff('signature', a.hash, journal=journal)

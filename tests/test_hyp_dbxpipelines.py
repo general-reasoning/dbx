@@ -17,8 +17,11 @@ from test_hyp_engine import EchoSummarizer, quiet
 
 
 
-def write_run(lake, anchor, key, i, spec, signature=None, inline=False):
-    """One pipeline journal entry, laid out as dbx's PipeJournal writes it: *inline*, its spec, signature and cite in it, as since 2026-11-03; else in side files."""
+def write_run(lake, anchor, key, i, spec, signature=None, inline=False, **columns):
+    """One pipeline journal entry, laid out as dbx's PipeJournal writes it: *inline*, its spec, signature and cite in it, as since 2026-11-03; else in side files.
+
+    *columns* are recorded in it besides.
+    """
     tag = f"pkg.pipelines.{anchor.lower()}"
     cls_dir = lake / ".pipelines" / f"pkg.{anchor}" / tag / key / ".journal" / f"pkg.{anchor}"
     jdir = cls_dir / "journal" / f"h{key}"
@@ -40,6 +43,7 @@ def write_run(lake, anchor, key, i, spec, signature=None, inline=False):
         "paths": "{'entrypoint': None}",
         "gitrepo": "/home/u/dbx",
         "wrkrepo": "/tmp/w/dbx",
+        **columns,
     }
     for side, content in (("spec", spec), ("signature", signature), ("cite", f"cite {i}")):
         if content is not None and inline:
@@ -1166,3 +1170,89 @@ def test_a_pipelines_exec_menu_lists_every_command_that_touched_it(tmp_path, mon
     execs = dbxpipelines.session_execs(lake, lake)
     items = dbxpipelines.HypDbxJournal._exec_items_(lake, execs, dbxpipelines.pipeline_sessions(row, journal))
     assert [execs[s][i]["exec"] for _, (_, s, i) in items] == ["root.var.leaf.build(); root.build()", "Flat(spec={'n': 5}).create()"]
+
+
+@pytest.fixture
+def diffed(tmp_path, monkeypatch):
+    """A pipeline journal of one anchor: three hashes under its tag, run in that order, and a fourth under another tag.
+
+    Each records its `type`, as every entry has since it was a column: without one, `signature` is read as an older
+    journal's, where it held the type.
+    """
+    monkeypatch.setenv("DBX_DATALAKE", str(tmp_path))
+    for i, (key, lr) in enumerate((("aaaa", 0.1), ("bbbb", 0.2), ("cccc", 0.2))):
+        write_run(tmp_path, "TrainPipeline", key, i, f"lr: {lr}\n", signature=f"(spec={{'lr': {lr}, 'seed': {i}}})", inline=True,
+                  type="(spec=...)/version=None")
+    write_run(tmp_path, "TrainPipeline", "dddd", 3, "lr: 0.4\n", signature="(spec={'lr': 0.4, 'seed': 0})", inline=True,
+              type="(spec=...)/version=None")
+    entries = dbxpipelines.journal_entries()
+    other = entries["hash"] == "hdddd"
+    entries.loc[other, "tag"] = "pkg.pipelines.other"
+    return entries
+
+
+def test_the_hashes_a_diff_chooses_among_are_the_tags_newest_first(diffed):
+    row = dict(diffed[diffed["hash"] == "haaaa"].iloc[0])
+    assert list(dbxpipelines.diff_hashes(diffed, row)) == ["hcccc", "hbbbb", "haaaa"]
+    assert list(dbxpipelines.diff_hashes(diffed, row, tag_only=False)) == ["hdddd", "hcccc", "hbbbb", "haaaa"]
+
+
+def test_diff_text_says_each_differing_leaf_hash_by_hash(diffed):
+    dbx = dbxpipelines._dbx_()
+    frame = dbx.PipeJournal.diff("signature", ["hcccc", "hbbbb", "haaaa"], journal=diffed)
+    legend = {h: f"legend {h}" for h in frame.columns}
+    text = dbxpipelines.diff_text(frame, legend, "signature")
+    assert text.split("\n")[:3] == ["legend hcccc", "legend hbbbb", "legend haaaa"]
+    assert "spec.lr\n    hcccc   0.2\n    hbbbb   0.2\n    haaaa   0.1\n" in text
+    assert "spec.seed\n    hcccc   2\n    hbbbb   1\n    haaaa   0\n" in text
+
+
+def test_diff_text_of_nothing_differing(diffed):
+    frame = dbxpipelines._dbx_().PipeJournal.diff("version", ["hcccc", "haaaa"], journal=diffed)
+    assert dbxpipelines.diff_text(frame, {}, "version").endswith("no difference in version among these 2")
+
+
+def test_the_diff_window_compares_what_is_picked(pipelines_app, diffed):
+    app = pipelines_app
+    app.journal = diffed
+    app.run_async = lambda fn, then, failed=None: then(fn())
+    row = dict(diffed[diffed["hash"] == "haaaa"].iloc[0])
+    app.viewers = [SimpleNamespace(row=row)]
+    app._open_diff_(row)
+    window = app.viewers[-1]
+    mode, scope, picks = window.menus
+    assert picks.label == "hashes · 3 of 3" and "spec.seed" in window.text and "hdddd" not in window.text
+
+    scope.on_click()                                   # the whole anchor
+    assert picks.label == "hashes · 4 of 4" and "hdddd" in window.text
+
+    picks.select("none")
+    assert window.text.startswith("pick at least two hashes")
+    picks.select("haaaa")
+    picks.select("hdddd")
+    assert picks.label == "hashes · 2 of 4"
+    assert "spec.lr\n    hdddd   0.4\n    haaaa   0.1" in window.text
+    marks = {h: t[:11] for t, h in picks.current()[2:]}
+    assert marks["haaaa"] == "[x] * haaaa", "the window's own hash, starred"
+    assert marks["hbbbb"] == "[ ]   hbbbb" and marks["hdddd"] == "[x]   hdddd"
+
+    mode.select("version")
+    assert mode.label == "diff · version" and "no difference in version" in window.text
+
+
+def test_a_toggling_menu_stays_open_as_items_are_picked():
+    import os
+
+    os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
+    import pygame
+
+    from hyp.app import Dropdown
+
+    picked = []
+    menu = Dropdown("m", [("a", 1), ("b", 2)], picked.append, keep_open=True)
+    menu.open, menu.row_h = True, 18
+    menu.list = pygame.Rect(0, 20, 100, 18 * 2 + 8)
+    menu.handle(SimpleNamespace(type=pygame.MOUSEBUTTONDOWN, button=1, pos=(10, 24)))
+    assert picked == [1] and menu.open
+    menu.handle(SimpleNamespace(type=pygame.MOUSEBUTTONDOWN, button=1, pos=(500, 500)))
+    assert picked == [1] and not menu.open

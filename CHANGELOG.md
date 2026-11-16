@@ -32,11 +32,11 @@ All notable changes to this project will be documented in this file.
   `subsignature` or `norm` column.
 
 ### Added
-- **`BuildJournalFrame.diff(*hashes, mode=...)`: datablocks side by side.** `dblk.buildjournal().diff(h1, h2, ...)` is
-  a frame with a column per hash and a row per difference, in the recorded `signature`, `topics` (those some hash
-  lacks), `version` or `ops`. A hash is a pattern, as a filter on `hash` is: truncated, a regex or a glob, matching
-  one hash. Without hashes it is pandas' `diff`. `BuildJournal.diff(mode, *hashes, anchor=...)` reads an anchor's
-  journal for it. See JOURNALS.md.
+- **`BuildJournalFrame.diff(hashes, mode=...)`: datablocks side by side.** `dblk.buildjournal().diff([h1, h2, ...])`
+  is a frame with a column per hash: first its `VERSION`, `TOPICS` and `tag`, always, then a row per leaf that
+  differs, of the recorded `signature` or `ops`. A hash is a pattern, as a filter on `hash` is: truncated, a regex or
+  a glob, matching one hash. `.transpose()` puts the hashes in the rows. Without a list of hashes it is pandas'
+  `diff`. `BuildJournal.diff(hashes, mode, anchor=...)` reads an anchor's journal for it. See JOURNALS.md.
 - **`DBX_DIRTY=True`: the working tree, as it is.** One variable for the pair a dirty run needs,
   `DBX_USE_WORK_REPO=False` and `DBX_DIRTY_REPO_OK=True`; set when `dbx.databits` is imported, so every reader and
   every child process sees them, and it overrides a `DBX_USE_WORK_REPO=True` a shell profile exports.

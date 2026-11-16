@@ -375,27 +375,29 @@ paths that hold nothing. Use `rinst()` when that matters.
 
 ### Diffing hashes
 
-`dj.diff(*hashes, mode='signature', transpose=False)`, on a `BuildJournalFrame`,
-puts datablocks of that journal side by side: a column per hash, a row per
-difference. Each hash is a pattern, matched as a [filter](#filters) on `hash` is,
-so a truncated hash, a regex or a glob will do, as long as it matches exactly
-one hash of the frame. Each hash is read from its newest entry. A hash that
-lacks a row's key shows `N/A`. With no hashes, or with `periods=`/`axis=`, it
-is pandas' `DataFrame.diff`. `BuildJournal.diff(mode, *hashes, anchor=...)` is
-the same over an anchor's whole journal, read for it.
+`dj.diff(hashes, mode='signature')`, on a `BuildJournalFrame`, puts datablocks of
+that journal side by side: a column per hash, a row per difference. *hashes* is a
+list, each a pattern matched as a [filter](#filters) on `hash` is, so a truncated
+hash, a regex or a glob will do, as long as it matches exactly one hash of the
+frame. Each hash is read from its newest entry.
 
-| `mode` | rows |
-|---|---|
-| `'signature'` | each leaf of the recorded signature whose values differ: `spec.x`, `spec.up.spec.y` |
-| `'topics'` | each leaf topic that some hash does not declare |
-| `'version'` | `version`, when it differs |
-| `'ops'` | each leaf of the recorded ops whose values differ |
+The first rows are each hash's `VERSION`, `TOPICS` (their names) and `tag`,
+always. Then one row per leaf whose values differ, of the recorded signature
+(`mode='signature'`: `spec.x`, `spec.up.spec.y`) or ops (`mode='ops'`). A hash
+that lacks a row's key shows `N/A`. A signature records an upstream datablock's
+spec, not its class: a different upstream class shows as the keys one has and
+the other lacks. `.transpose()` puts the hashes in the rows. Without a list of
+hashes it is pandas' `DataFrame.diff`. `BuildJournal.diff(hashes, mode,
+anchor=...)` is the same over an anchor's whole journal, read for it.
 
 ```python
-dbx.buildjournal(Apple).diff('2e3ec8ff', '3c293846')
-#           2e3ec8ff  3c293846
+dbx.buildjournal(Apple).diff(['2e3ec8ff', '3c293846'])
+#              2e3ec8ff  3c293846
 # signature
-# spec.n           2         1
+# VERSION             1         1
+# TOPICS           (x,)      (x,)
+# tag               N/A       N/A
+# spec.n              2         1
 ```
 
 `entry.pretty` is read **off the row**, not recomputed:

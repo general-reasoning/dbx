@@ -441,8 +441,10 @@ A journal read often and written in many small files can be compacted:
 `BuildJournal.UNSAFE_compact(anchors)` rewrites each anchor's entries as one parquet
 file, where `read` finds it, and `ExecJournal.UNSAFE_compact()` does the same for
 the exec journal. No entry is dropped, and entries recording a redirection stay in
-their datablock's own journal. `PipeJournal.UNSAFE_compact()` instead keeps one entry per
-pipeline and entrypath -- all `collect` reads.
+their datablock's own journal. `PipeJournal.UNSAFE_compact()` does the same for each
+pipeline class under `.pipelines`, but first drops the `create` entries that `collect`
+would read only to drop: it keeps the newest one per pipeline and entrypath, and every
+run's `job:*` entry. No compaction removes a directory, only files.
 
 `PipeJournal` is a `BuildJournal` whose entries are laid out exactly as a
 datablock's are, under `<datalake>/.pipelines` instead of the datalake itself:

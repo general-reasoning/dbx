@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Changed
+- **`PipeJournal.UNSAFE_compact()` compacts: each pipeline class's journal as one parquet file.** As before it drops
+  every `create` entry but the newest per pipeline and entrypath, with their side files, and keeps every `job:*`
+  entry; now the entries it keeps are written to the class's compacted file, checked against them first, and the
+  entry files are removed -- `SCQAEvalPipeline`'s 11,912 files become 31: that file, and the side files its kept
+  entries name. Compacting again merges what was written since and drops its duplicates. It removes files only,
+  never a directory: an unjournaled class's directory stays, empty. Its rows gain `entries` and `dropped`.
+  `read_hash` finds a pipeline's entry in that file, so `read_refs` does not read the whole journal for it.
 - **`dbx.cluster` is `dbx.clusters`; `dbx.cluster('crusoe')` is the cluster.** The module of clusters, runners and runs
   is `dbx.clusters`, and its `cluster()` -- the one typed most -- is re-exported, beside `runner()`: `dbx.cluster(name)`
   for `dbx.cluster.cluster(name)`. The rest is reached through the module (`dbx.clusters.runs`, `dbx.clusters.Runner`,

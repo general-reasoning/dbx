@@ -3781,9 +3781,11 @@ class BuildJournal:
 
         A compacted journal is every block's entries of an anchor -- tens of
         thousands of rows, for a table's tablets -- so only the rows of one hash
-        are read, by pyarrow's filter on the `hash` column.
+        are read, by pyarrow's filter on the `hash` column. It is named by the
+        anchor's last component: a pipeline's anchor is `.pipelines/{fqcn}`,
+        and its compacted journal `{fqcn}`'s, as `PipeJournal.UNSAFE_compact` names it.
         """
-        path = os.path.join(base, cls.COMPACTED.format(anchor=anchor))
+        path = os.path.join(base, cls.COMPACTED.format(anchor=os.path.basename(anchor)))
         try:
             if not fs.exists(path):
                 return None
@@ -4295,15 +4297,19 @@ class PipeJournal(BuildJournal):
     def UNSAFE_compact(cls, anchors=None, *, unjournaled: bool = False, spare=(), datalake=None, storage_options=None,
                        parallelization='multithreading', n_workers=None, dry_run: bool = False,
                        OVERRIDE: bool = False) -> pd.DataFrame:
-        """Remove the entries `collect` would read only to drop: one `create` per pipeline and entrypath is kept.
+        """Each pipeline class's journal as one parquet file, without the entries `collect` would read only to drop.
 
-        Under each pipeline's `.journal/{fqcn}/journal/{hash}/`, the newest
-        `create` entry -- by its `datetime` -- of every distinct `entrypath` is
-        kept, and every entry of another event -- a run's `job:*` -- is kept as it is, with its side files (spec, ops, quote, cite, repr,
-        signature, type, note), which are named, as it is, by the instance's
-        `dt`; every other entry is removed, side files and all. `collect`
-        reads the same pipelines, each with the same entrypaths, before and
-        after.
+        Of each pipeline's entries, the newest `create` -- by its `datetime`
+        -- of every distinct `entrypath` is kept, and every entry of another
+        event -- a run's `job:*` -- is kept as it is, with its side files
+        (spec, ops, quote, cite, repr, signature, type, note); every other
+        entry is dropped, side files and all. The kept entries are written, as
+        `BuildJournal.UNSAFE_compact` writes an anchor's, to the class's
+        `COMPACTED` file -- checked against them before anything is removed --
+        and the entry files read are removed. A compacted file is read as any
+        entry file, so compacting again drops the duplicates written since.
+        `collect` reads the same pipelines, each with the same entrypaths,
+        before and after.
 
         *anchors* are pipeline classes' fqcns, every one under `.pipelines`
         by default. *unjournaled* also removes every `create` entry of every
@@ -4311,9 +4317,10 @@ class PipeJournal(BuildJournal):
         False, but those named in *spare* (fqcns, or class names); a class
         that no longer imports is compacted as any other. As
         `BuildJournal.UNSAFE_compact`, the anchors go to a *parallelization*
-        executor of *n_workers*, and *dry_run* removes nothing and says what
-        would go. Returns one row per pipeline class: files `before`,
-        `removed`, `after`, and what was done with it.
+        executor of *n_workers*, and *dry_run* writes and checks the compacted
+        file, removes nothing, and says what would go. Returns one row per
+        pipeline class: its `entries` and those `dropped`, its files
+        `before`, `removed` and `after`, and what was done with it.
         """
         return super().UNSAFE_compact(anchors, datalake=datalake, storage_options=storage_options,
                                       parallelization=parallelization, n_workers=n_workers, dry_run=dry_run,
@@ -4332,6 +4339,7 @@ class PipeJournal(BuildJournal):
         log = log or Datalog()
         fs, lake = fsspec.url_to_fs(datalake, **storage_options)
         anchor_dir = os.path.join(lake, cls.ANCHOR, anchor)
+        compacted = os.path.join(anchor_dir, cls.COMPACTED.format(anchor=anchor))
 
         def journaled(fqcn):
             module, _, name = fqcn.rpartition('.')
@@ -4341,60 +4349,62 @@ class PipeJournal(BuildJournal):
                 return None
             return getattr(pipeline_cls, 'JOURNAL', None)
 
-        def newest_per_entrypath(files, creations=True):
-            # The newest create of each entrypath, by its own datetime, and every entry of another event:
-            # their files, and the side files they name.
-            def read(file):
-                with fs.open(file, 'rb') as f:
-                    df = pd.read_parquet(f, use_threads=False)
-                row = df.iloc[0]
-                sides = {norm(p) for c in cls._SIDE_COLUMNS_ if c in df.columns and (p := side_file(row[c]))}
-                return file, row.get('datetime', ''), row.get('entrypath'), row.get('event', 'create'), sides
-            newest, others = {}, []
-            with ThreadPoolExecutor(max_workers=_threads_(fs, 8)) as ex:
-                for file, dt, entrypath, event, sides in ex.map(read, files):
-                    if event != 'create':
-                        others.append((file, sides))
-                    elif entrypath not in newest or dt > newest[entrypath][0]:
-                        newest[entrypath] = (dt, file, sides)
-            keep = ([(file, sides) for _, file, sides in newest.values()] if creations else []) + others
-            kept = {norm(file) for file, _ in keep} | {p for _, sides in keep for p in sides}
-            # A side file a column names, under every extension it is written in: spec and kwargs
-            # are written as YAML -- the one named -- and as parquet.
-            return kept | {os.path.splitext(p)[0] for p in kept}
-
         def norm(path):
             return os.path.normpath(fs._strip_protocol(path))
+
+        def sides(rows):
+            # The side files *rows* name, under every extension one is written in: spec and kwargs are
+            # written as YAML -- the one named -- and as parquet.
+            named = {norm(p) for c in cls._SIDE_COLUMNS_ if c in rows.columns
+                     for p in (side_file(v) for v in rows[c]) if p}
+            return named | {os.path.splitext(p)[0] for p in named}
 
         files = fs.find(anchor_dir) if fs.exists(anchor_dir) else []
         on = journaled(anchor)
         # An unjournaled class's creations all go; its runs' entries stay, as every class's do.
         creations = not (unjournaled and on is False and anchor not in spare and anchor.rpartition('.')[2] not in spare)
-        removed = []
-        for journal_dir in fs.glob(os.path.join(anchor_dir, '*', '.journal', '*', 'journal', '*')):
-            hash = os.path.basename(journal_dir.rstrip('/'))
-            entries = fs.glob(os.path.join(journal_dir, '*.parquet'))
-            # What is kept is what the kept entries name -- themselves and their side files -- not
-            # what their file names have in common with them.
-            kept = newest_per_entrypath(entries, creations)
-            journal_root = os.path.dirname(os.path.dirname(journal_dir.rstrip('/')))
-            for file in fs.glob(os.path.join(journal_root, '*', hash, '*')):
-                if norm(file) not in kept and os.path.splitext(norm(file))[0] not in kept:
-                    removed.append(file)
-        if not creations:
-            action = 'removed: not journaled'
+        entry_files = cls._journal_files_(fs, anchor_dir, n_workers=8, log=log) if files else []
+        frames = cls._read_files_(fs, entry_files, n_workers=8, log=log, desc=f"Reading {anchor} journal files")
+        # An unreadable file -- empty, say -- is left as it is, as `read` skips it.
+        absorbed = [(file, df.drop(columns=['entry_path'], errors='ignore'))
+                    for file, df in zip(entry_files, frames) if df is not None]
+        table = (pd.concat([df for _, df in absorbed], ignore_index=True) if absorbed else pd.DataFrame())
+        # The newest create of each entrypath of each pipeline, by its own datetime, and every entry of another event.
+        event = table['event'].fillna('create') if 'event' in table.columns else pd.Series('create', index=table.index)
+        keep = event != 'create'
+        if creations and not table.empty:
+            created = table[~keep]
+            if 'datetime' in created.columns:
+                created = created.assign(_dt_=created['datetime'].astype(str)).sort_values('_dt_', ascending=False)
+            keys = [c for c in ('hash', 'entrypath') if c in created.columns]
+            newest = created.drop_duplicates(keys) if keys else created.iloc[:1]
+            keep |= table.index.isin(newest.index)
+        kept = table[keep].reset_index(drop=True)
+        dropped = table[~keep]
+        # A side file goes with the entries naming it, unless a kept entry names it too.
+        gone, staying = sides(dropped), sides(kept)
+        side_files = [f for f in files if (names := {norm(f), os.path.splitext(norm(f))[0]}) & gone
+                      and not names & staying]
+        merged = [f for f, _ in absorbed if norm(f) != norm(compacted)]
+        if dropped.empty and len(absorbed) <= 1:
+            # One file -- its compacted one, or a single entry -- or none: as compact as it gets.
+            removed, action = [], 'unchanged'
         else:
-            action = ('compacted' if on is not None else 'compacted: class no longer imports') \
-                if removed else 'unchanged'
+            # Without a kept row the compacted file holds nothing, and goes with the rest.
+            removed = merged + side_files + ([f for f, _ in absorbed if norm(f) == norm(compacted)] if kept.empty else [])
+            action = ('removed: not journaled' if not creations and not dropped.empty
+                      else 'compacted' if on is not None else 'compacted: class no longer imports')
+            if not kept.empty:
+                cls._write_compacted_(fs, kept, compacted, dry_run=dry_run)
+        # Files only, never a directory: a pipeline left with no entries keeps its directory, empty.
         if removed and not dry_run:
-            if {norm(f) for f in removed} >= {norm(f) for f in files}:  # Nothing kept: the directory goes too.
-                fs.rm(anchor_dir, recursive=True)
-            else:
-                fs.rm(removed)
-        log.info(f"PipeJournal.UNSAFE_compact(): {anchor}: {action}, {len(removed)} of {len(files)} files"
-                 f"{' (dry run)' if dry_run else ''}")
-        return {'pipeline': anchor, 'journal': on, 'before': len(files), 'removed': len(removed),
-                'after': len(files) - len(removed), 'action': action}
+            fs.rm(removed)
+        written = not kept.empty and bool(removed) and norm(compacted) not in {norm(f) for f in files}
+        after = len(files) - len(removed) + written
+        log.info(f"PipeJournal.UNSAFE_compact(): {anchor}: {action}, {len(dropped)} of {len(table)} entries dropped, "
+                 f"{len(removed)} of {len(files)} files removed{' (dry run)' if dry_run else ''}")
+        return {'pipeline': anchor, 'journal': on, 'entries': len(table), 'dropped': len(dropped),
+                'before': len(files), 'removed': len(removed), 'after': after, 'action': action}
 
     # 4. Helpers -----------------------------------------------------------
 

@@ -423,10 +423,50 @@ def test_compact_keeps_the_newest_entry_of_each_entrypath(lake, monkeypatch):
     assert after == before and first in after[Flat(spec={'n': 1}).hash]
     entries = PipeJournal.read(PipeJournal.ANCHOR, datalake=lake)
     assert len(entries) == 3, "one per pipeline and entrypath"
-    # Each kept entry keeps its side files; the removed ones' are gone with them.
-    assert n_files % 6 == 0, "six entries, each with as many side files"
-    assert len(_journal_files(lake)) == n_files - frame['removed'].sum() == 3 * n_files // 6
-    assert PipeJournal.UNSAFE_compact(OVERRIDE=True)['removed'].sum() == 0, "compacting again removes nothing"
+    assert list(frame['dropped']) == [3] and list(frame['entries']) == [6]
+    # Its entries in one file, where the entry files were.
+    assert _journal_files(lake) == [os.path.join(PipeJournal.ANCHOR, Flat().fqcn,
+                                                 PipeJournal.COMPACTED.format(anchor=Flat().fqcn))]
+    assert len(_journal_files(lake)) == n_files - frame['removed'].sum() + 1
+    again = PipeJournal.UNSAFE_compact(OVERRIDE=True)
+    assert list(again['action']) == ['unchanged'] and again['removed'].sum() == 0, "compacting again does nothing"
+
+
+def test_compacting_again_merges_and_drops_what_was_written_since(lake):
+    for _ in range(2):
+        Flat(spec={'n': 1}).create()
+    PipeJournal.UNSAFE_compact(OVERRIDE=True)
+    for _ in range(2):
+        Flat(spec={'n': 1}).create()     # duplicates of the compacted entry
+    Flat(spec={'n': 2}).create()         # and a new pipeline
+    frame = PipeJournal.UNSAFE_compact(OVERRIDE=True)
+    assert list(frame['entries']) == [4] and list(frame['dropped']) == [2]
+    assert len(_journal_files(lake)) == 1
+    assert sorted(PipeJournal.collect()['hash']) == sorted([Flat(spec={'n': 1}).hash, Flat(spec={'n': 2}).hash])
+
+
+def test_compact_keeps_the_side_files_of_the_entries_it_keeps(lake):
+    p = Flat(spec={'n': 1})
+    entrypath = p.create().anchorkeypath
+    for note in ('older', 'newer'):
+        PipeJournal.write(p, 'create', entrypath=entrypath, note=note)     # a note in a side file of its own
+    PipeJournal.write(p, 'job:submit', entrypath=entrypath, note='a run')
+    sides = [f for f in _journal_files(lake) if f.endswith('.txt')]
+    assert len(sides) == 3
+    PipeJournal.UNSAFE_compact(OVERRIDE=True)
+    kept = PipeJournal.read(f"{PipeJournal.ANCHOR}/{p.anchor}", datalake=lake, index=None)
+    assert sorted(kept['event']) == ['create', 'job:submit']
+    assert sorted(BuildJournalEntry(row).read('note') for _, row in kept.iterrows()) == ['a run', 'newer']
+    assert len([f for f in _journal_files(lake) if f.endswith('.txt')]) == 2, "the dropped entry's note is gone"
+
+
+def test_a_compacted_pipeline_entry_is_found_by_its_hash(lake):
+    """`read_hash` looks where `PipeJournal.UNSAFE_compact` writes: not the whole journal read for one hash."""
+    for _ in range(2):
+        Flat(spec={'n': 1}).create()
+    PipeJournal.UNSAFE_compact(OVERRIDE=True)
+    found = BuildJournal.read_hash(f"{PipeJournal.ANCHOR}/{Flat().anchor}", Flat(spec={'n': 1}).hash, datalake=lake)
+    assert found is not None and list(found['event']) == ['create']
 
 
 def test_compact_unjournaled_removes_the_pipelines_not_journaled_but_spared(lake):
@@ -438,7 +478,9 @@ def test_compact_unjournaled_removes_the_pipelines_not_journaled_but_spared(lake
     assert frame.loc[Quiet().fqcn, 'action'] == 'removed: not journaled'
     assert frame.loc[Spared().fqcn, 'action'] == 'unchanged'
     assert set(PipeJournal.collect()['hash']) == {Flat().hash, Spared().hash}
-    assert not os.path.exists(os.path.join(lake, PipeJournal.ANCHOR, Quiet().anchor))
+    # Its entries gone, and its directory kept: compaction removes files, never a directory.
+    assert os.path.isdir(os.path.join(lake, PipeJournal.ANCHOR, Quiet().anchor))
+    assert not [f for f in _journal_files(lake) if f.startswith(os.path.join(PipeJournal.ANCHOR, Quiet().anchor))]
 
 
 def test_compact_asks_first(lake, monkeypatch):

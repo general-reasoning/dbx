@@ -54,39 +54,39 @@ class TestRawOtherNorm:
 
     def test_diffs_against_string(self, tmp_path):
         a, b = _built_pair(tmp_path)
-        diff = b.diffsubsig(a.subsignaturestr())
+        diff = b.diffsignature(a.signaturestr())
         assert diff == {'spec': {'x': (2, 1)}}
-        # Leaves are typed: the subsignature text says `2`, not `'2'`, because NormBlock
+        # Leaves are typed: the signature text says `2`, not `'2'`, because NormBlock
         # is not LEGACY_NORM. raw=True gives the source text back.
-        assert b.diffsubsig(a.subsignaturestr(), raw=True) == {'spec': {'x': ('2', '1')}}
+        assert b.diffsignature(a.signaturestr(), raw=True) == {'spec': {'x': ('2', '1')}}
         # recursive=False restores the flat, whole-subtree-per-key comparison
-        assert b.diffsubsig(a.subsignaturestr(), recursive=False) == {
+        assert b.diffsignature(a.signaturestr(), recursive=False) == {
             'spec': ({'x': 2}, {'x': 1})}
 
     def test_identical_norm_no_diff(self, tmp_path):
         a, b = _built_pair(tmp_path)
-        assert a.diffsubsig(a.subsignaturestr()) == {}
+        assert a.diffsignature(a.signaturestr()) == {}
 
 
 class TestJournalSelectors:
 
     def test_iloc(self, tmp_path):
         a, b = _built_pair(tmp_path)
-        assert b.diffsubsig(journal={'iloc': -1}) == {'spec': {'x': (2, 1)}}
+        assert b.diffsignature(journal={'iloc': -1}) == {'spec': {'x': (2, 1)}}
 
     def test_loc(self, tmp_path):
         a, b = _built_pair(tmp_path)
         loc = a.buildjournal().index[-1]
-        assert b.diffsubsig(journal={'loc': loc}) == {'spec': {'x': (2, 1)}}
+        assert b.diffsignature(journal={'loc': loc}) == {'spec': {'x': (2, 1)}}
 
     def test_id(self, tmp_path):
         a, b = _built_pair(tmp_path)
         id = a.buildjournal(event='build:end')['id'].iloc[-1]
-        assert b.diffsubsig(journal={'id': id}) == {'spec': {'x': (2, 1)}}
+        assert b.diffsignature(journal={'id': id}) == {'spec': {'x': (2, 1)}}
 
     def test_self_against_own_entry(self, tmp_path):
         a, b = _built_pair(tmp_path)
-        assert a.diffsubsig(journal={'iloc': -1}) == {}
+        assert a.diffsignature(journal={'iloc': -1}) == {}
 
 
 class TestSelectorValidation:
@@ -94,9 +94,9 @@ class TestSelectorValidation:
     def test_empty_raises(self, tmp_path):
         a, b = _built_pair(tmp_path)
         with pytest.raises(ValueError):
-            b.diffsubsig(journal={})
+            b.diffsignature(journal={})
 
     def test_multiple_raises(self, tmp_path):
         a, b = _built_pair(tmp_path)
         with pytest.raises(ValueError):
-            b.diffsubsig(journal={'iloc': 0, 'loc': 0})
+            b.diffsignature(journal={'iloc': 0, 'loc': 0})

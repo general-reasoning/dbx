@@ -681,8 +681,6 @@ def filter_journal_frame(df: pd.DataFrame, **filter_kwargs) -> pd.DataFrame:
                 k = 'id'
             elif k == 'subhash' and 'code' in df.columns:
                 k = 'code'
-            elif k == 'subsignature' and 'signature' in df.columns:
-                k = 'signature'
             elif k == 'date' and 'datetime' in df.columns:
                 df = df[_journal_date_mask_(_journal_datetimes_(df['datetime']), v)]
                 continue
@@ -1449,9 +1447,9 @@ def normalize_journal_frame(df: pd.DataFrame) -> pd.DataFrame:
     # happens on every read.
     type_col = col('type').where(modern, col('signature').where(middle, col('hashstr')))
     # where(), not fillna(): fillna on an object column warns that its downcast will change.
-    subsignature = col('subsignature')
+    middle_signature = col('subsignature')
     sig_col = col('signature').where(
-        modern, subsignature.where(subsignature.notna(), col('norm')).where(middle, col('norm')))
+        modern, middle_signature.where(middle_signature.notna(), col('norm')).where(middle, col('norm')))
 
     df = df.copy()
     df['type'] = type_col
@@ -2342,10 +2340,9 @@ class Pretty:
         too. The column may hold the text or the path of a file carrying it,
         depending on when the row was written.
         """
-        for name in ('signature', 'subsignature', 'norm'):
-            val = entry.read(name, safe=True)
-            if val:
-                return val
+        val = entry.read('signature', safe=True)
+        if val:
+            return val
         raw = BuildJournalEntry.column(entry, 'signature')
         return str(raw) if raw is not None else None
 
@@ -2518,7 +2515,6 @@ class BuildJournalEntry(pd.Series):
     # rename still resolves, and one written after does not pay for the
     # fallback.
     COLUMN_CHAINS = {
-        'subsignature': ('subsignature', 'norm'),
         'note': ('note', 'message'),
         'signature': ('signature', 'subsignature', 'norm'),
         'type': ('type', 'signature', 'hashstr'),
@@ -2541,7 +2537,7 @@ class BuildJournalEntry(pd.Series):
 
     def read(self, *things, raw: bool = False, deslash: bool = False, safe: bool = False):
         def read_thing(thing):
-            target_attr = 'subsignature' if thing in ('subsignature', 'norm') else ('note' if thing in ('note', 'message') else thing)
+            target_attr = 'signature' if thing == 'norm' else ('note' if thing in ('note', 'message') else thing)
             # The COLUMN, not the accessor: the Datablock-shaped accessors are
             # methods now, and getattr would hand back a bound method whose
             # str() is its repr rather than the path the column holds.
@@ -2659,7 +2655,7 @@ class BuildJournalEntry(pd.Series):
 
             i = entry.inst(remote=True)
             i.hash        # == entry.hash, unlike the local inst()
-            i.subsignaturestr()      # forwarded to the worker, result returned here
+            i.signaturestr()         # forwarded to the worker, result returned here
 
         *handle* reuses an existing `remote` worker instead of starting one
         per call; it is the caller's job to ensure it was pinned compatibly.
@@ -2965,6 +2961,10 @@ class BuildJournal:
     executor -- and `session_entries` reads it back.
     """
 
+    # What `diff` compares, and what it shows for a hash that lacks a row's key.
+    DIFF_MODES = ('signature', 'topics', 'version', 'ops')
+    DIFF_NA = 'N/A'
+
     # 1. Protocol and hooks ------------------------------------------------
 
     def __init__(self):
@@ -3248,6 +3248,58 @@ class BuildJournal:
             return None
         df = cls._normalize_columns_(pd.concat(dfs, ignore_index=True))
         return BuildJournalFrame(df, storage_options=storage_options, hash=hash)
+
+    @classmethod
+    def diff(cls, mode='signature', *hashes, anchor, transpose: bool = False, datalake=None,
+             storage_options=None, log=None, n_workers=None) -> pd.DataFrame:
+        """How the datablocks *hashes* of *anchor*'s journal differ, as a frame: a column per hash, a row per difference.
+
+        *mode* says what is compared:
+
+            'signature'  the recorded signature, parsed, one row per leaf -- `spec.x`, `spec.up.spec.y`
+            'topics'     the recorded TOPICS, one row per leaf topic that NOT every hash declares
+            'version'    the recorded `version`, one row
+            'ops'        the recorded ops -- the operational kwargs -- one row per leaf
+
+        A row is listed only when its values are not all the same, and a hash
+        lacking that row's key holds `DIFF_NA`. Values are compared by their
+        `repr`, so `1` and `'1'` differ, as they do in a signature. 'topics'
+        lists the topics missing from some hash and no others: one that every
+        hash declares is there in each, whatever its file is called. Nothing
+        differing is an empty frame, its columns still the hashes.
+
+        A hash may be given by any prefix no other hash of the journal shares.
+        Each is read from its newest entry, which is the only one that matters
+        for 'ops': a hash's signature, topics and version are the same in every
+        entry, its ops are not. The whole of *anchor*'s journal is read to find
+        them. *transpose* puts the hashes in the rows instead.
+        """
+        if mode not in cls.DIFF_MODES:
+            raise ValueError(f"BuildJournal.diff: unknown mode {mode!r}: one of {cls.DIFF_MODES}")
+        if len(hashes) < 2:
+            raise ValueError(f"BuildJournal.diff: needs at least two hashes to compare, got {len(hashes)}")
+        frame = cls.read(anchor, datalake=datalake, storage_options=storage_options, log=log,
+                         n_workers=n_workers, index=None)
+        known = list(dict.fromkeys(frame['hash'])) if 'hash' in frame.columns else []
+        leaves = {}
+        for given in hashes:
+            matches = [h for h in known if str(h).startswith(given)]
+            if len(matches) != 1:
+                raise LookupError(f"BuildJournal.diff: {anchor}'s journal holds {len(matches)} hashes "
+                                  f"starting with {given!r}, not one")
+            entry = BuildJournalEntry(frame[frame['hash'] == matches[0]].iloc[0].dropna(),
+                                      storage_options=frame.storage_options)
+            leaves[given] = cls._diff_leaves_(entry, mode)
+        rows = list(dict.fromkeys(key for values in leaves.values() for key in values))
+        if mode == 'topics':
+            differing = [key for key in rows if not all(key in values for values in leaves.values())]
+        else:
+            differing = [key for key in rows
+                         if len({repr(values.get(key, cls.DIFF_NA)) for values in leaves.values()}) > 1]
+        diff = pd.DataFrame({given: [values.get(key, cls.DIFF_NA) for key in differing]
+                             for given, values in leaves.items()},
+                            index=pd.Index(differing, name=mode), dtype=object)
+        return diff.T if transpose else diff
 
     @classmethod
     def read_frame(cls, paths, *, storage_options=None, log=None, n_workers=None,
@@ -3611,6 +3663,27 @@ class BuildJournal:
         return self._session
 
     # 4. Helpers -----------------------------------------------------------
+
+    @staticmethod
+    def _diff_leaves_(entry, mode) -> dict:
+        """What `diff` compares of *entry* under *mode*, flattened: `{dotted path: value}`."""
+        def flatten(node, prefix, out, sep):
+            if isinstance(node, dict) and node:
+                for key, child in node.items():
+                    flatten(child, prefix + (str(key),), out, sep)
+            elif prefix:
+                out[sep.join(prefix)] = node
+            return out
+
+        if mode == 'version':
+            return {'version': entry.get('version')}
+        if mode == 'topics':
+            topics = entry.pretty.TOPICS
+            return flatten(topics, (), {}, '/') if isinstance(topics, dict) else {}
+        if mode == 'ops':
+            ops = entry.read('ops')
+            return flatten(ops, (), {}, '.') if isinstance(ops, dict) else {}
+        return flatten(entry.pretty.signature(), (), {}, '.')
 
     @staticmethod
     def _block_record_(block) -> dict:

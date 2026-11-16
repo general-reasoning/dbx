@@ -17,7 +17,16 @@ All notable changes to this project will be documented in this file.
   journal spans the rename -- and compaction still keeps the `kwargs` side files older entries name. `Pretty` gains
   `spec` and `ops`, the recorded dicts, as `Datablock`'s.
 
+### Removed
+- **"subsig", the old name for the signature.** `subsignaturestr`, `subsignature`, `subsig`, `subsigstr`,
+  `diffsubsignature` and `diffsubsig` are gone: use `signaturestr`, `signature`, `sigstr`, `diffsignature`/`diffsig`.
+  `Datablock.Diff` names its first part `signature`, not `subsig`. `entry.read('subsignature')` and the
+  `subsignature=` journal filter are gone too; `entry.read('signature')` still finds a signature recorded in an old
+  `subsignature` or `norm` column.
+
 ### Added
+- **`BuildJournal.diff(mode, *hashes, anchor=...)`: datablocks side by side.** A frame with a column per hash and a row
+  per difference, in the recorded `signature`, `topics` (those some hash lacks), `version` or `ops`. See JOURNALS.md.
 - **`DBX_DIRTY=True`: the working tree, as it is.** One variable for the pair a dirty run needs,
   `DBX_USE_WORK_REPO=False` and `DBX_DIRTY_REPO_OK=True`; set when `dbx.databits` is imported, so every reader and
   every child process sees them, and it overrides a `DBX_USE_WORK_REPO=True` a shell profile exports.

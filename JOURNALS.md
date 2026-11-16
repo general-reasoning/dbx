@@ -373,6 +373,28 @@ which is already imported. So if `dbx`'s rendering has changed since the
 entry was written, the local instance comes back with a different hash and
 paths that hold nothing. Use `rinst()` when that matters.
 
+### Diffing hashes
+
+`BuildJournal.diff(mode, *hashes, anchor=..., transpose=False, datalake=None)`
+puts datablocks of one anchor side by side: a column per hash, a row per
+difference. Each hash is read from its newest entry, and may be given by any
+prefix that no other hash in the journal shares. A hash that lacks a row's key
+shows `N/A`.
+
+| `mode` | rows |
+|---|---|
+| `'signature'` | each leaf of the recorded signature whose values differ: `spec.x`, `spec.up.spec.y` |
+| `'topics'` | each leaf topic that some hash does not declare |
+| `'version'` | `version`, when it differs |
+| `'ops'` | each leaf of the recorded ops whose values differ |
+
+```python
+BuildJournal.diff('signature', '2e3ec8ff', '3c293846', anchor='demo_blocks.Apple')
+#           2e3ec8ff  3c293846
+# signature
+# spec.n           2         1
+```
+
 `entry.pretty` is read **off the row**, not recomputed:
 
 ```python

@@ -673,8 +673,8 @@ class TestRestructuredRedirect:
         j_target = src_block.buildjournal(event='redirection:target', loc=0)
         assert j_target.read('message') == j_source.pretty.id
 
-        # Check subsignature does NOT include _paths_ when redirecting to code
-        assert '_paths_' not in b.subsignaturestr()
+        # Check the signature does NOT include _paths_ when redirecting to code
+        assert '_paths_' not in b.signaturestr()
 
     def test_redirect_to_filter(self, tmp_path, source):
         src_block, code = source

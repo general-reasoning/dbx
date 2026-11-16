@@ -117,12 +117,12 @@ class TestModernNormQuotesStrings:
 class TestOptionalRootkwargs:
 
     def test_legacy_norm_includes_rootkwargs(self):
-        """When LEGACY_NORM is True, _rootkwargs_ (url, etc.) is included in norm/subsignature."""
+        """When LEGACY_NORM is True, _rootkwargs_ (url, etc.) is included in norm/signature."""
         blk = _pin(LegacyBlock)
         assert "url=" in blk.normstr()
 
     def test_modern_norm_omits_rootkwargs(self):
-        """When LEGACY_NORM is False (default), _rootkwargs_ is omitted from norm/subsignature."""
+        """When LEGACY_NORM is False (default), _rootkwargs_ is omitted from norm/signature."""
         blk = _pin(ModernBlock)
         assert "url=" not in blk.normstr()
 

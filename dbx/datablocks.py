@@ -144,7 +144,7 @@ class _SentinelMeta_(type):
 class ABSENT(metaclass=_SentinelMeta_):
     """Marks a key present on only ONE side of a `Datablock.diffsig`.
 
-    Needed because diffsubsig reports typed values: a key whose value *is* `None`
+    Needed because diffsignature reports typed values: a key whose value *is* `None`
     and a key that is missing entirely would otherwise both come back as
     `None`, which are very different findings -- "this setting changed to None"
     versus "this setting did not exist when that build ran".
@@ -1701,7 +1701,7 @@ class Datablock:
     #     indistinguishable from a different url plus a different anchor;
     #   * spec values -- a non-string was rendered `repr()`-then-dict-repr'd
     #     (int 5 -> "'5'") while a string was dict-repr'd once ('5' -> "'5'"),
-    #     so `n=5` and `n='5'` produced the SAME subsiganture.
+    #     so `n=5` and `n='5'` produced the SAME signature.
     #
     # LEGACY_NORM=False (the default, i.e. every NEW subclass) quotes strings
     # and reprs spec values exactly once, which removes both collisions -- and
@@ -2453,7 +2453,7 @@ class Datablock:
     # keeps 'tag_version_shorthash': a tablet's tag has always been in its path.
     KEYBY = 'version_shorthash'
 
-    Diff = collections.namedtuple('Diff', ['subsig', 'topics', 'version'])
+    Diff = collections.namedtuple('Diff', ['signature', 'topics', 'version'])
 
     #SPECIALIZE: BEGIN
     # The events that count as "this hash has data": a build, a copy of one
@@ -3047,7 +3047,7 @@ class Datablock:
             for k, v in spec.items():
                 value = getattr(self.var, k)
                 _spec_[k] = repr(value)
-        elif expansion in ('signature', 'subsignature'):
+        elif expansion == 'signature':
             for k, v in spec.items():
                 raw_v = self.spec[k] if (isinstance(getattr(self, 'spec', None), dict) and k in self.spec) else v
                 if not self.is_specline(raw_v) and hasattr(self, 'var') and hasattr(self.var, '__dict__'):
@@ -5030,10 +5030,6 @@ class Datablock:
         self.log.detailed(f"signature: ------------>{sig=}")
         return sig
 
-    def subsignaturestr(self, *args, **kwargs):
-        """Alias for `signaturestr` for backwards compatibility."""
-        return self.signaturestr(*args, **kwargs)
-
     def normstr(self, *args, **kwargs):
         """Alias for `signaturestr` for backwards compatibility."""
         return self.signaturestr(*args, **kwargs)
@@ -5054,10 +5050,10 @@ class Datablock:
         if isinstance(other_signature, Datablock):
             other_signature = other_signature.signaturestr(legacy=legacy)
         elif isinstance(other_signature, BuildJournalEntry):
-            other_signature = other_signature.read('signature') or other_signature.read('subsignature') or other_signature.read('norm') or ''
+            other_signature = other_signature.read('signature') or ''
         elif (other_signature is None or other_signature is ABSENT) and journal is not None:
             _entry = self._journal_entry_(journal)
-            other_signature = _entry.read('signature') or _entry.read('subsignature') or _entry.read('norm') or ''
+            other_signature = _entry.read('signature') or ''
 
         def present(value):
             if value is ABSENT:
@@ -5093,7 +5089,7 @@ class Datablock:
         parsed_self  = Datablock._parse_signature_(self.signaturestr(legacy=legacy))
         parsed_other = Datablock._parse_signature_(other_signature or '')
 
-        def _normalize_subsig_dict(d):
+        def _normalize_signature_dict(d):
             if 'spec' not in d and d:
                 root_keys = {'datalake', 'url', 'local', 'local_must_exist', 'storage_options', 'anchor', 'tag', 'revision', 'keyby', 'uuid16', 'redirect', 'validate_vars'}
                 spec_part = {}
@@ -5109,9 +5105,9 @@ class Datablock:
             return d
 
         if 'spec' in parsed_self and 'spec' not in parsed_other:
-            parsed_other = _normalize_subsig_dict(parsed_other)
+            parsed_other = _normalize_signature_dict(parsed_other)
         elif 'spec' not in parsed_self and 'spec' in parsed_other:
-            parsed_self = _normalize_subsig_dict(parsed_self)
+            parsed_self = _normalize_signature_dict(parsed_self)
 
         if recursive:
             parsed_self = {k: self._structure_signatureval_(v) for k, v in parsed_self.items()}
@@ -5121,14 +5117,8 @@ class Datablock:
             return diff
         return self.format_diff(diff, maxlen=maxlen)
 
-    def diffsubsignature(self, *args, **kwargs):
-        return self.diffsignature(*args, **kwargs)
-
     def diffsig(self, *args, **kwargs):
         """Alias for `diffsignature`."""
-        return self.diffsignature(*args, **kwargs)
-
-    def diffsubsig(self, *args, **kwargs):
         return self.diffsignature(*args, **kwargs)
 
     def diffnorm(self, *args, **kwargs):
@@ -5162,20 +5152,11 @@ class Datablock:
     def sig(self, *, legacy: 'bool | None' = None, deslash: bool = False) -> dict:
         return self.signature(legacy=legacy, deslash=deslash)
 
-    def subsignature(self, *, legacy: 'bool | None' = None, deslash: bool = False) -> dict:
-        return self.signature(legacy=legacy, deslash=deslash)
-
-    def subsig(self, *, legacy: 'bool | None' = None, deslash: bool = False) -> dict:
-        return self.signature(legacy=legacy, deslash=deslash)
-
     def norm(self, *args, **kwargs):
         return self.signature(*args, **kwargs)
 
     def sigstr(self, *, deslash: bool = False, legacy: bool | None = None, pretty: bool = True):
         """Alias for `signaturestr` (defaults to pretty=True)."""
-        return self.signaturestr(deslash=deslash, legacy=legacy, pretty=pretty)
-
-    def subsigstr(self, *, deslash: bool = False, legacy: bool | None = None, pretty: bool = True):
         return self.signaturestr(deslash=deslash, legacy=legacy, pretty=pretty)
 
     def type(self, *, deslash: bool = False, legacy: 'bool | None' = None,
@@ -5249,7 +5230,7 @@ class Datablock:
             side from *journal*.
         journal:
             Selector dict for the journal entry to compare against, as
-            `diffsubsig`. Note that a journal records a list-`TOPICS`
+            `diffsignature`. Note that a journal records a list-`TOPICS`
             block as a mapping of `DIRTOPIC`, so a list declaration and the
             equivalent dict one are indistinguishable once written -- against an
             entry they compare equal, against the live block they do not.
@@ -5297,7 +5278,7 @@ class Datablock:
             `VERSION`). Omit it to read the other side from *journal*.
         journal:
             Selector dict for the journal entry to compare against, as
-            `diffsubsig`.
+            `diffsignature`.
         """
         if other_version is ABSENT:
             if journal is None:
@@ -5322,7 +5303,7 @@ class Datablock:
         """Diff this block against another across all three signature components."""
         if other is not ABSENT and not isinstance(other, (Datablock, BuildJournalEntry)) and journal is None:
             raise TypeError(f"diff requires a Datablock or BuildJournalEntry, got {type(other).__name__}: {other!r}")
-        subsig = self.diffsubsignature(other, journal=journal, report=report, maxlen=maxlen, **kwargs)
+        signature = self.diffsignature(other, journal=journal, report=report, maxlen=maxlen, **kwargs)
 
         topics = self.difftopics(other, journal=journal, report=report, maxlen=maxlen)
         version = self.diffversion(other, journal=journal)
@@ -5330,7 +5311,7 @@ class Datablock:
             version = f"self : {version[0]!r}\nother: {version[1]!r}"
         elif report:
             version = "no differences"
-        return self.Diff(subsig, topics, version)
+        return self.Diff(signature, topics, version)
 
     @classmethod
     def format_diff(cls, diff: dict, *, maxlen: 'int | None' = 160) -> str:
@@ -7886,10 +7867,6 @@ class Datablock:
             if parsed:
                 return {k: cls._structure_signatureval_(v) for k, v in parsed.items()}
         return value
-
-    @classmethod
-    def _structure_subsignatureval_(cls, value):
-        return cls._structure_signatureval_(value)
 
 
     def _journal_entry_(self, journal: dict) -> 'BuildJournalEntry':

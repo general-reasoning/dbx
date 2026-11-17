@@ -88,11 +88,23 @@ def sc_representation(name, **ops) -> SCRepresentationPipeline:
   pipeline, the pipeline defines the Datablock tree, and `.entry` is the
   tree's root. So `xxx(name)` alone identifies the whole tree;
   `xxx(name, **ops)` adds how to build it.
-- **Usage examples go in one `"""` block directly above each pipeline
-  function.** The block holds several `dbx.pprint "pkg.pipelines.xxx(name, ...)"`
-  lines covering the presets and the common calls: the pipeline itself,
-  `.entry.cite()`, `.entry.build_tree()` (with the ops you'd actually use),
-  and `.entry.read(topic)`. Each line should run as written from a shell.
+- **The entrypoint examples: one `"""` block directly above each pipeline
+  function.** "The entrypoint examples" (of `xxx()`) means this block, and an
+  example in it is a `dbx.pprint "pkg.pipelines.xxx(name, ...)"` line unless
+  explicitly said otherwise. It covers the presets and the common calls: the
+  pipeline itself, `.entry.cite()`, `.entry.build_tree()` (with the ops you'd
+  actually use), and `.entry.read(topic)`. Each line should run as written from
+  a shell.
+  - **A run worth repeating gets its own example, as run**: one per model,
+    dataset or preset, with the ops and runner arguments it was built with
+    (its build journal records them), not one line and a comment naming the
+    others.
+  - **Layout:** a blank line before each new group (a model, a dataset), its
+    comment one short line, the model first (`# Cosmos3-Nano, hard nuPlan set,
+    as run`); shell variables (`Q="..."`) name a pipeline once for the lines
+    that follow.
+  - **No references to the CHANGELOG** (or other status documents): the
+    examples say what a run is, not where its results were written up.
 - **The pipeline VAR, and only it, defines the tree's VARs.** Every value that
   reaches a datablock's `spec` in `__create__` comes from `self.var`. Don't read
   the environment, module globals, files or `ops` there. A pipeline is then

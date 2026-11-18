@@ -41,6 +41,7 @@ import shutil
 import sys
 import traceback
 import tempfile
+import types
 import threading
 from typing import Callable, Optional, Union
 import uuid
@@ -4592,7 +4593,8 @@ class Datablock:
                 for topic in topics_iter:
                     self._UNSAFE_copy_topic_(
                         topic, anchorkeypath, topicpaths=topicpaths,
-                        always_copy_whole_dirpath=always_copy_whole_dirpath, **kwargs,
+                        always_copy_whole_dirpath=always_copy_whole_dirpath, show_progress=show_progress,
+                        **kwargs,
                     )
 
             self.write_journal_entry(event="UNSAFE_copy_from:END", note=anchorkeypath, inline_note=True)
@@ -4733,7 +4735,8 @@ class Datablock:
             for topic, target in items_iter:
                 shipped.update(self._UNSAFE_ship_topic_(topic, target,
                                                         overwrite=overwrite,
-                                                        relocate=relocate))
+                                                        relocate=relocate,
+                                                        show_progress=show_progress))
             self.log.verbose(f"Shipping topics: END ({note})")
             self.write_journal_entry(event="UNSAFE_ship:END", note=note, inline_note=True)
         except Exception as e:
@@ -7163,13 +7166,15 @@ class Datablock:
             row = j.iloc[0]
             return BuildJournalEntry(row.dropna(), storage_options=self.storage_options)
 
-    def _UNSAFE_copy_fs_(self, *, src_path, dst_path, recursive: bool = False):
+    def _UNSAFE_copy_fs_(self, *, src_path, dst_path, recursive: bool = False, show_progress: bool = False):
         """Copy a single file or directory between two fsspec paths.
 
         fsspec does not implement a generic cross-filesystem `.copy()`, so
         this dispatches to put/get directly when either side is local, and
-        falls back to a temporary local directory when both are remote.
+        falls back to a temporary local directory when both are remote. With
+        *show_progress*, a directory's copy shows a bar of its bytes and files.
         """
+        desc = os.path.basename(str(src_path).rstrip('/')) if show_progress else None
         src_fs, _ = self._url_to_fs_(src_path)
         dst_fs, _ = self._url_to_fs_(dst_path)
 
@@ -7178,14 +7183,23 @@ class Datablock:
         if dst_dir:
             dst_fs.makedirs(dst_dir, exist_ok=True)
 
+        # A directory goes file by file, its contents into *dst_path*: fsspec's SFTP `put_file` and `get_file` take
+        # no directory -- a recursive `put` handed it the directory itself, which paramiko opened as a file -- and
+        # file by file is what every filesystem does, so the contents land the same way on each.
         if 'file' in src_fs.protocol or 'file' in dst_fs.protocol:
             # At least one is local filesystem, use put/get directly
             if 'file' in src_fs.protocol:
                 # Source is local, destination is remote
-                dst_fs.put(src_path, dst_path, recursive=recursive)
+                if recursive and src_fs.isdir(src_path):
+                    self._put_tree_(src_path, dst_fs, dst_path, desc=desc)
+                else:
+                    dst_fs.put(src_path, dst_path, recursive=recursive)
             else:
                 # Source is remote, destination is local
-                src_fs.get(src_path, dst_path, recursive=recursive)
+                if recursive and src_fs.isdir(src_path):
+                    self._get_tree_(src_fs, src_path, dst_path, desc=desc)
+                else:
+                    src_fs.get(src_path, dst_path, recursive=recursive)
         else:
             # Both are remote, use temporary directory
             with tempfile.TemporaryDirectory() as tmpdir:
@@ -7193,8 +7207,62 @@ class Datablock:
                 if not basename:
                     basename = "root"
                 tmp_path = os.path.join(tmpdir, basename)
-                src_fs.get(src_path, tmp_path, recursive=recursive)
-                dst_fs.put(tmp_path, dst_path, recursive=recursive)
+                if recursive and src_fs.isdir(src_path):
+                    self._get_tree_(src_fs, src_path, tmp_path, desc=desc and f"{desc} (get)")
+                    self._put_tree_(tmp_path, dst_fs, dst_path, desc=desc and f"{desc} (put)")
+                else:
+                    src_fs.get(src_path, tmp_path, recursive=recursive)
+                    dst_fs.put(tmp_path, dst_path, recursive=recursive)
+
+    @staticmethod
+    def _put_tree_(local_dirpath, dst_fs, dst_path, *, desc: str | None = None):
+        """Each file under the local directory *local_dirpath* to the same place under *dst_path* on *dst_fs*; with
+        *desc*, a bar of the bytes sent, and the files, so named."""
+        base = dst_fs._strip_protocol(str(dst_path)).rstrip('/')
+        files = []
+        for root, _, names in os.walk(str(local_dirpath)):
+            rel = os.path.relpath(root, str(local_dirpath))
+            remote = base if rel == '.' else f"{base}/{rel}"
+            dst_fs.makedirs(remote, exist_ok=True)
+            files += [(os.path.join(root, name), f"{remote}/{name}") for name in names]
+        with Datablock._tree_bar_(desc, files, lambda local, _: os.path.getsize(local)) as bar:
+            for local, remote in files:
+                dst_fs.put_file(local, remote)
+                bar.sent(os.path.getsize(local))
+
+    @staticmethod
+    def _get_tree_(src_fs, src_path, local_dirpath, *, desc: str | None = None):
+        """Each file under *src_path* on *src_fs* to the same place under the local directory *local_dirpath*; with
+        *desc*, a bar of the bytes received, and the files, so named."""
+        base = src_fs._strip_protocol(str(src_path)).rstrip('/')
+        sizes = src_fs.find(base, detail=True)
+        files = [(path, os.path.join(str(local_dirpath), os.path.relpath(path, base))) for path in sizes]
+        with Datablock._tree_bar_(desc, files, lambda remote, _: sizes[remote].get('size') or 0) as bar:
+            for remote, local in files:
+                os.makedirs(os.path.dirname(local), exist_ok=True)
+                src_fs.get_file(remote, local)
+                bar.sent(sizes[remote].get('size') or 0)
+
+    @staticmethod
+    @contextlib.contextmanager
+    def _tree_bar_(desc: str | None, files: list, size):
+        """A bar over *files* -- `(src, dst)` pairs, *size* of each -- in bytes, its postfix the files done; a no-op
+        without *desc*. Yields an object whose `sent(n)` counts a file of n bytes."""
+        if desc is None:
+            yield types.SimpleNamespace(sent=lambda n: None)
+            return
+        bar = tqdm.tqdm(total=sum(size(*f) for f in files), desc=desc, unit='B', unit_scale=True)
+        done = [0]
+
+        def sent(n):
+            done[0] += 1
+            bar.update(n)
+            bar.set_postfix_str(f"{done[0]}/{len(files)} files", refresh=False)
+
+        try:
+            yield types.SimpleNamespace(sent=sent)
+        finally:
+            bar.close()
 
     def _UNSAFE_copy_file_(self, src_path, dst_path):
         """Copy a single file, preferring a fast server-side blob copy.
@@ -7265,8 +7333,9 @@ class Datablock:
         """
         return getattr(self, 'worker_parallelization', None) or getattr(self, 'parallelization', None)
 
-    def _UNSAFE_copy_topic_dir_(self, topic, anchorkeypath, *, topicpaths=None):
-        """Copy the entire .dirpath(topic) directory."""
+    def _UNSAFE_copy_topic_dir_(self, topic, anchorkeypath, *, topicpaths=None, show_progress: bool = False):
+        """Copy the entire .dirpath(topic) directory; with *show_progress*, a bar of its bytes and files where it goes
+        file by file."""
         topic = self._normtopic_((topic,))
         if topicpaths is not None:
             _src_path = self._topicpaths_lookup_(topicpaths, topic)
@@ -7325,10 +7394,10 @@ class Datablock:
                 ]
                 _executor.exec_callables(_callables)
         else:
-            self._UNSAFE_copy_fs_(src_path=src_path, dst_path=dst_path, recursive=True)
+            self._UNSAFE_copy_fs_(src_path=src_path, dst_path=dst_path, recursive=True, show_progress=show_progress)
 
     def _UNSAFE_ship_topic_(self, topic, target, *, overwrite: bool = False,
-                            relocate: dict | None = None):
+                            relocate: dict | None = None, show_progress: bool = False):
         """Copy one topic OUT to *target*. Returns `{topic: target}` as shipped.
 
         The outbound counterpart of `_UNSAFE_copy_topic_`, and the same
@@ -7348,7 +7417,7 @@ class Datablock:
                 leaf = self._normtopic_((leaf,))
                 sub = self._UNSAFE_ship_topic_(
                     leaf, os.path.join(str(target), *leaf[len(topic):]),
-                    overwrite=overwrite, relocate=relocate)
+                    overwrite=overwrite, relocate=relocate, show_progress=show_progress)
                 out.update(sub)
             return {topic[0]: out} if len(topic) == 1 else out
 
@@ -7396,7 +7465,7 @@ class Datablock:
             # level deep -- `<target>/<topic>/...` instead of `<target>/...`.
             self._UNSAFE_copy_fs_(src_path=f"{str(src_path).rstrip('/')}/" if is_dir
                                   else src_path,
-                                  dst_path=target, recursive=is_dir)
+                                  dst_path=target, recursive=is_dir, show_progress=show_progress)
             return self._nest_topic_path_(topic, target)
         finally:
             if made:
@@ -7433,7 +7502,8 @@ class Datablock:
             out = {name: out}
         return out
 
-    def _UNSAFE_copy_topic_(self, topic, anchorkeypath, *, topicpaths=None, always_copy_whole_dirpath: bool = False, **kwargs):
+    def _UNSAFE_copy_topic_(self, topic, anchorkeypath, *, topicpaths=None, always_copy_whole_dirpath: bool = False,
+                            show_progress: bool = False, **kwargs):
         """Copy one topic's data from anchorkeypath into this Datablock.
 
         Dispatches to `_UNSAFE_copy_topic_dir_` or
@@ -7455,7 +7525,7 @@ class Datablock:
             for leaf in self._leaves_under_(*topic):
                 self._UNSAFE_copy_topic_(leaf, anchorkeypath, topicpaths=topicpaths,
                                          always_copy_whole_dirpath=always_copy_whole_dirpath,
-                                         **kwargs)
+                                         show_progress=show_progress, **kwargs)
             return
         if self._is_syntopic_(*topic):
             # No location on either side -- there is nothing to copy.
@@ -7472,7 +7542,7 @@ class Datablock:
         )
         if use_dir:
             with self.log.section(f"Using copy_topic_dir for topic {topic}"):
-                self._UNSAFE_copy_topic_dir_(topic, anchorkeypath, topicpaths=topicpaths)
+                self._UNSAFE_copy_topic_dir_(topic, anchorkeypath, topicpaths=topicpaths, show_progress=show_progress)
         else:
             with self.log.section(f"Using copy_topic_file for topic {topic}"):
                 self._UNSAFE_copy_topic_file_(topic, anchorkeypath, topicpaths=topicpaths)

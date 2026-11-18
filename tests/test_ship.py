@@ -8,7 +8,9 @@ import json
 import os
 import pathlib
 
+import fsspec
 import pytest
+from fsspec.implementations.memory import MemoryFileSystem
 
 from dbx.datablocks import DATADIR, DATAFILE, SYNTHETIC, Datablock
 
@@ -252,3 +254,64 @@ def test_ship_tag_ships_only_the_topics_named_and_to_a_url(tmp_path):
 def test_ship_tag_refuses_a_block_without_a_tag(block, tmp_path):
     with pytest.raises(ValueError, match='no tag'):
         block.UNSAFE_ship_tag(str(tmp_path / 'shared'), OVERRIDE=True)
+
+
+class _DirlessFS_(MemoryFileSystem):
+    """An in-memory filesystem whose `put_file` and `get_file` take no directory, as fsspec's SFTP's do: a recursive
+    `put` that hands them one fails as `UNSAFE_ship` to Lambda did (2026-11-18), paramiko opening it as a file."""
+    protocol = ('dirless',)
+
+    @classmethod
+    def _strip_protocol(cls, path):
+        path = str(path)
+        return super()._strip_protocol('memory://' + path[len('dirless://'):] if path.startswith('dirless://') else path)
+
+    def put_file(self, lpath, rpath, **kwargs):
+        if os.path.isdir(lpath):
+            raise IsADirectoryError(lpath)
+        return super().put_file(lpath, rpath, **kwargs)
+
+    def get_file(self, rpath, lpath, **kwargs):
+        if self.isdir(rpath):
+            raise IsADirectoryError(rpath)
+        return super().get_file(rpath, lpath, **kwargs)
+
+
+@pytest.fixture
+def dirless():
+    fsspec.register_implementation('dirless', _DirlessFS_, clobber=True)
+    fs = fsspec.filesystem('dirless')
+    fs.store.clear()
+    del fs.pseudo_dirs[1:]                  # the directories earlier tests made: '' alone, the root, stays
+    return fs
+
+
+@pytest.mark.pinned
+def test_a_directory_topic_ships_to_a_filesystem_that_takes_files_only(block, dirless):
+    """A directory topic ships file by file, so a filesystem whose put_file takes no directory -- SFTP's -- gets its
+    contents, at the target, not the directory handed over as one file."""
+    block.UNSAFE_ship({'configs': 'dirless:///lake/configs', 'facts': 'dirless:///lake/facts.json'}, OVERRIDE=True,
+                      show_progress=False)
+    got = sorted(p.lstrip('/') for p in dirless.find('/lake'))
+    assert got == ['lake/configs/data/bc.yaml', 'lake/facts.json'], got
+
+
+@pytest.mark.pinned
+def test_a_directory_topic_is_copied_in_from_a_filesystem_that_takes_files_only(block, dirless, tmp_path):
+    """And back: `UNSAFE_copy_from` an anchorkeypath there gets each file, the directory topic's included."""
+    root = 'dirless:///lake/' + os.path.basename(block.anchorkeypath)
+    rel = lambda t: os.path.relpath(block.path(t), block.anchorkeypath)
+    block.UNSAFE_ship({'configs': f"{root}/{rel('configs')}", 'facts': f"{root}/{rel('facts')}"}, OVERRIDE=True,
+                      show_progress=False)
+    copy = Cfg(datalake=str(tmp_path / 'other'))
+    copy.UNSAFE_copy_from(root, OVERRIDE=True, show_progress=False)
+    assert copy.valid()
+    assert (pathlib.Path(copy.path('configs')) / 'data' / 'bc.yaml').read_text() == 'source: abfss://x\n'
+    assert copy.read('facts') == {'windows': 321337}
+
+
+def test_a_directory_topic_ships_with_a_bar_of_its_bytes_and_files(block, dirless, capsys):
+    """`show_progress` shows a directory's copy file by file: its bytes, and how many of its files are done."""
+    block.UNSAFE_ship({'configs': 'dirless:///lake/configs'}, OVERRIDE=True, show_progress=True)
+    err = capsys.readouterr().err
+    assert '1/1 files' in err, err

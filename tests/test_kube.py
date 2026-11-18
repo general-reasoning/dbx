@@ -44,11 +44,13 @@ def entry_points(monkeypatch):
 
 
 class FakeKubectl:
-    """What kubectl was asked, and the Job status it reports."""
+    """What kubectl was asked, and the Job status it reports; each Job's pods, one running by default, or *pods*'
+    statuses, `{job name: [pod status, ...]}`."""
 
     def __init__(self, conditions=(), fail_create=False):
         self.calls, self.created, self.conditions, self.fail_create = [], [], list(conditions), fail_create
         self.deleted = set()
+        self.pods = {}
 
     def __call__(self, context, *args, input=None):
         self.calls.append((context, args))
@@ -67,8 +69,12 @@ class FakeKubectl:
                                           'status': {'conditions': [{'type': 'QuotaReserved', 'status': 'False',
                                                                      'message': 'insufficient quota for cpu'}]}}
                                          for j in self.created if self.conditions == ['Pending']]})
+        if 'get' in args and 'pod' in args:
+            names = [j['metadata']['name'] for j in self.created if j['metadata']['name'] not in self.deleted]
+            return json.dumps({'items': [{'metadata': {'labels': {'job-name': n}}, 'status': st}
+                                         for n in names for st in self.pods.get(n, [{'phase': 'Running'}])]})
         if 'get' in args and 'job' in args:
-            return json.dumps({'items': [{**j, 'status': {}} for j in self.created]})
+            return json.dumps({'items': [{**j, 'status': j.get('status', {})} for j in self.created]})
         if 'get' in args:
             if self.conditions == ['Pending']:
                 return json.dumps({'spec': {'suspend': True}, 'status': {}})
@@ -665,6 +671,34 @@ class TestWatching:
         assert cluster.jobs().empty                                      # running only, by default
         assert list(cluster.jobs(status='all')['job']) == [run.id]
 
+    def test_an_admitted_job_runs_only_once_a_pod_does(self, cluster, kubectl):
+        run = cluster.submit('true')
+        unschedulable = {'phase': 'Pending', 'conditions': [{'type': 'PodScheduled', 'status': 'False',
+                                                             'reason': 'Unschedulable',
+                                                             'message': '0/12 nodes are available: 3 Insufficient cpu'}]}
+        starting = {'phase': 'Pending', 'conditions': [{'type': 'PodScheduled', 'status': 'True'}],
+                    'containerStatuses': [{'state': {'waiting': {'reason': 'ContainerCreating'}}}]}
+        job = kubectl.created[-1]
+        kubectl.created[-1] = {**job, 'spec': {**job['spec'], 'suspend': False}, 'status': {'active': 1}}   # admitted
+        kubectl.pods[run.id] = [unschedulable]
+        assert run.status() == 'pending' and run.reason() == 'unschedulable: 0/12 nodes are available: 3 Insufficient cpu'
+        row = cluster.jobs(status='all').iloc[0]
+        assert (row['status'], row['pods']) == ('pending', '1 unschedulable') and row['reason'].startswith('unschedulable')
+        assert cluster.jobs().empty                                    # not among the running
+        assert dbx.clusters.Runs([run]).dash(pod=False, close=False)['reason'].iloc[0].startswith('unschedulable')
+        kubectl.pods[run.id] = [starting]
+        assert run.status() == 'pending' and run.reason() == 'starting: ContainerCreating'
+        kubectl.pods[run.id] = [{'phase': 'Running'}, unschedulable]
+        assert run.status() == 'running' and run.reason() is None
+        row = cluster.jobs().iloc[0]
+        assert (row['status'], row['pods'], row['reason']) == ('running', '1 running, 1 unschedulable', None)
+        kubectl.pods[run.id] = [{'phase': 'Failed'}, {'phase': 'Running'}]      # a retried pod, and its retry
+        assert cluster.jobs().iloc[0]['pods'] == '1 running; 1 earlier failed'
+        kubectl.pods[run.id] = [{'phase': 'Failed'}, {'phase': 'Failed'}]
+        assert cluster.jobs(status='all').iloc[0]['pods'] == '2 failed'
+        kubectl.pods[run.id] = []
+        assert run.status() == 'pending' and run.reason() == 'no pod yet'
+
     def test_a_jobs_user_is_its_label_or_its_contact(self, cluster, kubectl):
         cluster.submit('true')
         assert list(cluster.jobs(status='all')['user']) == ['me']                      # dbx/user
@@ -787,8 +821,8 @@ class TestRunner:
         cancelled.cancel()
         running = p.runner(cluster).launch('build')
         df = p.runner(cluster).runs().dash()
-        assert list(df.columns) == ['run', 'cluster', 'entry', 'method', 'status', 'submitted', 'started', 'ended',
-                                    'observed', 'elapsed', 'outcome', 'event']
+        assert list(df.columns) == ['run', 'cluster', 'entry', 'method', 'status', 'reason', 'submitted', 'started',
+                                    'ended', 'observed', 'elapsed', 'outcome', 'event']
         assert list(df['run']) == [done.id, cancelled.id, running.id]
         assert list(df['status']) == ['complete', 'cancelled', 'running']
         assert list(df['method']) == ['build_tree', 'build_tree', 'build']
@@ -806,7 +840,7 @@ class TestRunner:
         last = p.runner(cluster).launch('build')
         rs = p.runner(cluster).runs()
         lines = repr(rs).splitlines()
-        assert lines[0].split() == ['run', 'cluster', 'method', 'status', 'submitted', 'elapsed']
+        assert lines[0].split() == ['run', 'cluster', 'method', 'status', 'reason', 'submitted', 'elapsed']
         assert lines[1].split()[:5] == ['0', first.id, 'testc', 'build_tree', 'cancelled']
         assert lines[2].split()[:5] == ['1', last.id, 'testc', 'build', 'running']
         assert rs[-1].id == last.id and isinstance(rs[:1], dbx.clusters.Runs)

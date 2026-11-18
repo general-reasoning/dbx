@@ -161,8 +161,10 @@ class KubeCluster(_clusters_.Cluster):
     def jobs(self, *, user: str | None = None, mine_only: bool = False, status: str = 'running') -> pd.DataFrame:
         """The Jobs in the cluster's namespace, as a table, newest first; raises when kubectl cannot reach it.
 
-        One row per Job: `cluster, job, user, status, n_gpus` (all its pods'), `n_pods`, `created, started, ended,
-        command`, and `reason`, Kueue's message for a pending one. Every user's by default; *user*'s when given; with
+        One row per Job: `cluster, job, user, status, n_gpus` (all its pods'), `n_pods`, `pods` (their states,
+        `_pods_summary_`), `created, started, ended, command`, and `reason`, why a pending one is not running
+        (`_pending_reason_`). A Job is running only once one of its pods is (`_job_status_`): admitted with its pods
+        unscheduled, or their containers still being created, it is pending, and its reason says which. Every user's by default; *user*'s when given; with
         *mine_only*, this cluster's `user`'s (else $USER's), whatever *user* says. Kubernetes keeps no creator: `user`
         is what the Job says of itself (`_job_user_`), empty when nothing does, and a Job is a user's by it or by its
         name's `<user>-` prefix. Only those of *status*: 'running' by default, or 'pending', 'complete', 'failed', 'all'.
@@ -174,6 +176,7 @@ class KubeCluster(_clusters_.Cluster):
         who = _slug_(user, 16) if user is not None else None
         items = json.loads(_kubectl_(self.context, '-n', self.namespace, 'get', 'job', '-o', 'json'))['items']
         reasons = _workload_reasons_(self)
+        pods = _job_pods_(self)
         rows = []
         for j in items:
             md, st = j['metadata'], j.get('status', {})
@@ -181,7 +184,7 @@ class KubeCluster(_clusters_.Cluster):
             # chen.zhou@... is chen's; a Job named <user>-... is <user>'s
             if who is not None and who not in ((owner or '').split('.')[0], owner) and not md['name'].startswith(f"{who}-"):
                 continue
-            s = _job_status_(j)
+            s = _job_status_(j, pods.get(md['name'], []))
             if status != 'all' and s != status:
                 continue
             cont = j['spec']['template']['spec']['containers'][0]
@@ -191,9 +194,11 @@ class KubeCluster(_clusters_.Cluster):
             per_pod = int(float(cont.get('resources', {}).get('requests', {}).get('nvidia.com/gpu', 0)))
             rows.append(dict(cluster=self.name, job=md['name'], user=owner, status=s, n_gpus=per_pod * n_pods,
                              n_pods=n_pods,
+                             pods=_pods_summary_(pods.get(md['name'], [])),
                              created=md.get('creationTimestamp'), started=st.get('startTime'),
                              ended=st.get('completionTime'), command=(expression or command)[:120],
-                             reason=reasons.get(md['name']) if s == 'pending' else None))
+                             reason=(_pending_reason_(reasons.get(md['name']), pods.get(md['name'], []))
+                                     if s == 'pending' else None)))
         df = pd.DataFrame(rows, columns=_JOB_COLUMNS_)
         return df.sort_values('created', ascending=False, na_position='first').reset_index(drop=True)
 
@@ -300,10 +305,13 @@ class KubeRun(Run):
         return ''
 
     def reason(self) -> str | None:
-        """Why the Job is not running yet: Kueue's message on its Workload (e.g. a quota it waits on); None once admitted."""
+        """Why the Job is not running yet (`_pending_reason_`): Kueue's message on its Workload (e.g. a quota it waits
+        on), else its pods' -- the scheduler's (no node fits it), or their containers' (still being created); None
+        once a pod runs."""
         if self.id is None:
             return None
-        return _workload_reasons_(self.cluster).get(self.id)
+        return _pending_reason_(_workload_reasons_(self.cluster).get(self.id),
+                                _job_pods_(self.cluster, self.id).get(self.id, []))
 
     # 3. Accessors --------------------------------------------------------------------------- #
 
@@ -314,7 +322,8 @@ class KubeRun(Run):
     # 4. Helpers: Run's hooks ---------------------------------------------------------------- #
 
     def _status_(self) -> str:
-        return _job_status_(json.loads(self._kubectl_('get', f"job/{self.id}", '-o', 'json')))
+        return _job_status_(json.loads(self._kubectl_('get', f"job/{self.id}", '-o', 'json')),
+                            _job_pods_(self.cluster, self.id).get(self.id, []))
 
     def _logs_(self, tail: int) -> str:
         return self._kubectl_('logs', f"job/{self.id}", f"--tail={tail}")
@@ -460,7 +469,8 @@ def queues_main(argv: list | None = None) -> None:
 # What `KubeCluster.jobs` can be asked for: a Job's status, or every one.
 _JOB_STATUSES_ = ('running', 'pending', 'complete', 'failed', 'all')
 # The columns of `KubeCluster.jobs` and `KubeCluster.queues`.
-_JOB_COLUMNS_ = ['cluster', 'job', 'user', 'status', 'n_gpus', 'n_pods', 'created', 'started', 'ended', 'reason', 'command']
+_JOB_COLUMNS_ = ['cluster', 'job', 'user', 'status', 'n_gpus', 'n_pods', 'pods', 'created', 'started', 'ended', 'reason',
+                 'command']
 # The quantity columns of `KubeCluster.queues`, by the resource they count: a count, or a quantity with its unit.
 _RESOURCE_PREFIXES_ = {'nvidia.com/gpu': 'n_gpus', 'cpu': 'n_cpus', 'memory': 'mem_gib'}
 _QUANTITIES_ = ('quota', 'used', 'free', 'borrowed', 'cohort')
@@ -886,7 +896,10 @@ def _workload_reasons_(c: KubeCluster) -> dict:
     return out
 
 
-def _job_status_(j: dict) -> str:
+def _job_status_(j: dict, pods: list | None = None) -> str:
+    """The Job *j*'s status: 'complete' or 'failed' by its conditions; 'pending' while suspended (Kueue has not
+    admitted it), with no active pod, or -- given its *pods* -- with none of them running yet (unschedulable, or
+    their containers being created); 'running' once one is. Without *pods*, an active Job is taken as running."""
     done = {c['type'] for c in j.get('status', {}).get('conditions', []) if c['status'] == 'True'}
     if 'Complete' in done:
         return 'complete'
@@ -894,7 +907,73 @@ def _job_status_(j: dict) -> str:
         return 'failed'
     if j.get('spec', {}).get('suspend') or not j.get('status', {}).get('active'):
         return 'pending'
+    if pods is not None and not any(_pod_state_(p)[0] == 'running' for p in pods):
+        return 'pending'
     return 'running'
+
+
+def _job_pods_(c: KubeCluster, job: str | None = None) -> dict:
+    """`{job name: [pod, ...]}` of the cluster's namespace, by each pod's `job-name` label; only *job*'s when given."""
+    selector = ['-l', f"job-name={job}"] if job else []
+    items = json.loads(_kubectl_(c.context, '-n', c.namespace, 'get', 'pod', '-o', 'json', *selector)).get('items', [])
+    out = {}
+    for p in items:
+        name = p.get('metadata', {}).get('labels', {}).get('job-name')
+        if name:
+            out.setdefault(name, []).append(p)
+    return out
+
+
+def _pod_state_(p: dict) -> tuple[str, str | None]:
+    """A pod's state and why: 'running' (a container started), 'succeeded', 'failed' (its reason); 'unschedulable'
+    (the scheduler's message: no node fits it); 'starting' (scheduled, its containers not running yet: the first
+    one's waiting reason, ContainerCreating, ImagePullBackOff, ...)."""
+    st = p.get('status', {})
+    phase = st.get('phase')
+    if phase == 'Running':
+        return 'running', None
+    if phase == 'Succeeded':
+        return 'succeeded', None
+    if phase == 'Failed':
+        return 'failed', st.get('reason') or st.get('message')
+    scheduled = {c['type']: c for c in st.get('conditions', [])}.get('PodScheduled', {})
+    if scheduled.get('status') == 'False':
+        return 'unschedulable', scheduled.get('message') or scheduled.get('reason')
+    waiting = [cs['state']['waiting'].get('reason') for cs in st.get('containerStatuses', [])
+               if 'waiting' in cs.get('state', {})]
+    return 'starting', waiting[0] if waiting else None
+
+
+def _pods_summary_(pods: list) -> str:
+    """*pods*' states, counted: '1 running', '2 running, 1 unschedulable'; 'none' without any. Failed pods beside
+    others are earlier attempts the Job retried -- Kubernetes keeps them for their logs -- so said apart: '2 running;
+    2 earlier failed'."""
+    if not pods:
+        return 'none'
+    counts = {}
+    for p in pods:
+        state = _pod_state_(p)[0]
+        counts[state] = counts.get(state, 0) + 1
+    failed = counts.pop('failed', 0)
+    if not counts:
+        return f"{failed} failed"
+    now = ', '.join(f"{n} {state}" for state, n in counts.items())
+    return f"{now}; {failed} earlier failed" if failed else now
+
+
+def _pending_reason_(workload: str | None, pods: list) -> str | None:
+    """Why a Job is not running: Kueue's *workload* message while it is not admitted; else, none of its *pods*
+    running, the first one's as '<state>: <why>' -- 'unschedulable: 0/12 nodes are available: ...', 'starting:
+    ContainerCreating'; 'no pod yet' when it has none. None once one runs."""
+    if workload:
+        return workload
+    if any(_pod_state_(p)[0] == 'running' for p in pods):
+        return None
+    for p in pods:
+        state, why = _pod_state_(p)
+        if state != 'running':
+            return f"{state}: {why}" if why else state
+    return None if pods else 'no pod yet'
 
 
 def _quantity_(q, resource: str = '') -> float:

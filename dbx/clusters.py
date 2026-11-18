@@ -260,7 +260,7 @@ class Runs(list):
     a run found over is closed by `dash` or `wait`, not by being printed. Its columns are
     `COLUMNS`; `dash()` has them all, and what the run journaled where it ran.
     """
-    COLUMNS = ['run', 'cluster', 'method', 'status', 'submitted', 'elapsed']
+    COLUMNS = ['run', 'cluster', 'method', 'status', 'reason', 'submitted', 'elapsed']
 
     def __getitem__(self, i):
         out = super().__getitem__(i)
@@ -288,8 +288,9 @@ class Runs(list):
     def dash(self, *, live: bool = True, pod: bool = True, close: bool = True) -> pd.DataFrame:
         """These runs as a table, row `i` being `self[i]` -- what the submitter saw, and with *pod* what the run itself journaled.
 
-        One row per run: `run, cluster, entry, method, status, submitted, started, ended, observed,
-        elapsed, outcome, event`; `entry` is the key of the pipeline's entry it built.
+        One row per run: `run, cluster, entry, method, status, reason, submitted, started, ended, observed,
+        elapsed, outcome, event`; `entry` is the key of the pipeline's entry it built; `reason`, why a pending one
+        is not running, where its kind says (`reason`: a Kubernetes run's Kueue message, or its pods').
         - From the submitter's journal: `submitted` (`job:submit`), and for a closed run `event`
           (`job:complete`, `job:fail`, `job:cancel`) and when it was `observed`. `status` is that
           event's (`complete`, `failed`, `cancelled`); with *live*, an open run's is asked of its
@@ -322,10 +323,12 @@ class Runs(list):
             method = run.record.get('method') or ((m.group(1) or m.group(2)) if m else None)
             rows.append(dict(run=run.id, cluster=run.cluster.name,
                              entry=os.path.basename(str(getattr(run, 'entrypath', None)).rstrip('/')),
-                             method=method, status=status, submitted=submitted, started=started, ended=ended,
+                             method=method, status=status,
+                             reason=_live_reason_(run) if status == 'pending' else None,
+                             submitted=submitted, started=started, ended=ended,
                              observed=observed, elapsed=_round_(elapsed) if elapsed is not None else None,
                              outcome=outcome, event=run.closing[0] if run.closing else None))
-        cols = ['run', 'cluster', 'entry', 'method', 'status', 'submitted', 'started', 'ended', 'observed',
+        cols = ['run', 'cluster', 'entry', 'method', 'status', 'reason', 'submitted', 'started', 'ended', 'observed',
                 'elapsed', 'outcome', 'event']
         return pd.DataFrame(rows, columns=cols)
 
@@ -810,6 +813,17 @@ def _live_status_(run: Run) -> str:
         return run.status()
     except Exception as e:
         return 'gone' if 'NotFound' in str(e) or 'not found' in str(e) else f"unknown: {str(e).splitlines()[0][:80]}"
+
+
+def _live_reason_(run: Run) -> str | None:
+    """Why *run*, pending, is not running, as its cluster has it (`reason`, where its kind has one); None where it has
+    none, `unknown: ...` when the cluster cannot be asked."""
+    if not hasattr(run, 'reason'):
+        return None
+    try:
+        return run.reason()
+    except Exception as e:
+        return f"unknown: {str(e).splitlines()[0][:80]}"
 
 
 def _hms_(td) -> str:

@@ -315,3 +315,39 @@ def test_a_directory_topic_ships_with_a_bar_of_its_bytes_and_files(block, dirles
     block.UNSAFE_ship({'configs': 'dirless:///lake/configs'}, OVERRIDE=True, show_progress=True)
     err = capsys.readouterr().err
     assert '1/1 files' in err, err
+
+
+@pytest.mark.pinned
+def test_a_packed_directory_arrives_as_one_archive_and_its_first_check_there_unpacks_it(block, tmp_path):
+    """`pack=True`: the directory topic lands as one archive beside its target, so its datablock there is not yet
+    valid; the first `valid_topic` there unpacks it into place and removes the archive."""
+    from dbx.datablocks import PACK_SUFFIX
+    there = Cfg(datalake=str(tmp_path / 'there'))
+    assert there.hash == block.hash and not there.valid()
+    block.UNSAFE_ship({t: there.path(t) for t in ('configs', 'facts')}, OVERRIDE=True, show_progress=False, pack=True)
+    configs = pathlib.Path(there.path('configs'))
+    assert pathlib.Path(str(configs) + PACK_SUFFIX).is_file() and not configs.exists()
+
+    assert there.valid()
+    assert (configs / 'data' / 'bc.yaml').read_text() == 'source: abfss://x\n'
+    assert not pathlib.Path(str(configs) + PACK_SUFFIX).exists()
+    assert there.read('facts') == {'windows': 321337}
+
+
+def test_a_packed_directory_shipped_again_replaces_the_one_unpacked_before(block, tmp_path):
+    there = Cfg(datalake=str(tmp_path / 'there'))
+    targets = {t: there.path(t) for t in ('configs', 'facts')}
+    block.UNSAFE_ship(targets, OVERRIDE=True, show_progress=False, pack=True)
+    assert there.valid()
+    stray = pathlib.Path(there.path('configs')) / 'stray.yaml'
+    stray.write_text('old\n')
+    block.UNSAFE_ship(targets, OVERRIDE=True, overwrite=True, show_progress=False, pack=True)
+    assert there.valid()
+    assert not stray.exists()
+    assert (pathlib.Path(there.path('configs')) / 'data' / 'bc.yaml').is_file()
+
+
+def test_a_packed_directory_ships_to_a_filesystem_that_takes_files_only(block, dirless):
+    from dbx.datablocks import PACK_SUFFIX
+    block.UNSAFE_ship({'configs': 'dirless:///lake/configs'}, OVERRIDE=True, show_progress=False, pack=True)
+    assert sorted(p.lstrip('/') for p in dirless.find('/lake')) == [f'lake/configs{PACK_SUFFIX}']

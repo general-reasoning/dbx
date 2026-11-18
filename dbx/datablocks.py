@@ -26,6 +26,7 @@ import copy
 import copyreg
 from dataclasses import dataclass, field, fields, asdict, replace
 import datetime
+import fcntl
 import functools
 import itertools
 import gc
@@ -40,6 +41,7 @@ import re
 import shutil
 import sys
 import traceback
+import tarfile
 import tempfile
 import types
 import threading
@@ -1634,6 +1636,11 @@ def shown_tag(tag: str) -> str:
     width and nothing to read. The journals keep the tag whole.
     """
     return _TAG_MODULE_.sub('', tag)
+
+
+# What `UNSAFE_ship(pack=True)` sends a directory topic as, beside its target: one uncompressed tar of its contents,
+# unpacked into the target by the first `valid_topic` there (`Datablock._unpack_shipped_`).
+PACK_SUFFIX = '.dbx-pack.tar'
 
 
 class Datablock:
@@ -3234,6 +3241,8 @@ class Datablock:
         """Validity of one topic, or of a whole group."""
         topicpath = self._normtopic_(topicpath)
         path = self.path(*topicpath)
+        if isinstance(path, str):
+            self._unpack_shipped_(path)
         valid = self.valid_path(path)
         if valid and not self.is_topicgroup(*topicpath):
             subdirs = getattr(self._topicnode_(*topicpath), 'subdirs', None)
@@ -3241,6 +3250,32 @@ class Datablock:
                 valid = self._valid_subdirs_(path, subdirs)
         self.log.detailed(f"{self.anchor}: topic {'/'.join(topicpath)} valid: {valid}")
         return valid
+
+    def _unpack_shipped_(self, path: str) -> bool:
+        """Unpack a directory `UNSAFE_ship(pack=True)` sent to *path* -- `<path>` + `PACK_SUFFIX` beside it, on a
+        local filesystem -- into place: into a sibling first, then swapped in for whatever is at *path*, the archive
+        removed, under a lock, so concurrent checks unpack it once; journaled `UNSAFE_ship:unpacked`. Whether it
+        unpacked one."""
+        archive = path.rstrip('/') + PACK_SUFFIX
+        if 'file' not in self.fs.protocol or not os.path.isfile(archive):
+            return False
+        with open(f"{archive}.lock", 'w') as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            if not os.path.isfile(archive):
+                return False                  # another process unpacked it while this one waited
+            fresh = f"{path.rstrip('/')}.unpack-{os.getpid()}"
+            shutil.rmtree(fresh, ignore_errors=True)
+            with tarfile.open(archive) as tar:
+                tar.extractall(fresh, filter='data')
+            if os.path.lexists(path):
+                stale = f"{path.rstrip('/')}.stale-{os.getpid()}"
+                os.rename(path, stale)
+                shutil.rmtree(stale, ignore_errors=True)
+            os.rename(fresh, path)
+            os.remove(archive)
+        self.log.info(f"{self.anchor}: unpacked {archive} into {path}")
+        self.write_journal_entry(event="UNSAFE_ship:unpacked", note=path, inline_note=True)
+        return True
 
     def _valid_subdirs_(self, root, subdirs) -> bool:
         """Whether every subdirectory and file a DATADIR declares by name is under *root*.
@@ -4680,7 +4715,7 @@ class Datablock:
 
     def UNSAFE_ship(self, targets=None, /, *, relocate: dict | None = None,
                     OVERRIDE: bool = False, overwrite: bool = False,
-                    validate: bool = True, show_progress: bool = True):
+                    validate: bool = True, show_progress: bool = True, pack: bool = False):
         """Copy named topics OUT, to locations a reader needs no dbx to find.
 
         The outbound mirror of `UNSAFE_copy_from`: that one takes one source
@@ -4703,6 +4738,12 @@ class Datablock:
         The targets go in the journal. That is what makes a shipped file traceable: a
         yaml checked into another repo is otherwise anonymous, and nothing says which
         block's VAR produced it.
+
+        With *pack*, a directory topic goes as one archive, `<target>` + `PACK_SUFFIX`,
+        for a link where every file costs a round trip (SFTP). Nothing runs where it
+        lands, so it is unpacked there by the first dbx process that checks the topic
+        at that path (`valid_topic`): a datablock of the same identity on that lake,
+        say a build there. Until then the topic is not there.
         """
         targets = dict(targets) if targets else {}
         if not targets:
@@ -4736,7 +4777,8 @@ class Datablock:
                 shipped.update(self._UNSAFE_ship_topic_(topic, target,
                                                         overwrite=overwrite,
                                                         relocate=relocate,
-                                                        show_progress=show_progress))
+                                                        show_progress=show_progress,
+                                                        pack=pack))
             self.log.verbose(f"Shipping topics: END ({note})")
             self.write_journal_entry(event="UNSAFE_ship:END", note=note, inline_note=True)
         except Exception as e:
@@ -7397,7 +7439,7 @@ class Datablock:
             self._UNSAFE_copy_fs_(src_path=src_path, dst_path=dst_path, recursive=True, show_progress=show_progress)
 
     def _UNSAFE_ship_topic_(self, topic, target, *, overwrite: bool = False,
-                            relocate: dict | None = None, show_progress: bool = False):
+                            relocate: dict | None = None, show_progress: bool = False, pack: bool = False):
         """Copy one topic OUT to *target*. Returns `{topic: target}` as shipped.
 
         The outbound counterpart of `_UNSAFE_copy_topic_`, and the same
@@ -7417,7 +7459,7 @@ class Datablock:
                 leaf = self._normtopic_((leaf,))
                 sub = self._UNSAFE_ship_topic_(
                     leaf, os.path.join(str(target), *leaf[len(topic):]),
-                    overwrite=overwrite, relocate=relocate, show_progress=show_progress)
+                    overwrite=overwrite, relocate=relocate, show_progress=show_progress, pack=pack)
                 out.update(sub)
             return {topic[0]: out} if len(topic) == 1 else out
 
@@ -7428,7 +7470,7 @@ class Datablock:
         target = str(target)
         if not overwrite:
             dst_fs, _ = self._url_to_fs_(target)
-            if dst_fs.exists(target):
+            if dst_fs.exists(target) or (pack and is_dir and dst_fs.exists(target.rstrip('/') + PACK_SUFFIX)):
                 raise FileExistsError(
                     f"UNSAFE_ship: {target!r} already holds data for topic "
                     f"{'/'.join(topic)!r}. Pass overwrite=True to replace it."
@@ -7459,6 +7501,20 @@ class Datablock:
                     f"Topic {'/'.join(topic)} already reads from {target}; nothing to ship")
                 return self._nest_topic_path_(topic, target)
             self.log.detailed(f"Shipping {'/'.join(topic)} from {src_path} to {target}")
+            if pack and is_dir:
+                if 'file' not in self._url_to_fs_(str(src_path))[0].protocol:
+                    raise ValueError(f"UNSAFE_ship(pack=True): topic {'/'.join(topic)!r} is at {src_path}, not on a "
+                                     f"local filesystem to pack from")
+                archive = os.path.join(workdir(), os.path.basename(target.rstrip('/')) + PACK_SUFFIX)
+                with tarfile.open(archive, 'w') as tar:
+                    for name in sorted(os.listdir(src_path)):
+                        tar.add(os.path.join(src_path, name), arcname=name)
+                dst_fs, _ = self._url_to_fs_(target)
+                remote = dst_fs._strip_protocol(target.rstrip('/') + PACK_SUFFIX)
+                dst_fs.makedirs(os.path.dirname(remote), exist_ok=True)
+                dst_fs.put_file(archive, remote, callback=self._transfer_callback_(
+                    f"pack {os.path.basename(target.rstrip('/'))}", show_progress=show_progress))
+                return self._nest_topic_path_(topic, target)
             # The trailing slash is load-bearing: fsspec nests a source DIRECTORY under
             # a destination that already exists, so without it a re-ship, or a ship onto
             # a prefix some earlier partial transfer created, silently lands the tree one

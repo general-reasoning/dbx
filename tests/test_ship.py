@@ -331,6 +331,7 @@ def test_a_packed_directory_arrives_as_one_archive_and_its_first_check_there_unp
     assert there.valid()
     assert (configs / 'data' / 'bc.yaml').read_text() == 'source: abfss://x\n'
     assert not pathlib.Path(str(configs) + PACK_SUFFIX).exists()
+    assert not pathlib.Path(str(configs) + PACK_SUFFIX + '.lock').exists()
     assert there.read('facts') == {'windows': 321337}
 
 

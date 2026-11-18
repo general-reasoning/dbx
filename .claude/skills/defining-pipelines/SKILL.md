@@ -105,6 +105,12 @@ def sc_representation(name, **ops) -> SCRepresentationPipeline:
     that follow.
   - **No references to the CHANGELOG** (or other status documents): the
     examples say what a run is, not where its results were written up.
+  - **No lake paths or hashes.** Name every datablock by its preset and take
+    its paths from it -- `dblk.path(topic)`, `dblk.anchorkeypath` -- never a
+    `/mnt/.../datalake/<class>/version=N/<hash>` written out: a hash moves
+    with any VAR or VERSION, and the example then points at the wrong build,
+    or none. E.g. a redirection to a sibling's data:
+    `...UNSAFE_redirect(paths={t: <sibling>.entry.path(t) for t in (...)}, ...)`.
 - **The pipeline VAR, and only it, defines the tree's VARs.** Every value that
   reaches a datablock's `spec` in `__create__` comes from `self.var`. Don't read
   the environment, module globals, files or `ops` there. A pipeline is then

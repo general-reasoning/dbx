@@ -3254,8 +3254,8 @@ class Datablock:
     def _unpack_shipped_(self, path: str) -> bool:
         """Unpack a directory `UNSAFE_ship(pack=True)` sent to *path* -- `<path>` + `PACK_SUFFIX` beside it, on a
         local filesystem -- into place: into a sibling first, then swapped in for whatever is at *path*, the archive
-        removed, under a lock, so concurrent checks unpack it once; journaled `UNSAFE_ship:unpacked`. Whether it
-        unpacked one."""
+        removed, under a lock, so concurrent checks unpack it once, and the lock's file removed too; journaled
+        `UNSAFE_ship:unpacked`. Whether it unpacked one."""
         archive = path.rstrip('/') + PACK_SUFFIX
         if 'file' not in self.fs.protocol or not os.path.isfile(archive):
             return False
@@ -3273,6 +3273,9 @@ class Datablock:
                 shutil.rmtree(stale, ignore_errors=True)
             os.rename(fresh, path)
             os.remove(archive)
+            # A process waiting on the lock finds the archive gone and leaves; one arriving later finds no archive
+            # and never takes it.
+            os.remove(f"{archive}.lock")
         self.log.info(f"{self.anchor}: unpacked {archive} into {path}")
         self.write_journal_entry(event="UNSAFE_ship:unpacked", note=path, inline_note=True)
         return True

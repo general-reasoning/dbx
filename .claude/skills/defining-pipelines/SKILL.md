@@ -1,6 +1,6 @@
 ---
 name: defining-pipelines
-description: How a project defines its dbx pipelines and implements their Datablocks - one XXXPipeline(dbx.Pipeline) class plus one xxx(name, **ops) function per pipeline, presets keyed by name feeding a flat XXXPipeline.VAR, @dbx.pipeline on the entrypoint function, one qualified tag module.qualname:name shared by the pipeline and its datablocks (dbx.entrypoint_tag), preset names prefixed with what they are built over, the tree's VARs built from the pipeline VAR only, **ops reserved for runtime behavior and handed on with self.operational, imports from dbx only, machine-specific defaults in the project's env module, no datalake handling in code, __build__ resuming topic by topic (every topic checked before it is built), and __read__ returning the data of one explicitly named topic (no default, no fallthrough, never a path, None when nothing sensible to read). Load when writing or reviewing a project's pipelines or Datablocks, adding a preset, or deciding whether a setting is identity (VAR) or operational (ops).
+description: How a project defines its dbx pipelines and implements their Datablocks - one XXXPipeline(dbx.Pipeline) class plus one xxx(name, **ops) function per pipeline, presets keyed by name feeding a flat XXXPipeline.VAR, @dbx.pipeline on the entrypoint function, one qualified tag module.qualname:name shared by the pipeline and its datablocks (dbx.entrypoint_tag), preset names prefixed with what they are built over, the tree's VARs built from the pipeline VAR only, every VAR and TOPICS spelled out in its own class (VAR subclasses Pipeline.VAR or Datablock.VAR directly, every field written), **ops reserved for runtime behavior and handed on with self.operational, imports from dbx only, machine-specific defaults in the project's env module, no datalake handling in code, __build__ resuming topic by topic (every topic checked before it is built), and __read__ returning the data of one explicitly named topic (no default, no fallthrough, never a path, None when nothing sensible to read). Load when writing or reviewing a project's pipelines or Datablocks, adding a preset, or deciding whether a setting is identity (VAR) or operational (ops).
 ---
 
 # Defining pipelines
@@ -303,6 +303,16 @@ TOPICS = {
   in an `over=` binding: write both out in full. Repetition is the price of
   each class saying what it holds on its own page. (An instance-dependent
   declaration is a `forward_property`, and still spells out its class value.)
+- **Spell VAR out too, every field, in every class**: a pipeline's VAR
+  subclasses `Pipeline.VAR`, a datablock's `Datablock.VAR`, and lists every
+  field it has -- never `class VAR(OtherPipeline.VAR): pass`, nor another
+  class's VAR extended by a few fields. A reader learns what a pipeline is
+  configured by, or what a datablock's identity is made of, from its own page,
+  without walking a chain of classes. Group a pipeline's fields by the
+  datablock they feed, a comment per group. Keep the fields' order when
+  spelling out an inherited VAR: a datablock's identity follows them, so check
+  its hash is unchanged (sctx, 2026-11-18: every pipeline and QA datablock VAR,
+  no hash moved).
 - **One entry per line** when a declaration does not fit on one: each key of a
   DATADICT, each column of a DATAFRAME, each child, `over=` and `doc=` of a
   DATADIR on its own line, aligned under the first (python-style).

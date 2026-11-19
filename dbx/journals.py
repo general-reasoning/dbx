@@ -28,12 +28,14 @@ import fnmatch
 import functools
 import hashlib
 import importlib
+import io
 import json
 import os
 from pprint import pformat
 import time
 import multiprocessing
 import re
+import shlex
 import shutil
 import socket
 import sys
@@ -44,6 +46,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Optional, Sequence
 
 import fsspec
+import fsspec.asyn
 import numpy as np
 import pandas as pd
 import tqdm
@@ -1401,8 +1404,14 @@ def _threads_(fs, n: int) -> int:
 
     fsspec's sftp filesystem is one paramiko SFTP client, one connection: requests from several
     threads at once deadlock it, each waiting on a reply another took. Read serially there.
+    sshfs -- what an `ssh://` datalake is, the Anyscale one among them -- is not that: it is
+    asynchronous, its requests are run on its own event loop over a pool of SFTP channels, and
+    threads share it as they share any async filesystem. Read on *n* threads there: one at a
+    time, a pipeline journal of 2,000 files took a quarter of an hour over a tunnel.
     """
     protocols = fs.protocol if isinstance(fs.protocol, (tuple, list)) else (fs.protocol,)
+    if isinstance(fs, fsspec.asyn.AsyncFileSystem):
+        return n
     return 1 if {'sftp', 'ssh'} & set(protocols) else n
 
 
@@ -3972,6 +3981,12 @@ class BuildJournal:
         yet begun, and is raised on.
         """
         root = fs._strip_protocol(anchordirpath).rstrip('/')
+        found = BuildJournal._found_remotely_(fs, root, log=log)
+        if found is not None:
+            files = [f for f in found if BuildJournal._ENTRY_FILE_.match(f[len(root):].lstrip('/'))]
+            if progress is not None:
+                progress(desc or 'Listing journal files', len(files), None)
+            return sorted(files)
 
         def listing(d):
             try:
@@ -4002,6 +4017,46 @@ class BuildJournal:
                     raise
                 log.detailed(f"Listing journal files under {anchordirpath}: {len(files)} so far, {len(level)} directories next")
         return sorted(files)
+
+    @staticmethod
+    def _found_remotely_(fs, root, *, log) -> 'list[str] | None':
+        """Every parquet file under *root*, from one `find` run on an ssh filesystem's host; None to walk instead.
+
+        On ssh the walk is one round trip per directory, made one at a time
+        (`_threads_`), and compacting removes a journal's files but none of
+        its directories: a pipeline journal of thousands of entry directories
+        took minutes to list over a tunnel, compacted or not. One `find` on
+        the host is one round trip. None on a filesystem that is not ssh, or
+        where the command fails -- no `find`, an unreadable directory -- and
+        the walk lists it as before.
+        """
+        protocols = fs.protocol if isinstance(fs.protocol, (tuple, list)) else (fs.protocol,)
+        if not {'sftp', 'ssh'} & set(protocols):
+            return None
+        command = f"find {shlex.quote(root)} -type f -name '*.parquet'"
+        try:
+            if callable(getattr(fs, 'execute', None)):
+                # sshfs (asyncssh): what an `ssh://` datalake is, the Anyscale one among them.
+                done = fs.execute(command, check=False)
+                out, err, status = done.stdout or '', done.stderr or '', done.exit_status
+            elif callable(getattr(getattr(fs, 'client', None), 'exec_command', None)):
+                # fsspec's own sftp (paramiko).
+                _, stdout, stderr = fs.client.exec_command(command)
+                out = stdout.read().decode()
+                status = stdout.channel.recv_exit_status()
+                err = stderr.read().decode()
+            else:
+                return None
+        except Exception as e:
+            log.detailed(f"Listing journal files under {root}: remote find failed ({e!r}); walking instead")
+            return None
+        if status != 0:
+            err = err.strip()
+            if 'No such file or directory' in err and not out:
+                return []
+            log.detailed(f"Listing journal files under {root}: remote find exited {status} ({err!r}); walking instead")
+            return None
+        return [line for line in out.splitlines() if line]
 
     # The keybys that put a block's tag in its path.
     _TAG_KEYBYS_ = ('tag', 'taghash', 'tag_hash', 'tag_version_hash', 'tag_version_shorthash')
@@ -4085,8 +4140,9 @@ class BuildJournal:
             # pandas reads it off the LOCAL disk, where a memory:// or remote
             # journal file is not. Every entry then "skipped as unreadable" and
             # the journal came back empty rather than failing.
-            with fs.open(file, 'rb') as f:
-                return pd.read_parquet(f, engine='pyarrow', use_threads=False)
+            # The whole file at once: one open, read and close, where reading
+            # through a file object pays a round trip per seek and read over ssh.
+            return pd.read_parquet(io.BytesIO(fs.cat_file(file)), engine='pyarrow', use_threads=False)
 
         desc = desc or 'Reading journal files'
         report = progress if callable(progress) else None

@@ -20,8 +20,8 @@ data, or anonymous trees uploaded beside a run.
 
 A project may wrap the first two to bind a cluster -- its URL and fsspec
 options, a `with` block a `dbx.pprint` one-liner cannot hold -- and nothing
-more: sctx's `SCPipeline.UNSAFE_ship_to_lambda(*dblks, topics=...)` and
-`SCPipeline.UNSAFE_copy_from_lambda()`.
+more: sctx's `sctx.dbx.pipelines.UNSAFE_ship_to_lambda(*dblks, topics=...)` and
+`sctx.dbx.pipelines.UNSAFE_copy_from_lambda(p)`, which takes a pipeline.
 
 - **Ship to the datablock's own path** (`dblk.path(topic, local=True)` under the
   other lake), not to where a redirection here points: the other lake has no

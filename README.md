@@ -360,6 +360,9 @@ Remote tests rely on **Ray**. If you are running tests in an environment with a 
 
 ## Environment Variables
 
+Every one dbx reads is listed, with what it says, in `dbx.env.VARS`, and read there --
+`dbx.env.DBX_RAY` is `$DBX_RAY` when it is accessed, or None.
+
 | Variable | Description |
 |---|---|
 | `DBX_DATALAKE` | The datalake a datablock is stored in when not given `datalake=` |

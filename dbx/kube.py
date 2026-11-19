@@ -80,6 +80,7 @@ from . import anyscale
 from . import clusters as _clusters_
 from .clusters import Run, Runner
 from . import databits
+from .databits import _env_
 from .databits import dbx_repos, dbx_revisions
 
 
@@ -508,8 +509,8 @@ def _manifest_(command: str, c: KubeCluster, *, name: str = 'dbx', n_gpus: int =
     """
     env, setup = dict(env or {}), list(setup or [])
     # The datablock locks' database (`dbx.db`): a Job locks where its submitter does.
-    if os.environ.get('DBX_DB') and 'DBX_DB' not in env:
-        env['DBX_DB'] = os.environ['DBX_DB']
+    if _env_.DBX_DB and 'DBX_DB' not in env:
+        env['DBX_DB'] = _env_.DBX_DB
     if anyscale:
         a = _anyscale_options_()
         image = image or a['image']
@@ -781,7 +782,7 @@ def _pack_plan_(c: KubeCluster, src: str, target: str, options: dict) -> dict:
     """
     src, target = os.path.abspath(src), os.path.normpath(target)
     held = [m for m in c.mounts if os.path.normpath(m) == target or os.path.normpath(m).startswith(f"{target}/")]
-    datalake = ((options.get('env') or {}).get('DBX_DATALAKE') or os.environ.get('DBX_DATALAKE') or '').rstrip('/')
+    datalake = ((options.get('env') or {}).get('DBX_DATALAKE') or _env_.DBX_DATALAKE or '').rstrip('/')
     if held or (datalake and (datalake == target or datalake.startswith(f"{target}/"))):
         raise ValueError(f"Workdir target {target} would be replaced when its pack is unpacked, and it holds "
                          f"{held or datalake}: pack a narrower tree")

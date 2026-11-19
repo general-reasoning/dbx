@@ -72,6 +72,7 @@ import pandas as pd
 __eval__ = __builtins__['eval']
 
 from . import databits
+from .databits import _env_
 from .databits import (
     default_datalake,
     InlineCallableExecutor,
@@ -2716,7 +2717,7 @@ class Datablock:
             # Resolve specline LOCALs (e.g. "$dbx.getenv('KEY')") to real paths.
             self.local = eval(self._local_) if self._local_ is not None else None
             if self.local is None:
-                self.local = os.environ.get('DBX_LOCAL') or '/tmp/dbx'
+                self.local = _env_.DBX_LOCAL or '/tmp/dbx'
             if self.local is None:
                 raise ValueError(f"No local for {self.__class__.__name__}: pass local= or set DBX_LOCAL")
             if self.local_must_exist and not os.path.isdir(self.local):

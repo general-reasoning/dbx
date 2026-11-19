@@ -91,4 +91,7 @@ from .pipelines import *
 from . import anyscale, clusters, gpu, image, kube
 # The two of dbx.clusters typed most: dbx.cluster('crusoe'), dbx.runner(...); the rest through the module.
 from .clusters import cluster, runner
+# dbx.env, the module of the environment variables dbx reads -- and, called, `databits.env`'s specline --
+# over the function `from .databits import *` bound the name to.
+env = __import__('sys').modules[f"{__name__}.env"]
 

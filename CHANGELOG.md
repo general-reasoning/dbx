@@ -4,7 +4,14 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+- **`dbx.env`: every environment variable dbx reads, in one place.** `dbx.env.VARS` lists them with what each
+  says, and `dbx.env.DBX_DATALAKE` -- any of them -- is the variable as it is when accessed, or None when unset or
+  empty; dbx reads them there. Called, it is still the specline function: `dbx.env('KEY')`.
+
 ### Changed
+- **`dbx.env` is a module, and still makes speclines.** `dbx.env.DBX_RAY` reads a variable (see Added); called,
+  `dbx.env('KEY')` is the specline `$dbx.getenv('KEY')`, as it was.
 - **Journal compaction removes the directories it empties.** `BuildJournal.UNSAFE_compact` and
   `PipeJournal.UNSAFE_compact` remove, after the entry files, each directory under the anchor those leave empty --
   deepest first, never the anchor's own, never one holding anything else. Their rows gain `dirs`, how many.

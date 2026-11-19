@@ -50,6 +50,7 @@ import tqdm
 import yaml
 
 from . import databits
+from .databits import _env_
 from .databits import (
     OutputTee,
     anchors,
@@ -436,7 +437,7 @@ class Datalog:
         for scope in reversed(self._scopes_()):
             if scope._selection is not None:
                 return scope._selection
-        return self._selection_list_(os.environ.get('DBX_LOG_SELECTION'))
+        return self._selection_list_(_env_.DBX_LOG_SELECTION)
 
     @staticmethod
     def _selection_list_(selection):
@@ -447,7 +448,7 @@ class Datalog:
 
     @staticmethod
     def _env_(key):
-        val = os.environ.get(key)
+        val = getattr(_env_, key)
         return None if val is None else Datalog._parse_env_(val)
 
     @staticmethod
@@ -547,8 +548,8 @@ def write_exec_journal(s: str, datalake: str | None = None, storage_options: dic
         'traceback': traceback,
         'id': id,
         'session': session,
-        'cluster': os.environ.get('DBX_CLUSTER'),
-        'run': os.environ.get('DBX_RUN'),
+        'cluster': _env_.DBX_CLUSTER,
+        'run': _env_.DBX_RUN,
         'buildjournal_entries': list(buildjournal_entries or []),
         'output_captures': list(output_captures or []),
         'comment': comment if comment is not None else exec_comment(s),
@@ -3576,8 +3577,8 @@ class BuildJournal:
                                                               'code', 'tree', 'pipeline')},
                                          'session': dj.session,
                                          'id': entry_id,
-                                         'cluster': cluster if cluster is not None else os.environ.get('DBX_CLUSTER'),
-                                         'run': run if run is not None else os.environ.get('DBX_RUN'),
+                                         'cluster': cluster if cluster is not None else _env_.DBX_CLUSTER,
+                                         'run': run if run is not None else _env_.DBX_RUN,
                                          **{k: record[k] for k in ('tag', 'topics', 'paths', 'slices')},
                                          'log': capture.path if capture is not None else None,
                                          'event': event,
@@ -5039,9 +5040,9 @@ class JournaledResult:
 # each block's datalake -- unless this process was started while a command
 # ran, and so is part of it.
 DEFAULT_BUILDJOURNAL = BuildJournal()
-if os.environ.get(SESSION_ENV):
+if _env_.DBX_SESSION:
     # A process started while a command ran: its default is the command's, in its own datalake.
-    DEFAULT_BUILDJOURNAL._session = os.environ[SESSION_ENV]
+    DEFAULT_BUILDJOURNAL._session = _env_.DBX_SESSION
     DEFAULT_BUILDJOURNAL._datalake = default_datalake() or './dbx'
 
 

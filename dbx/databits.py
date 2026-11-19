@@ -57,6 +57,10 @@ try:
 except ImportError:
     _TORCH_AVAILABLE = False
 import tqdm
+
+# dbx.env, the module -- for every dbx module: `from . import env` after `import *` of this one finds `env`, the
+# function, until dbx/__init__ rebinds the name.
+from . import env as _env_
 import yaml
 
 # Disable tqdm's background TMonitor thread (see dbx.py for rationale).
@@ -66,14 +70,8 @@ __eval__ = __builtins__['eval'] if isinstance(__builtins__, dict) else getattr(_
 __exec__ = __builtins__['exec'] if isinstance(__builtins__, dict) else getattr(__builtins__, 'exec')
 
 
-# DBX_DIRTY=True: run the working tree as it is -- DBX_USE_WORK_REPO=False and DBX_DIRTY_REPO_OK=True together, set
-# here once, before anything reads them, so every reader and every child process sees the pair. It overrides a
-# DBX_USE_WORK_REPO=True a shell profile exports.
-if os.environ.get('DBX_DIRTY', '').lower() in ('true', '1'):
-    os.environ['DBX_USE_WORK_REPO'] = 'False'
-    os.environ['DBX_DIRTY_REPO_OK'] = 'True'
-
-DBX_GIT_REPO = os.environ.get('DBX_GIT_REPO')
+# Importing dbx.env applies DBX_DIRTY -- before anything here reads what it sets.
+DBX_GIT_REPO = _env_.DBX_GIT_REPO
 if DBX_GIT_REPO is None:
     try:
         _repo = git.Repo('.', search_parent_directories=True)
@@ -403,7 +401,7 @@ def parse_storage_options(raw: str | None) -> dict:
 
 def default_storage_options() -> dict:
     """Return storage options from `DBX_STORAGE_OPTIONS` env var, or `{}`."""
-    return parse_storage_options(os.environ.get('DBX_STORAGE_OPTIONS'))
+    return parse_storage_options(_env_.DBX_STORAGE_OPTIONS)
 
 
 def UNSAFE_allowed(what: str, *, OVERRIDE: bool = False):
@@ -676,7 +674,7 @@ def eval(name):
 
 def default_datalake() -> 'str | None':
     """The datalake the environment names: `DBX_DATALAKE`, or None when it is unset."""
-    return os.environ.get('DBX_DATALAKE') or None
+    return _env_.DBX_DATALAKE
 
 
 def anchors(datalake: str | None = None, *, storage_options: dict | None = None) -> list[str]:
@@ -3003,7 +3001,7 @@ def gitwrkreposetup(revision=None, *, gitrepo=None, reason: str = "", log=None):
     # -- nothing that COULD be: asking for a different revision here would rewind
     # the project underneath a dbx that cannot follow it, which is precisely the
     # split that produces a confidently wrong hash.
-    pinned = os.environ.get('DBX_PINNED_REVISION')
+    pinned = _env_.DBX_PINNED_REVISION
     if pinned:
         # Pinned: its code is the revision's, whatever its source repos hold --
         # no work repo to make, and no dirty check to make before one, even
@@ -3040,7 +3038,7 @@ def gitwrkreposetup(revision=None, *, gitrepo=None, reason: str = "", log=None):
         return wrkroot, wrkrepo
 
 
-    use_wrkrepo = os.environ.get('DBX_USE_WORK_REPO') == 'True' or revision is not None
+    use_wrkrepo = _env_.DBX_USE_WORK_REPO == 'True' or revision is not None
     if use_wrkrepo and DBX_USE_WORK_REPO is None:
         if DBX_GIT_REPO is None:
             raise ValueError("DBX_GIT_REPO is not set and could not be detected. Cannot setup temporary wrkrepo.")
@@ -3056,7 +3054,7 @@ def gitwrkreposetup(revision=None, *, gitrepo=None, reason: str = "", log=None):
             if path is None:
                 return
             repo = git.Repo(path)
-            if repo.is_dirty() and not os.environ.get('DBX_DIRTY_REPO_OK'):
+            if repo.is_dirty() and not _env_.DBX_DIRTY_REPO_OK:
                 msg = (
                     f"Dirty git repo: {path}: commit your changes before "
                     f"creating a work-repo clone (uncommitted changes would be lost)"
@@ -3196,7 +3194,7 @@ def pintrampoline(printer=None, log=None):
     """
     if log is None:
         log = _datalog_(name="pintrampoline")
-    if os.environ.get('DBX_PINNED_REVISION'):
+    if _env_.DBX_PINNED_REVISION:
         return                                  # phase 2: already where we need to be
 
     revision = selector = pin_root = None

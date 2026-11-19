@@ -76,6 +76,7 @@ from importlib import metadata
 import pandas as pd
 
 from . import databits
+from .databits import _env_
 from .databits import default_datalake
 from .journals import SESSION_ENV, BuildJournal, PipeJournal, execjournal
 
@@ -669,7 +670,7 @@ def run(pipeline, method: str, *args, **kwargs):
     `run` (`DBX_CLUSTER`, `DBX_RUN`) and under the submitter's session (`DBX_SESSION`). `job:end`'s
     note is 'ok', or what was raised -- raised again.
     """
-    where = dict(cluster=os.environ.get('DBX_CLUSTER'), run=os.environ.get('DBX_RUN'))
+    where = dict(cluster=_env_.DBX_CLUSTER, run=_env_.DBX_RUN)
     _journal_(pipeline, START, **where)
     try:
         result = getattr(pipeline.entry, method)(*args, **kwargs)

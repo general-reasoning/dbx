@@ -24,6 +24,10 @@ Configured entirely through the environment, since the hook takes no arguments:
 `DBX_PIN_NODE_ROOT`
     Where clones are cached, shared by every worker process on the node.
     Defaults to `<tmp>/dbx-pins`.
+`DBX_PIN_PATHS`
+    Clones made already -- `pin_mode='pin_root'`'s, on storage the workers
+    share -- `os.pathsep`-separated, dbx first: put at the head of `sys.path`
+    as they are, ahead of whatever Ray put there, the driver's directory too.
 """
 import os
 import shutil
@@ -71,6 +75,12 @@ def setup():
     came up unpinned would return confidently wrong hashes, which is the exact
     failure this machinery exists to prevent.
     """
+    paths = [p for p in (os.environ.get('DBX_PIN_PATHS') or '').split(os.pathsep) if p]
+    for path in reversed(paths):
+        if not os.path.isdir(path):
+            raise RuntimeError(f"dbxpinshim: pinned path {path} is not on this node")
+        sys.path.insert(0, path)
+
     revision = os.environ.get('DBX_PIN_REVISION')
     sources = os.environ.get('DBX_PIN_SOURCE')
     if not revision or not sources:

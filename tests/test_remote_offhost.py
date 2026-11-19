@@ -6,6 +6,7 @@ run here. These pin down the pieces it stands on.
 """
 import sys
 import types
+import weakref
 
 import pandas as pd
 import pytest
@@ -24,11 +25,19 @@ def stub_ray(monkeypatch):
     ray.__version__ = '9.9.9-stub'
     ray.is_initialized = lambda: False
     ray.init = lambda **kw: captured.update(init=kw)
-    ray.remote = lambda cls: types.SimpleNamespace(remote=lambda **kw: object())
+    worker = lambda: ((captured.get('actor_env') or {}).get('env_vars') or {}).get
+    actor = types.SimpleNamespace(remote=lambda **kw: types.SimpleNamespace(
+        environ=types.SimpleNamespace(remote=lambda name: worker()(name))))
+    actor.options = lambda runtime_env=None, **kw: captured.update(actor_env=runtime_env) or actor
+    ray.remote = lambda cls: actor
+    ray.get = lambda ref: ref
     ray.actor = types.SimpleNamespace(ActorHandle=type('ActorHandle', (), {}))
     ray.runtime_env = types.SimpleNamespace(RuntimeEnv=type('RuntimeEnv', (), {
         'known_fields': {'env_vars', 'working_dir', 'worker_process_setup_hook'}}))
     monkeypatch.setitem(sys.modules, 'ray', ray)
+    monkeypatch.setattr(databits_mod.Ray, '_connection_', None)
+    monkeypatch.setattr(databits_mod.Ray, '_remotes_', weakref.WeakSet())
+    monkeypatch.delenv('DBX_RAY', raising=False)
     return captured
 
 
@@ -38,7 +47,7 @@ class TestRemoteEnv:
         monkeypatch.setenv('DBX_DATALAKE', 'ssh://host/lake')
         monkeypatch.setenv('DBX_LOCAL', '/laptop/local')
         databits_mod.remote(env={'DBX_DATALAKE': '/lake', 'DBX_LOCAL': None, 'OTHER': 3})
-        env = stub_ray['init']['runtime_env']['env_vars']
+        env = stub_ray['actor_env']['env_vars']
         assert env['DBX_DATALAKE'] == '/lake'
         assert 'DBX_LOCAL' not in env
         assert env['OTHER'] == '3'
@@ -46,14 +55,14 @@ class TestRemoteEnv:
     def test_without_env_this_process_dbx_variables_go(self, stub_ray, monkeypatch):
         monkeypatch.setenv('DBX_DATALAKE', 'ssh://host/lake')
         databits_mod.remote()
-        assert stub_ray['init']['runtime_env']['env_vars']['DBX_DATALAKE'] == 'ssh://host/lake'
+        assert stub_ray['actor_env']['env_vars']['DBX_DATALAKE'] == 'ssh://host/lake'
 
     def test_an_offhost_cluster_takes_gitrepo_without_a_repo_here(self, stub_ray, monkeypatch):
         """From a machine with no DBX_GIT_REPO of its own: the host's repo paths are given instead."""
         monkeypatch.setattr(databits_mod, '_DBX_GIT_REPO_', None)
         databits_mod.remote(address='ray://localhost:1', gitrepo='/home/me/dbx:/home/me/proj')
         assert stub_ray['init']['address'] == 'ray://localhost:1'
-        assert stub_ray['init']['runtime_env']['env_vars']['DBX_GIT_REPO'] == '/home/me/dbx:/home/me/proj'
+        assert stub_ray['actor_env']['env_vars']['DBX_GIT_REPO'] == '/home/me/dbx:/home/me/proj'
 
     def test_an_offhost_cluster_without_any_repo_path_is_still_refused(self, stub_ray, monkeypatch):
         monkeypatch.setattr(databits_mod, '_DBX_GIT_REPO_', None)
@@ -226,11 +235,11 @@ def test_a_pinned_jobs_processes_do_not_check_their_sources(stub_ray, monkeypatc
     monkeypatch.delenv('DBX_DIRTY_REPO_OK', raising=False)
     databits_mod.remote(revision='a:b', pin_source='/repos/dbx /repos/proj', address='ray://localhost:1',
                         gitrepo='/repos/dbx:/repos/proj')
-    env = stub_ray['init']['runtime_env']['env_vars']
+    env = stub_ray['actor_env']['env_vars']
     assert env['DBX_PINNED_REVISION'] == 'a:b' and env['DBX_DIRTY_REPO_OK'] == '1'
 
 
 def test_an_unpinned_job_keeps_the_dirty_check(stub_ray, monkeypatch):
     monkeypatch.delenv('DBX_DIRTY_REPO_OK', raising=False)
     databits_mod.remote()
-    assert 'DBX_DIRTY_REPO_OK' not in stub_ray['init']['runtime_env']['env_vars']
+    assert 'DBX_DIRTY_REPO_OK' not in stub_ray['actor_env']['env_vars']

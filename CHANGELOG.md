@@ -5,16 +5,41 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- **`dbx.Ray`: the Ray cluster this process is connected to, current as a journal is.** `with dbx.Ray('ray://h:10001'):`
+  names the cluster `dbx.remote` -- and `entry.originst()` -- and `dbx.gpu.run` connect to; outside one, `DEFAULT_RAY`'s,
+  `DBX_RAY`. A process holds one Ray connection, and connecting to another cluster ends what lives on it, so
+  `Ray.connect` refuses it -- `RayReconnectError` -- while a Remote is alive on the old one, or when the old one is not
+  dbx's.
 - **`dbx.env`: every environment variable dbx reads, in one place.** `dbx.env.VARS` lists them with what each
   says, and `dbx.env.DBX_DATALAKE` -- any of them -- is the variable as it is when accessed, or None when unset or
   empty; dbx reads them there. Called, it is still the specline function: `dbx.env('KEY')`.
+- **`DBX_RAY`: the Ray cluster `dbx.remote` connects to when given no `address=`** -- and so `entry.originst()`,
+  `rinst()` and `inst(remote=True)`. `DBX_RAY=auto` joins the cluster this host is in, as `address='auto'` does;
+  unset, `ray.init()` finds or starts one, as before.
 
 ### Changed
 - **`dbx.env` is a module, and still makes speclines.** `dbx.env.DBX_RAY` reads a variable (see Added); called,
   `dbx.env('KEY')` is the specline `$dbx.getenv('KEY')`, as it was.
+- **One Ray connection for every `Remote`; each pinned by its own actor.** `dbx.remote` connects once and every Remote
+  after rides that connection: a Remote's pins -- env vars, the shim's setup hook -- are its actor's runtime_env, not the
+  job's, so a Remote at another revision is another worker beside the first, not a new connection that ends it. The
+  shim reaches every worker as the job's `py_modules`; the job's `working_dir` is the workspace on Anyscale, as
+  `dbx.gpu.run` gives it, else Ray's own -- so a pinned Remote's workers get the workspace too, as an unpinned one's
+  always did -- and `pin_mode='pin_root'`'s pins are put first by the shim, ahead of the driver's directory Ray puts on
+  a worker's path, where an empty working_dir used to displace it. `dbx.gpu.run` connects the same way, its interpreter
+  and env each task's own.
+- **A pinned worker checks its pin, and fails loudly.** `check_pinned`: dbx must be imported from a checkout at the
+  pinned dbx commit, and a checkout at the pinned project commit be on `sys.path`, or the worker raises
+  `PinMismatchError` -- which `dbx.remote` raises where the Remote is asked for. A pin that did not take (a setup hook
+  Ray ignored, a path the node cannot see) no longer passes for one that did.
 - **Journal compaction removes the directories it empties.** `BuildJournal.UNSAFE_compact` and
   `PipeJournal.UNSAFE_compact` remove, after the entry files, each directory under the anchor those leave empty --
   deepest first, never the anchor's own, never one holding anything else. Their rows gain `dirs`, how many.
+- **`dbx.remote(revision=...)` pins by the shim wherever Ray has the setup hook, on this host or not.** `pin_mode='auto'`
+  took a temporary `pin_root` whenever no `address` was given -- right only when the worker is on this node, which a Ray
+  on this host does not promise: an Anyscale workspace's head offers Ray no CPU, so the worker is on another node, where
+  those clones are not, and came up unpinned. Now each worker clones the revision for itself, from the original repos,
+  once per node; a `pin_root` passed still means `pin_root`, and a Ray without the hook still falls back to it.
 - **`PipeJournal.UNSAFE_compact()` compacts: each pipeline class's journal as one parquet file.** As before it drops
   every `create` entry but the newest per pipeline and entrypath, with their side files, and keeps every `job:*`
   entry; now the entries it keeps are written to the class's compacted file, checked against them first, and the

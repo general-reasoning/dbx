@@ -52,6 +52,7 @@ import urllib.parse
 import pandas as pd
 
 from .journals import SESSION_ENV, log_section
+from .databits import _env_
 
 
 __all__ = ['lock', 'locks', 'unlock', 'init', 'up', 'down', 'status', 'main']
@@ -76,7 +77,7 @@ def lock(path: str, mode: str = 'shared', *, log=None):
     """
     if mode not in MODES:
         raise ValueError(f"lock(mode={mode!r}): mode is one of {MODES}")
-    if not os.environ.get('DBX_DB'):
+    if not _env_.DBX_DB:
         yield
         return
     conn = _connection_()
@@ -89,7 +90,7 @@ def lock(path: str, mode: str = 'shared', *, log=None):
         f"SELECT %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, "
         f"CASE WHEN pg_try_advisory_lock{suffix}(%s) THEN 'held' ELSE 'waiting' END RETURNING id, state",
         (lock_id, mode, key, path, socket.gethostname(), os.getpid(), threading.get_ident(),
-         os.environ.get('DBX_CLUSTER'), os.environ.get('DBX_RUN'), os.environ.get(SESSION_ENV), lock_id)).fetchone()
+         _env_.DBX_CLUSTER, _env_.DBX_RUN, _env_.DBX_SESSION, lock_id)).fetchone()
     try:
         if state == 'waiting':
             if log is not None:
@@ -307,7 +308,7 @@ _NETWORK_FSTYPES_ = ('nfs', 'nfs4', 'cifs', 'smb3', 'ceph', 'glusterfs', 'lustre
 
 
 def _url_() -> str:
-    url = os.environ.get('DBX_DB')
+    url = _env_.DBX_DB
     if not url:
         raise RuntimeError("DBX_DB is not set: it is the database's URL, postgresql://user:password@host:port/db")
     return url

@@ -1,7 +1,7 @@
 """A container image for a cluster Job: a base image plus one layer holding a venv's code -- no Docker build.
 
-    ref = dbx.image.build('/path/to/venv', repo='registry.example.com/team/proj', anyscale=True,
-                          extra={'/path/to/checkout': 'checkout'}, login=dbx.image.acr_login)
+    ref = dbx.container.build('/path/to/venv', repo='registry.example.com/team/proj', anyscale=True,
+                              extra={'/path/to/checkout': 'checkout'}, login=dbx.container.acr_login)
     LAMBDA.submit('python -m my.thing', image=ref)
 
 The layer holds, under *prefix*:
@@ -66,7 +66,7 @@ def build(venv: str, *, repo: str, base: str | None = None, prefix: str = '/opt/
         base, python, run_as = base or a['base'], python or a['python'], run_as or a['run_as']
         skip, env = (*skip, *a['skip']), {**a['env'], **(env or {})}
     if base is None or python is None:
-        raise ValueError("dbx.image.build: give base= and python= -- the image and its interpreter -- or anyscale=True")
+        raise ValueError("dbx.container.build: give base= and python= -- the image and its interpreter -- or anyscale=True")
     with tempfile.TemporaryDirectory() as tmp:
         layer = Path(tmp) / 'layer.tar'
         digest = write_layer(layer, venv, prefix=prefix, extra=extra, python=python, run_as=run_as or (0, 0),

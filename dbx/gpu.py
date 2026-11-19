@@ -9,11 +9,12 @@ raised here, as the same exception type. Each task's output, and every line it l
 `log_dir/task<i>.log`.
 
 It joins the Ray cluster at *address* -- 'auto': the one this machine is part of, an Anyscale
-workspace's or a Kube Job's own head (`dbx.kube`'s `ray=True`). The workers run this process's
+workspace's or a Kube Job's own head (`dbx.kube`'s `ray=True`) -- through `dbx.Ray`, so on the
+connection a `dbx.remote` made, or makes after: one per process. The tasks run this process's
 interpreter, so they import what it imports, and get *env* as their environment variables: the
 locations a project resolved here, say, for workers that would resolve them differently. On
 Anyscale, *working_dir* defaults to `dbx.anyscale.working_dir()`: without one, its runtime-env hook
-snapshots the current directory for every task.
+snapshots the current directory for every task. It is the connection's, as `dbx.Ray` makes it.
 
 This is the fan-out within one process's work -- a block's build across a node's GPUs -- where
 `dbx.clusters` ships a whole call to another machine.
@@ -22,7 +23,6 @@ import contextlib
 import os
 import sys
 
-from . import anyscale
 
 
 __all__ = ['run']
@@ -31,13 +31,11 @@ __all__ = ['run']
 def run(fn, calls: list[dict], *, log_dir: str, n_gpus: float = 1, n_cpus: float = 4,
         env: dict | None = None, working_dir: str | None = None, address: str | None = 'auto') -> list:
     """Call *fn* once per kwargs in *calls*, each as a Ray task with *n_gpus* and *n_cpus*; their results, in order."""
-    import ray  # Heavy, and only this path needs it.
+    from .databits import Ray
+    # The connection's working_dir, the job's; the interpreter and env, each task's own.
+    ray = Ray(address).connect(working_dir=working_dir or 'auto')
     runtime_env = {'py_executable': sys.executable, 'env_vars': dict(env or {})}
-    working_dir = working_dir or (anyscale.working_dir() if anyscale.present() else None)
-    if working_dir:
-        runtime_env['working_dir'] = working_dir
-    ray.init(address=address, ignore_reinit_error=True, runtime_env=runtime_env)
-    task = ray.remote(num_gpus=n_gpus, num_cpus=n_cpus)(_call_logged_)
+    task = ray.remote(num_gpus=n_gpus, num_cpus=n_cpus)(_call_logged_).options(runtime_env=runtime_env)
     return ray.get([task.remote(fn, kwargs, os.path.join(log_dir, f"task{i}.log")) for i, kwargs in enumerate(calls)])
 
 

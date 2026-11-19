@@ -53,6 +53,7 @@ import tqdm
 import yaml
 
 from . import databits
+from .databits import _env_
 from .databits import (
     OutputTee,
     anchors,
@@ -439,7 +440,7 @@ class Datalog:
         for scope in reversed(self._scopes_()):
             if scope._selection is not None:
                 return scope._selection
-        return self._selection_list_(os.environ.get('DBX_LOG_SELECTION'))
+        return self._selection_list_(_env_.DBX_LOG_SELECTION)
 
     @staticmethod
     def _selection_list_(selection):
@@ -450,7 +451,7 @@ class Datalog:
 
     @staticmethod
     def _env_(key):
-        val = os.environ.get(key)
+        val = getattr(_env_, key)
         return None if val is None else Datalog._parse_env_(val)
 
     @staticmethod
@@ -550,8 +551,8 @@ def write_exec_journal(s: str, datalake: str | None = None, storage_options: dic
         'traceback': traceback,
         'id': id,
         'session': session,
-        'cluster': os.environ.get('DBX_CLUSTER'),
-        'run': os.environ.get('DBX_RUN'),
+        'cluster': _env_.DBX_CLUSTER,
+        'run': _env_.DBX_RUN,
         'buildjournal_entries': list(buildjournal_entries or []),
         'output_captures': list(output_captures or []),
         'comment': comment if comment is not None else exec_comment(s),
@@ -3300,9 +3301,9 @@ class BuildJournal:
             url = eval(url)
         fs, root = fsspec.url_to_fs(url, **(storage_options or {}))
         base = fs_full_path(fs, os.path.join(root, anchor))
-        # Not the untagged directory for a tag-keyed block: a tablet is one of
-        # thousands under its anchor, and listing the anchor for each is what
-        # looking by hash is there to avoid.
+        # Not the untagged directory for a tag-keyed block: one of thousands
+        # under its anchor -- as tablets were, until 2026-10-17 -- and listing the
+        # anchor for each is what looking by hash is there to avoid.
         if not tag:
             keydirs = [base]
         elif keyby in cls._TAG_KEYBYS_:
@@ -3585,8 +3586,8 @@ class BuildJournal:
                                                               'code', 'tree', 'pipeline')},
                                          'session': dj.session,
                                          'id': entry_id,
-                                         'cluster': cluster if cluster is not None else os.environ.get('DBX_CLUSTER'),
-                                         'run': run if run is not None else os.environ.get('DBX_RUN'),
+                                         'cluster': cluster if cluster is not None else _env_.DBX_CLUSTER,
+                                         'run': run if run is not None else _env_.DBX_RUN,
                                          **{k: record[k] for k in ('tag', 'topics', 'paths', 'slices')},
                                          'log': capture.path if capture is not None else None,
                                          'event': event,
@@ -3859,7 +3860,8 @@ class BuildJournal:
 
         Every entry file under an anchor -- as `read` lists them, the anchor's
         compacted file among them -- is read, and its rows are written back,
-        as they are, to `COMPACTED`; the entry files read are removed -- an
+        as they are, to `COMPACTED`; the entry files read are removed, with the
+        directories under the anchor they leave empty -- an
         entry recording a redirection too, since a block finds its own by
         hash (`read_hash`), compacted or not. Side files are not touched. *anchors* defaults to `dbx.anchors`, and the anchors are
         compacted on a *parallelization* executor of *n_workers*.
@@ -3879,7 +3881,7 @@ class BuildJournal:
             anchors = cls._anchors_(datalake, storage_options)
         anchors = [anchors] if isinstance(anchors, str) else list(anchors)
         if not anchors:
-            return pd.DataFrame(columns=['anchor', 'files', 'entries', 'kept', 'removed', 'compacted'])
+            return pd.DataFrame(columns=['anchor', 'files', 'entries', 'kept', 'removed', 'compacted', 'dirs'])
         if not dry_run and not UNSAFE_allowed(
                 f"{cls.__name__}.UNSAFE_compact of {len(anchors)} anchor(s) under {datalake}", OVERRIDE=OVERRIDE):
             return None
@@ -3922,9 +3924,38 @@ class BuildJournal:
         if dry_run:
             return row
         fs.rm(removed)
+        row['dirs'] = cls._remove_emptied_dirs_(fs, removed, anchordirpath)
         log.info(f"{cls.__name__}.UNSAFE_compact: {anchor}: {row['entries']} entries from {len(absorbed)} file(s) "
-                 f"into {compacted}; {len(kept)} kept")
+                 f"into {compacted}; {len(kept)} kept, {row['dirs']} emptied dir(s) removed")
         return row
+
+    @staticmethod
+    def _remove_emptied_dirs_(fs, files, root) -> int:
+        """Remove the directories, strictly under *root*, that removing *files* left empty; return how many.
+
+        Each removed file's directory, and its parents up to -- not including
+        -- *root*, are removed deepest first while they are empty: a directory
+        holding anything else -- a block's data, another entry -- stays, and so
+        do its parents. One that is no longer there, or will not go -- a
+        writer's file landed in it, say -- is left as it is.
+        """
+        root = os.path.normpath(fs._strip_protocol(root))
+        dirs = set()
+        for f in files:
+            d = os.path.dirname(os.path.normpath(fs._strip_protocol(f)))
+            while d.startswith(root + os.sep):
+                dirs.add(d)
+                d = os.path.dirname(d)
+        count = 0
+        for d in sorted(dirs, key=lambda d: d.count(os.sep), reverse=True):
+            try:
+                fs.invalidate_cache(d)
+                if not fs.ls(d, detail=False):
+                    fs.rmdir(d)
+                    count += 1
+            except OSError:   # FileNotFoundError among them
+                pass
+        return count
 
     _ENTRY_FILE_ = re.compile(r'^(?:\.dbx|(?:.*/)?\.journal)/[^/]+/journal/.*\.parquet$')
     _NOT_JOURNAL_DIR_ = re.compile(r'^(?:\.dbx|(?:.*/)?\.journal)/[^/]+/(?!journal$)[^/]+$')
@@ -4375,7 +4406,8 @@ class PipeJournal(BuildJournal):
         entry is dropped, side files and all. The kept entries are written, as
         `BuildJournal.UNSAFE_compact` writes an anchor's, to the class's
         `COMPACTED` file -- checked against them before anything is removed --
-        and the entry files read are removed. A compacted file is read as any
+        and the entry files read are removed, with the directories under the
+        class's they leave empty. A compacted file is read as any
         entry file, so compacting again drops the duplicates written since.
         `collect` reads the same pipelines, each with the same entrypaths,
         before and after.
@@ -4465,15 +4497,17 @@ class PipeJournal(BuildJournal):
                       else 'compacted' if on is not None else 'compacted: class no longer imports')
             if not kept.empty:
                 cls._write_compacted_(fs, kept, compacted, dry_run=dry_run)
-        # Files only, never a directory: a pipeline left with no entries keeps its directory, empty.
+        # The files, then the directories they leave empty -- but the pipeline's own, kept even with no entries.
+        dirs = 0
         if removed and not dry_run:
             fs.rm(removed)
+            dirs = cls._remove_emptied_dirs_(fs, removed, anchor_dir)
         written = not kept.empty and bool(removed) and norm(compacted) not in {norm(f) for f in files}
         after = len(files) - len(removed) + written
         log.info(f"PipeJournal.UNSAFE_compact(): {anchor}: {action}, {len(dropped)} of {len(table)} entries dropped, "
-                 f"{len(removed)} of {len(files)} files removed{' (dry run)' if dry_run else ''}")
+                 f"{len(removed)} of {len(files)} files, {dirs} emptied dir(s) removed{' (dry run)' if dry_run else ''}")
         return {'pipeline': anchor, 'journal': on, 'entries': len(table), 'dropped': len(dropped),
-                'before': len(files), 'removed': len(removed), 'after': after, 'action': action}
+                'before': len(files), 'removed': len(removed), 'after': after, 'dirs': dirs, 'action': action}
 
     # 4. Helpers -----------------------------------------------------------
 
@@ -5062,9 +5096,9 @@ class JournaledResult:
 # each block's datalake -- unless this process was started while a command
 # ran, and so is part of it.
 DEFAULT_BUILDJOURNAL = BuildJournal()
-if os.environ.get(SESSION_ENV):
+if _env_.DBX_SESSION:
     # A process started while a command ran: its default is the command's, in its own datalake.
-    DEFAULT_BUILDJOURNAL._session = os.environ[SESSION_ENV]
+    DEFAULT_BUILDJOURNAL._session = _env_.DBX_SESSION
     DEFAULT_BUILDJOURNAL._datalake = default_datalake() or './dbx'
 
 

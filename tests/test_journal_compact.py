@@ -74,6 +74,33 @@ def test_compact_rewrites_an_anchors_entries_as_one_file(lake):
     assert Leaf(spec={'n': 2}).lastbuilt() is not None
 
 
+def _dirs(root):
+    return sorted(os.path.relpath(d, root) for d, _, _ in os.walk(root))
+
+
+def test_compact_removes_the_directories_it_empties(lake):
+    """Each block's journal directories go with its entries; its data, and the directories holding it, stay."""
+    for n in range(3):
+        Leaf(spec={'n': n}).build()
+    anchordir = os.path.join(lake, Leaf().anchor)
+    entry_dirs = {os.path.dirname(f) for f in _entry_files(lake, Leaf().anchor)}
+    frame = BuildJournal.UNSAFE_compact([Leaf().anchor], OVERRIDE=True)
+    compacted = os.path.join(anchordir, BuildJournal.COMPACTED.format(anchor=Leaf().anchor))
+    assert frame['dirs'].tolist()[0] > 0
+    assert all(not os.path.isdir(d) for d in entry_dirs if d != os.path.dirname(compacted))
+    assert not [d for d, sub, fs in os.walk(anchordir) if not sub and not fs], "no directory left empty"
+    for n in range(3):
+        assert open(Leaf(spec={'n': n}).path('x')).read() == str(n), "the blocks' data is not touched"
+    assert os.path.isfile(compacted)
+
+
+def test_a_dry_run_removes_no_directory(lake):
+    Leaf().build()
+    before = _dirs(lake)
+    BuildJournal.UNSAFE_compact([Leaf().anchor], dry_run=True)
+    assert set(before) <= set(_dirs(lake)), "none removed -- the compacted file's may be made, to write it aside"
+
+
 def test_entries_written_after_are_compacted_with_the_compacted_ones(lake):
     Leaf(spec={'n': 1}).build()
     BuildJournal.UNSAFE_compact([Leaf().anchor], OVERRIDE=True)

@@ -48,6 +48,7 @@ from .datablocks import (
     is_topicmarker,
 )
 from . import databits
+from .databits import _env_
 from .databits import read_yaml
 from .datastreams import (
     ChunkShuffleSampler,
@@ -597,7 +598,7 @@ class _Database_(Datablock):
         Resolved on every access, never stored, so no machine's path reaches a
         handle or a journal.
         """
-        return (getattr(self, 'cache', None) or os.environ.get('DBX_CACHE')
+        return (getattr(self, 'cache', None) or _env_.DBX_CACHE
                 or os.path.join(self.localroot, 'cache'))
 
     # 4. Helpers -----------------------------------------------------------

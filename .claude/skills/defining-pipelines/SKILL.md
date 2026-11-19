@@ -1,6 +1,6 @@
 ---
 name: defining-pipelines
-description: How a project defines its dbx pipelines and implements their Datablocks - one XXXPipeline(dbx.Pipeline) class plus one xxx(name, **ops) function per pipeline, presets keyed by name feeding a flat XXXPipeline.VAR, @dbx.pipeline on the entrypoint function, one qualified tag module.qualname:name shared by the pipeline and its datablocks (dbx.entrypoint_tag), preset names prefixed with what they are built over, the tree's VARs built from the pipeline VAR only, **ops reserved for runtime behavior and handed on with self.operational, imports from dbx only, machine-specific defaults in the project's env module, no datalake handling in code, __build__ resuming topic by topic (every topic checked before it is built), and __read__ returning the data of one explicitly named topic (no default, no fallthrough, never a path, None when nothing sensible to read). Load when writing or reviewing a project's pipelines or Datablocks, adding a preset, or deciding whether a setting is identity (VAR) or operational (ops).
+description: How a project defines its dbx pipelines and implements their Datablocks - one XXXPipeline(dbx.Pipeline) class plus one xxx(name, **ops) function per pipeline, presets keyed by name feeding a flat XXXPipeline.VAR, @dbx.pipeline on the entrypoint function, one qualified tag module.qualname:name shared by the pipeline and its datablocks (dbx.entrypoint_tag), preset names prefixed with what they are built over, the tree's VARs built from the pipeline VAR only, every VAR and TOPICS spelled out in its own class (VAR subclasses Pipeline.VAR or Datablock.VAR directly, every field written), **ops reserved for runtime behavior and handed on with self.operational, imports from dbx only, machine-specific defaults in the project's env module, no datalake handling in code, __build__ resuming topic by topic (every topic checked before it is built), and __read__ returning the data of one explicitly named topic (no default, no fallthrough, never a path, None when nothing sensible to read). Load when writing or reviewing a project's pipelines or Datablocks, adding a preset, or deciding whether a setting is identity (VAR) or operational (ops).
 ---
 
 # Defining pipelines
@@ -88,11 +88,29 @@ def sc_representation(name, **ops) -> SCRepresentationPipeline:
   pipeline, the pipeline defines the Datablock tree, and `.entry` is the
   tree's root. So `xxx(name)` alone identifies the whole tree;
   `xxx(name, **ops)` adds how to build it.
-- **Usage examples go in one `"""` block directly above each pipeline
-  function.** The block holds several `dbx.pprint "pkg.pipelines.xxx(name, ...)"`
-  lines covering the presets and the common calls: the pipeline itself,
-  `.entry.cite()`, `.entry.build_tree()` (with the ops you'd actually use),
-  and `.entry.read(topic)`. Each line should run as written from a shell.
+- **The entrypoint examples: one `"""` block directly above each pipeline
+  function.** "The entrypoint examples" (of `xxx()`) means this block, and an
+  example in it is a `dbx.pprint "pkg.pipelines.xxx(name, ...)"` line unless
+  explicitly said otherwise. It covers the presets and the common calls: the
+  pipeline itself, `.entry.cite()`, `.entry.build_tree()` (with the ops you'd
+  actually use), and `.entry.read(topic)`. Each line should run as written from
+  a shell.
+  - **A run worth repeating gets its own example, as run**: one per model,
+    dataset or preset, with the ops and runner arguments it was built with
+    (its build journal records them), not one line and a comment naming the
+    others.
+  - **Layout:** a blank line before each new group (a model, a dataset), its
+    comment one short line, the model first (`# Cosmos3-Nano, hard nuPlan set,
+    as run`); shell variables (`Q="..."`) name a pipeline once for the lines
+    that follow.
+  - **No references to the CHANGELOG** (or other status documents): the
+    examples say what a run is, not where its results were written up.
+  - **No lake paths or hashes.** Name every datablock by its preset and take
+    its paths from it -- `dblk.path(topic)`, `dblk.anchorkeypath` -- never a
+    `/mnt/.../datalake/<class>/version=N/<hash>` written out: a hash moves
+    with any VAR or VERSION, and the example then points at the wrong build,
+    or none. E.g. a redirection to a sibling's data:
+    `...UNSAFE_redirect(paths={t: <sibling>.entry.path(t) for t in (...)}, ...)`.
 - **The pipeline VAR, and only it, defines the tree's VARs.** Every value that
   reaches a datablock's `spec` in `__create__` comes from `self.var`. Don't read
   the environment, module globals, files or `ops` there. A pipeline is then
@@ -285,6 +303,16 @@ TOPICS = {
   in an `over=` binding: write both out in full. Repetition is the price of
   each class saying what it holds on its own page. (An instance-dependent
   declaration is a `forward_property`, and still spells out its class value.)
+- **Spell VAR out too, every field, in every class**: a pipeline's VAR
+  subclasses `Pipeline.VAR`, a datablock's `Datablock.VAR`, and lists every
+  field it has -- never `class VAR(OtherPipeline.VAR): pass`, nor another
+  class's VAR extended by a few fields. A reader learns what a pipeline is
+  configured by, or what a datablock's identity is made of, from its own page,
+  without walking a chain of classes. Group a pipeline's fields by the
+  datablock they feed, a comment per group. Keep the fields' order when
+  spelling out an inherited VAR: a datablock's identity follows them, so check
+  its hash is unchanged (sctx, 2026-11-18: every pipeline and QA datablock VAR,
+  no hash moved).
 - **One entry per line** when a declaration does not fit on one: each key of a
   DATADICT, each column of a DATAFRAME, each child, `over=` and `doc=` of a
   DATADIR on its own line, aligned under the first (python-style).

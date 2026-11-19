@@ -26,6 +26,7 @@ import copy
 import copyreg
 from dataclasses import dataclass, field, fields, asdict, replace
 import datetime
+import fcntl
 import functools
 import itertools
 import gc
@@ -40,7 +41,9 @@ import re
 import shutil
 import sys
 import traceback
+import tarfile
 import tempfile
+import types
 import threading
 from typing import Callable, Optional, Union
 import uuid
@@ -69,6 +72,7 @@ import pandas as pd
 __eval__ = __builtins__['eval']
 
 from . import databits
+from .databits import _env_
 from .databits import (
     default_datalake,
     InlineCallableExecutor,
@@ -1635,6 +1639,11 @@ def shown_tag(tag: str) -> str:
     return _TAG_MODULE_.sub('', tag)
 
 
+# What `UNSAFE_ship(pack=True)` sends a directory topic as, beside its target: one uncompressed tar of its contents,
+# unpacked into the target by the first `valid_topic` there (`Datablock._unpack_shipped_`).
+PACK_SUFFIX = '.dbx-pack.tar'
+
+
 class Datablock:
     """
     Declare topics via TOPICS:
@@ -2038,8 +2047,9 @@ class Datablock:
         # in it too.
         determined: dict | None = field(default=None, kw_only=True)
         # The tag the narrower block was filed under, when it is not this block's: a block
-        # keyed by tag -- a tablet -- is looked for under its tag, and the same identity
-        # filed under a tag since renamed is found only where this says. None: this block's.
+        # filed under its tag -- a tag-bearing keyby, or a tablet built before 2026-10-17 --
+        # is looked for under its tag, and the same identity filed under a tag since renamed
+        # is found only where this says. None: this block's.
         tag: str | None = field(default=None, kw_only=True)
         # Why the coincidence holds. Last -- and keyword-only, so that it is
         # last in a subclass's constructor too, after its BLOCK or TABLET.
@@ -2439,18 +2449,22 @@ class Datablock:
     # what the block IS, so they are noise in a citation and they dominate it.
     #
     # `tag` is the one that cannot be dropped silently. It is NOT part of the
-    # identity hash (signature() is built from _rootkwargs_ + spec), but a
-    # tag-keyed layout (a Datatablet's KEYBY, or an explicit
-    # keyby='tag_version_shorthash') puts it in the artifact PATH, so a citation
-    # without it re-evaluates to the same hash at a DIFFERENT key -- i.e. it
-    # points at storage that does not hold the artifact you cited.
+    # identity hash (signature() is built from _rootkwargs_ + spec), and no
+    # block's KEYBY puts it in its path. But a block may still be filed under
+    # its tag: given a tag-bearing keyby explicitly (keyby='tag_version_shorthash',
+    # say), or a tablet built before 2026-10-17, which is read where its tag
+    # filed it (`Datatablet._tags_filed_under_`). A citation without the tag
+    # re-evaluates to the same hash, but not to where that one is -- storage
+    # that does not hold the artifact you cited.
     CITE_KEEP_TAILKWARGS = ('tag',)
 
     # The keyby a block is given when its constructor is not: what its key,
     # and so its path, is made of. 'version_shorthash' leaves the tag out, so
     # a tag is a label and tagging a built block does not move it; for an
-    # untagged block it is the key 'tag_version_shorthash' made. `Datatablet`
-    # keeps 'tag_version_shorthash': a tablet's tag has always been in its path.
+    # untagged block it is the key 'tag_version_shorthash' made. No block has
+    # its tag in its path by default, tablets included: `Datatablet.KEYBY` is
+    # 'version_shorthash' too since 2026-10-17, and a tablet filed under its
+    # tag before then is read there (`Datatablet._redirected_paths_`).
     KEYBY = 'version_shorthash'
 
     Diff = collections.namedtuple('Diff', ['signature', 'topics', 'version'])
@@ -2708,7 +2722,7 @@ class Datablock:
             # Resolve specline LOCALs (e.g. "$dbx.getenv('KEY')") to real paths.
             self.local = eval(self._local_) if self._local_ is not None else None
             if self.local is None:
-                self.local = os.environ.get('DBX_LOCAL') or '/tmp/dbx'
+                self.local = _env_.DBX_LOCAL or '/tmp/dbx'
             if self.local is None:
                 raise ValueError(f"No local for {self.__class__.__name__}: pass local= or set DBX_LOCAL")
             if self.local_must_exist and not os.path.isdir(self.local):
@@ -3233,6 +3247,8 @@ class Datablock:
         """Validity of one topic, or of a whole group."""
         topicpath = self._normtopic_(topicpath)
         path = self.path(*topicpath)
+        if isinstance(path, str):
+            self._unpack_shipped_(path)
         valid = self.valid_path(path)
         if valid and not self.is_topicgroup(*topicpath):
             subdirs = getattr(self._topicnode_(*topicpath), 'subdirs', None)
@@ -3240,6 +3256,35 @@ class Datablock:
                 valid = self._valid_subdirs_(path, subdirs)
         self.log.detailed(f"{self.anchor}: topic {'/'.join(topicpath)} valid: {valid}")
         return valid
+
+    def _unpack_shipped_(self, path: str) -> bool:
+        """Unpack a directory `UNSAFE_ship(pack=True)` sent to *path* -- `<path>` + `PACK_SUFFIX` beside it, on a
+        local filesystem -- into place: into a sibling first, then swapped in for whatever is at *path*, the archive
+        removed, under a lock, so concurrent checks unpack it once, and the lock's file removed too; journaled
+        `UNSAFE_ship:unpacked`. Whether it unpacked one."""
+        archive = path.rstrip('/') + PACK_SUFFIX
+        if 'file' not in self.fs.protocol or not os.path.isfile(archive):
+            return False
+        with open(f"{archive}.lock", 'w') as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            if not os.path.isfile(archive):
+                return False                  # another process unpacked it while this one waited
+            fresh = f"{path.rstrip('/')}.unpack-{os.getpid()}"
+            shutil.rmtree(fresh, ignore_errors=True)
+            with tarfile.open(archive) as tar:
+                tar.extractall(fresh, filter='data')
+            if os.path.lexists(path):
+                stale = f"{path.rstrip('/')}.stale-{os.getpid()}"
+                os.rename(path, stale)
+                shutil.rmtree(stale, ignore_errors=True)
+            os.rename(fresh, path)
+            os.remove(archive)
+            # A process waiting on the lock finds the archive gone and leaves; one arriving later finds no archive
+            # and never takes it.
+            os.remove(f"{archive}.lock")
+        self.log.info(f"{self.anchor}: unpacked {archive} into {path}")
+        self.write_journal_entry(event="UNSAFE_ship:unpacked", note=path, inline_note=True)
+        return True
 
     def _valid_subdirs_(self, root, subdirs) -> bool:
         """Whether every subdirectory and file a DATADIR declares by name is under *root*.
@@ -4592,7 +4637,8 @@ class Datablock:
                 for topic in topics_iter:
                     self._UNSAFE_copy_topic_(
                         topic, anchorkeypath, topicpaths=topicpaths,
-                        always_copy_whole_dirpath=always_copy_whole_dirpath, **kwargs,
+                        always_copy_whole_dirpath=always_copy_whole_dirpath, show_progress=show_progress,
+                        **kwargs,
                     )
 
             self.write_journal_entry(event="UNSAFE_copy_from:END", note=anchorkeypath, inline_note=True)
@@ -4678,7 +4724,7 @@ class Datablock:
 
     def UNSAFE_ship(self, targets=None, /, *, relocate: dict | None = None,
                     OVERRIDE: bool = False, overwrite: bool = False,
-                    validate: bool = True, show_progress: bool = True):
+                    validate: bool = True, show_progress: bool = True, pack: bool = False):
         """Copy named topics OUT, to locations a reader needs no dbx to find.
 
         The outbound mirror of `UNSAFE_copy_from`: that one takes one source
@@ -4701,6 +4747,12 @@ class Datablock:
         The targets go in the journal. That is what makes a shipped file traceable: a
         yaml checked into another repo is otherwise anonymous, and nothing says which
         block's VAR produced it.
+
+        With *pack*, a directory topic goes as one archive, `<target>` + `PACK_SUFFIX`,
+        for a link where every file costs a round trip (SFTP). Nothing runs where it
+        lands, so it is unpacked there by the first dbx process that checks the topic
+        at that path (`valid_topic`): a datablock of the same identity on that lake,
+        say a build there. Until then the topic is not there.
         """
         targets = dict(targets) if targets else {}
         if not targets:
@@ -4733,7 +4785,9 @@ class Datablock:
             for topic, target in items_iter:
                 shipped.update(self._UNSAFE_ship_topic_(topic, target,
                                                         overwrite=overwrite,
-                                                        relocate=relocate))
+                                                        relocate=relocate,
+                                                        show_progress=show_progress,
+                                                        pack=pack))
             self.log.verbose(f"Shipping topics: END ({note})")
             self.write_journal_entry(event="UNSAFE_ship:END", note=note, inline_note=True)
         except Exception as e:
@@ -7163,13 +7217,15 @@ class Datablock:
             row = j.iloc[0]
             return BuildJournalEntry(row.dropna(), storage_options=self.storage_options)
 
-    def _UNSAFE_copy_fs_(self, *, src_path, dst_path, recursive: bool = False):
+    def _UNSAFE_copy_fs_(self, *, src_path, dst_path, recursive: bool = False, show_progress: bool = False):
         """Copy a single file or directory between two fsspec paths.
 
         fsspec does not implement a generic cross-filesystem `.copy()`, so
         this dispatches to put/get directly when either side is local, and
-        falls back to a temporary local directory when both are remote.
+        falls back to a temporary local directory when both are remote. With
+        *show_progress*, a directory's copy shows a bar of its bytes and files.
         """
+        desc = os.path.basename(str(src_path).rstrip('/')) if show_progress else None
         src_fs, _ = self._url_to_fs_(src_path)
         dst_fs, _ = self._url_to_fs_(dst_path)
 
@@ -7178,14 +7234,23 @@ class Datablock:
         if dst_dir:
             dst_fs.makedirs(dst_dir, exist_ok=True)
 
+        # A directory goes file by file, its contents into *dst_path*: fsspec's SFTP `put_file` and `get_file` take
+        # no directory -- a recursive `put` handed it the directory itself, which paramiko opened as a file -- and
+        # file by file is what every filesystem does, so the contents land the same way on each.
         if 'file' in src_fs.protocol or 'file' in dst_fs.protocol:
             # At least one is local filesystem, use put/get directly
             if 'file' in src_fs.protocol:
                 # Source is local, destination is remote
-                dst_fs.put(src_path, dst_path, recursive=recursive)
+                if recursive and src_fs.isdir(src_path):
+                    self._put_tree_(src_path, dst_fs, dst_path, desc=desc)
+                else:
+                    dst_fs.put(src_path, dst_path, recursive=recursive)
             else:
                 # Source is remote, destination is local
-                src_fs.get(src_path, dst_path, recursive=recursive)
+                if recursive and src_fs.isdir(src_path):
+                    self._get_tree_(src_fs, src_path, dst_path, desc=desc)
+                else:
+                    src_fs.get(src_path, dst_path, recursive=recursive)
         else:
             # Both are remote, use temporary directory
             with tempfile.TemporaryDirectory() as tmpdir:
@@ -7193,8 +7258,62 @@ class Datablock:
                 if not basename:
                     basename = "root"
                 tmp_path = os.path.join(tmpdir, basename)
-                src_fs.get(src_path, tmp_path, recursive=recursive)
-                dst_fs.put(tmp_path, dst_path, recursive=recursive)
+                if recursive and src_fs.isdir(src_path):
+                    self._get_tree_(src_fs, src_path, tmp_path, desc=desc and f"{desc} (get)")
+                    self._put_tree_(tmp_path, dst_fs, dst_path, desc=desc and f"{desc} (put)")
+                else:
+                    src_fs.get(src_path, tmp_path, recursive=recursive)
+                    dst_fs.put(tmp_path, dst_path, recursive=recursive)
+
+    @staticmethod
+    def _put_tree_(local_dirpath, dst_fs, dst_path, *, desc: str | None = None):
+        """Each file under the local directory *local_dirpath* to the same place under *dst_path* on *dst_fs*; with
+        *desc*, a bar of the bytes sent, and the files, so named."""
+        base = dst_fs._strip_protocol(str(dst_path)).rstrip('/')
+        files = []
+        for root, _, names in os.walk(str(local_dirpath)):
+            rel = os.path.relpath(root, str(local_dirpath))
+            remote = base if rel == '.' else f"{base}/{rel}"
+            dst_fs.makedirs(remote, exist_ok=True)
+            files += [(os.path.join(root, name), f"{remote}/{name}") for name in names]
+        with Datablock._tree_bar_(desc, files, lambda local, _: os.path.getsize(local)) as bar:
+            for local, remote in files:
+                dst_fs.put_file(local, remote)
+                bar.sent(os.path.getsize(local))
+
+    @staticmethod
+    def _get_tree_(src_fs, src_path, local_dirpath, *, desc: str | None = None):
+        """Each file under *src_path* on *src_fs* to the same place under the local directory *local_dirpath*; with
+        *desc*, a bar of the bytes received, and the files, so named."""
+        base = src_fs._strip_protocol(str(src_path)).rstrip('/')
+        sizes = src_fs.find(base, detail=True)
+        files = [(path, os.path.join(str(local_dirpath), os.path.relpath(path, base))) for path in sizes]
+        with Datablock._tree_bar_(desc, files, lambda remote, _: sizes[remote].get('size') or 0) as bar:
+            for remote, local in files:
+                os.makedirs(os.path.dirname(local), exist_ok=True)
+                src_fs.get_file(remote, local)
+                bar.sent(sizes[remote].get('size') or 0)
+
+    @staticmethod
+    @contextlib.contextmanager
+    def _tree_bar_(desc: str | None, files: list, size):
+        """A bar over *files* -- `(src, dst)` pairs, *size* of each -- in bytes, its postfix the files done; a no-op
+        without *desc*. Yields an object whose `sent(n)` counts a file of n bytes."""
+        if desc is None:
+            yield types.SimpleNamespace(sent=lambda n: None)
+            return
+        bar = tqdm.tqdm(total=sum(size(*f) for f in files), desc=desc, unit='B', unit_scale=True)
+        done = [0]
+
+        def sent(n):
+            done[0] += 1
+            bar.update(n)
+            bar.set_postfix_str(f"{done[0]}/{len(files)} files", refresh=False)
+
+        try:
+            yield types.SimpleNamespace(sent=sent)
+        finally:
+            bar.close()
 
     def _UNSAFE_copy_file_(self, src_path, dst_path):
         """Copy a single file, preferring a fast server-side blob copy.
@@ -7265,8 +7384,9 @@ class Datablock:
         """
         return getattr(self, 'worker_parallelization', None) or getattr(self, 'parallelization', None)
 
-    def _UNSAFE_copy_topic_dir_(self, topic, anchorkeypath, *, topicpaths=None):
-        """Copy the entire .dirpath(topic) directory."""
+    def _UNSAFE_copy_topic_dir_(self, topic, anchorkeypath, *, topicpaths=None, show_progress: bool = False):
+        """Copy the entire .dirpath(topic) directory; with *show_progress*, a bar of its bytes and files where it goes
+        file by file."""
         topic = self._normtopic_((topic,))
         if topicpaths is not None:
             _src_path = self._topicpaths_lookup_(topicpaths, topic)
@@ -7325,10 +7445,10 @@ class Datablock:
                 ]
                 _executor.exec_callables(_callables)
         else:
-            self._UNSAFE_copy_fs_(src_path=src_path, dst_path=dst_path, recursive=True)
+            self._UNSAFE_copy_fs_(src_path=src_path, dst_path=dst_path, recursive=True, show_progress=show_progress)
 
     def _UNSAFE_ship_topic_(self, topic, target, *, overwrite: bool = False,
-                            relocate: dict | None = None):
+                            relocate: dict | None = None, show_progress: bool = False, pack: bool = False):
         """Copy one topic OUT to *target*. Returns `{topic: target}` as shipped.
 
         The outbound counterpart of `_UNSAFE_copy_topic_`, and the same
@@ -7348,7 +7468,7 @@ class Datablock:
                 leaf = self._normtopic_((leaf,))
                 sub = self._UNSAFE_ship_topic_(
                     leaf, os.path.join(str(target), *leaf[len(topic):]),
-                    overwrite=overwrite, relocate=relocate)
+                    overwrite=overwrite, relocate=relocate, show_progress=show_progress, pack=pack)
                 out.update(sub)
             return {topic[0]: out} if len(topic) == 1 else out
 
@@ -7359,7 +7479,7 @@ class Datablock:
         target = str(target)
         if not overwrite:
             dst_fs, _ = self._url_to_fs_(target)
-            if dst_fs.exists(target):
+            if dst_fs.exists(target) or (pack and is_dir and dst_fs.exists(target.rstrip('/') + PACK_SUFFIX)):
                 raise FileExistsError(
                     f"UNSAFE_ship: {target!r} already holds data for topic "
                     f"{'/'.join(topic)!r}. Pass overwrite=True to replace it."
@@ -7390,13 +7510,27 @@ class Datablock:
                     f"Topic {'/'.join(topic)} already reads from {target}; nothing to ship")
                 return self._nest_topic_path_(topic, target)
             self.log.detailed(f"Shipping {'/'.join(topic)} from {src_path} to {target}")
+            if pack and is_dir:
+                if 'file' not in self._url_to_fs_(str(src_path))[0].protocol:
+                    raise ValueError(f"UNSAFE_ship(pack=True): topic {'/'.join(topic)!r} is at {src_path}, not on a "
+                                     f"local filesystem to pack from")
+                archive = os.path.join(workdir(), os.path.basename(target.rstrip('/')) + PACK_SUFFIX)
+                with tarfile.open(archive, 'w') as tar:
+                    for name in sorted(os.listdir(src_path)):
+                        tar.add(os.path.join(src_path, name), arcname=name)
+                dst_fs, _ = self._url_to_fs_(target)
+                remote = dst_fs._strip_protocol(target.rstrip('/') + PACK_SUFFIX)
+                dst_fs.makedirs(os.path.dirname(remote), exist_ok=True)
+                dst_fs.put_file(archive, remote, callback=self._transfer_callback_(
+                    f"pack {os.path.basename(target.rstrip('/'))}", show_progress=show_progress))
+                return self._nest_topic_path_(topic, target)
             # The trailing slash is load-bearing: fsspec nests a source DIRECTORY under
             # a destination that already exists, so without it a re-ship, or a ship onto
             # a prefix some earlier partial transfer created, silently lands the tree one
             # level deep -- `<target>/<topic>/...` instead of `<target>/...`.
             self._UNSAFE_copy_fs_(src_path=f"{str(src_path).rstrip('/')}/" if is_dir
                                   else src_path,
-                                  dst_path=target, recursive=is_dir)
+                                  dst_path=target, recursive=is_dir, show_progress=show_progress)
             return self._nest_topic_path_(topic, target)
         finally:
             if made:
@@ -7433,7 +7567,8 @@ class Datablock:
             out = {name: out}
         return out
 
-    def _UNSAFE_copy_topic_(self, topic, anchorkeypath, *, topicpaths=None, always_copy_whole_dirpath: bool = False, **kwargs):
+    def _UNSAFE_copy_topic_(self, topic, anchorkeypath, *, topicpaths=None, always_copy_whole_dirpath: bool = False,
+                            show_progress: bool = False, **kwargs):
         """Copy one topic's data from anchorkeypath into this Datablock.
 
         Dispatches to `_UNSAFE_copy_topic_dir_` or
@@ -7455,7 +7590,7 @@ class Datablock:
             for leaf in self._leaves_under_(*topic):
                 self._UNSAFE_copy_topic_(leaf, anchorkeypath, topicpaths=topicpaths,
                                          always_copy_whole_dirpath=always_copy_whole_dirpath,
-                                         **kwargs)
+                                         show_progress=show_progress, **kwargs)
             return
         if self._is_syntopic_(*topic):
             # No location on either side -- there is nothing to copy.
@@ -7472,7 +7607,7 @@ class Datablock:
         )
         if use_dir:
             with self.log.section(f"Using copy_topic_dir for topic {topic}"):
-                self._UNSAFE_copy_topic_dir_(topic, anchorkeypath, topicpaths=topicpaths)
+                self._UNSAFE_copy_topic_dir_(topic, anchorkeypath, topicpaths=topicpaths, show_progress=show_progress)
         else:
             with self.log.section(f"Using copy_topic_file for topic {topic}"):
                 self._UNSAFE_copy_topic_file_(topic, anchorkeypath, topicpaths=topicpaths)
@@ -7515,7 +7650,7 @@ class Datablock:
         """Whether this block's keyby is one it was given, rather than its class's KEYBY.
 
         What decides whether a stack hands its keyby to its blocks: a table at
-        its default leaves each tablet its own (tag-keyed) KEYBY, so a tablet's
+        its default leaves each tablet its own KEYBY, so a tablet's
         path is the same built by the table and read back by `tablet(i)`.
         Judged by value, not by how the block was constructed, so a pickled
         or re-quoted stack, which always spells its keyby, says the same.

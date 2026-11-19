@@ -432,6 +432,16 @@ def test_compact_keeps_the_newest_entry_of_each_entrypath(lake, monkeypatch):
     assert list(again['action']) == ['unchanged'] and again['removed'].sum() == 0, "compacting again does nothing"
 
 
+def test_compact_removes_the_directories_it_empties_but_the_pipelines_own(lake):
+    for n in range(2):
+        Flat(spec={'n': n}).create()
+    frame = PipeJournal.UNSAFE_compact(OVERRIDE=True)
+    pipeline_dir = os.path.join(lake, PipeJournal.ANCHOR, Flat().fqcn)
+    assert frame['dirs'].sum() > 0
+    assert not [d for d, sub, fs in os.walk(pipeline_dir) if not sub and not fs], "no directory left empty"
+    assert sorted(PipeJournal.collect()['hash']) == sorted([Flat(spec={'n': n}).hash for n in range(2)])
+
+
 def test_compacting_again_merges_and_drops_what_was_written_since(lake):
     for _ in range(2):
         Flat(spec={'n': 1}).create()

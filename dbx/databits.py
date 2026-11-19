@@ -57,6 +57,10 @@ try:
 except ImportError:
     _TORCH_AVAILABLE = False
 import tqdm
+
+# dbx.env, the module -- for every dbx module: `from . import env` after `import *` of this one finds `env`, the
+# function, until dbx/__init__ rebinds the name.
+from . import env as _env_
 import yaml
 
 # Disable tqdm's background TMonitor thread (see dbx.py for rationale).
@@ -66,14 +70,8 @@ __eval__ = __builtins__['eval'] if isinstance(__builtins__, dict) else getattr(_
 __exec__ = __builtins__['exec'] if isinstance(__builtins__, dict) else getattr(__builtins__, 'exec')
 
 
-# DBX_DIRTY=True: run the working tree as it is -- DBX_USE_WORK_REPO=False and DBX_DIRTY_REPO_OK=True together, set
-# here once, before anything reads them, so every reader and every child process sees the pair. It overrides a
-# DBX_USE_WORK_REPO=True a shell profile exports.
-if os.environ.get('DBX_DIRTY', '').lower() in ('true', '1'):
-    os.environ['DBX_USE_WORK_REPO'] = 'False'
-    os.environ['DBX_DIRTY_REPO_OK'] = 'True'
-
-DBX_GIT_REPO = os.environ.get('DBX_GIT_REPO')
+# Importing dbx.env applies DBX_DIRTY -- before anything here reads what it sets.
+DBX_GIT_REPO = _env_.DBX_GIT_REPO
 if DBX_GIT_REPO is None:
     try:
         _repo = git.Repo('.', search_parent_directories=True)
@@ -86,6 +84,10 @@ DBX_WORK_ROOT = None
 
 
 _DBX_PIN_ROOTS = []
+
+# The variable a Ray worker process reads for its setup hook, as `ray.init` sets it for one named in the job's
+# runtime_env -- but not for one in an actor's, which Ray ignores. `remote` sets it in the actor's itself.
+RAY_SETUP_HOOK_ENV_VAR = '__RAY_WORKER_PROCESS_SETUP_HOOK_ENV_VAR'
 
 
 # Command-line flags consumed by `pintrampoline` rather than passed on.
@@ -403,7 +405,7 @@ def parse_storage_options(raw: str | None) -> dict:
 
 def default_storage_options() -> dict:
     """Return storage options from `DBX_STORAGE_OPTIONS` env var, or `{}`."""
-    return parse_storage_options(os.environ.get('DBX_STORAGE_OPTIONS'))
+    return parse_storage_options(_env_.DBX_STORAGE_OPTIONS)
 
 
 def UNSAFE_allowed(what: str, *, OVERRIDE: bool = False):
@@ -676,7 +678,7 @@ def eval(name):
 
 def default_datalake() -> 'str | None':
     """The datalake the environment names: `DBX_DATALAKE`, or None when it is unset."""
-    return os.environ.get('DBX_DATALAKE') or None
+    return _env_.DBX_DATALAKE
 
 
 def anchors(datalake: str | None = None, *, storage_options: dict | None = None) -> list[str]:
@@ -2991,6 +2993,51 @@ def dbx_versions(version):
     return None, None
 
 
+class PinMismatchError(RuntimeError):
+    """A worker said to be pinned (`DBX_PINNED_REVISION`) runs other code: its hashes would be wrong."""
+
+
+def check_pinned(dbx_module=None) -> None:
+    """Raise `PinMismatchError` unless this interpreter runs the code `DBX_PINNED_REVISION` names; nothing if unpinned.
+
+    Pinning is done before dbx is imported, by a Ray setup hook or a
+    `PYTHONPATH` -- and nothing about it is checked until here: a hook
+    Ray did not run, a path a node cannot see, leave the worker importing
+    another dbx, and still claiming the revision. So: dbx must be imported
+    from a git checkout at the pinned dbx commit, and a checkout at the
+    pinned project commit must be on `sys.path`, where the project's
+    modules are imported from.
+    """
+    pinned = _env_.DBX_PINNED_REVISION
+    if not pinned:
+        return
+    dbx_rev, project_rev = dbx_revisions(pinned)
+
+    def at(path, rev):
+        """Whether *path* is the top of a git checkout whose HEAD is *rev*."""
+        if not os.path.exists(os.path.join(path, '.git')):
+            return False
+        try:
+            repo = git.Repo(path)
+            return repo.head.commit.hexsha == repo.commit(rev).hexsha
+        except Exception:
+            return False
+
+    if dbx_rev:
+        module = dbx_module or sys.modules.get('dbx')
+        where = os.path.dirname(os.path.dirname(os.path.abspath(module.__file__)))
+        if not at(where, dbx_rev):
+            raise PinMismatchError(
+                f"pinned to {pinned}, but dbx is imported from {where}, not a checkout at {dbx_rev}: "
+                f"the pin did not take -- a Ray setup hook not run, or pins this node cannot see")
+    if project_rev:
+        entries = [os.path.abspath(p or '.') for p in sys.path]
+        if not any(at(p, project_rev) for p in entries):
+            raise PinMismatchError(
+                f"pinned to {pinned}, but no checkout at {project_rev} is on sys.path: the project's "
+                f"modules would be imported from elsewhere -- the pin did not take")
+
+
 def gitwrkreposetup(revision=None, *, gitrepo=None, reason: str = "", log=None):
     if log is None:
         log = _datalog_(name="gitwrkreposetup")
@@ -3003,7 +3050,7 @@ def gitwrkreposetup(revision=None, *, gitrepo=None, reason: str = "", log=None):
     # -- nothing that COULD be: asking for a different revision here would rewind
     # the project underneath a dbx that cannot follow it, which is precisely the
     # split that produces a confidently wrong hash.
-    pinned = os.environ.get('DBX_PINNED_REVISION')
+    pinned = _env_.DBX_PINNED_REVISION
     if pinned:
         # Pinned: its code is the revision's, whatever its source repos hold --
         # no work repo to make, and no dirty check to make before one, even
@@ -3040,7 +3087,7 @@ def gitwrkreposetup(revision=None, *, gitrepo=None, reason: str = "", log=None):
         return wrkroot, wrkrepo
 
 
-    use_wrkrepo = os.environ.get('DBX_USE_WORK_REPO') == 'True' or revision is not None
+    use_wrkrepo = _env_.DBX_USE_WORK_REPO == 'True' or revision is not None
     if use_wrkrepo and DBX_USE_WORK_REPO is None:
         if DBX_GIT_REPO is None:
             raise ValueError("DBX_GIT_REPO is not set and could not be detected. Cannot setup temporary wrkrepo.")
@@ -3056,7 +3103,7 @@ def gitwrkreposetup(revision=None, *, gitrepo=None, reason: str = "", log=None):
             if path is None:
                 return
             repo = git.Repo(path)
-            if repo.is_dirty() and not os.environ.get('DBX_DIRTY_REPO_OK'):
+            if repo.is_dirty() and not _env_.DBX_DIRTY_REPO_OK:
                 msg = (
                     f"Dirty git repo: {path}: commit your changes before "
                     f"creating a work-repo clone (uncommitted changes would be lost)"
@@ -3196,7 +3243,7 @@ def pintrampoline(printer=None, log=None):
     """
     if log is None:
         log = _datalog_(name="pintrampoline")
-    if os.environ.get('DBX_PINNED_REVISION'):
+    if _env_.DBX_PINNED_REVISION:
         return                                  # phase 2: already where we need to be
 
     revision = selector = pin_root = None
@@ -3253,11 +3300,11 @@ def pintrampoline(printer=None, log=None):
 
 
 def pinshimdir(log=None):
-    """Materialise `dbx._pinshim_` as an importable `dbxpinshim` module dir.
+    """Materialise `dbx._pinshim_` as an importable `dbxpinshim` module dir: `dbxpinshim.py` in it.
 
-    Returned path is meant for Ray's `runtime_env['working_dir']`, which Ray
-    uploads -- so unlike `gitpinrepos` output it needs no shared
-    filesystem. A few KB.
+    `Ray.connect` ships that file to every worker as the job's
+    `runtime_env['py_modules']`, which Ray uploads -- so unlike
+    `gitpinrepos` output it needs no shared filesystem. A few KB.
     """
     if log is None:
         log = _datalog_(name="pinshimdir")
@@ -3571,6 +3618,9 @@ class Remote:
             # We import the package to get the full namespace.
             import dbx
 
+            # A pinned worker is checked before it does anything: one running other code would return wrong hashes.
+            check_pinned(dbx)
+
             # Call this here, because os.environ got updated and/or a new revision may need to be checked out
             dbx.gitwrkreposetup(revision=revision, reason="because of RemoteDBX initialization")
                 
@@ -3592,17 +3642,29 @@ class Remote:
 
     # 1. Protocol and hooks ------------------------------------------------
 
-    def __init__(self, handle=None, *, revision=None, slurm=None):
+    def __init__(self, handle=None, *, revision=None, slurm=None, runtime_env=None):
         """
-        Initialize the remote proxy.
+        Initialize the remote proxy: a new RemoteDBX actor, in *runtime_env* -- its own -- unless *handle* is given.
         """
         if handle is not None and revision is not None:
             raise ValueError("Remote: Cannot provide both 'handle' and 'revision'")
         self._handle = handle
         self._slurm = slurm
+        # Alive on the process's Ray connection: `Ray.connect` will not end it under this Remote.
+        Ray._remotes_.add(self)
         if handle is None:
             import ray
-            self._handle = ray.remote(Remote.RemoteDBX).remote(revision=revision)
+            actor = ray.remote(Remote.RemoteDBX)
+            if runtime_env is not None:
+                actor = actor.options(runtime_env=runtime_env)
+            self._handle = actor.remote(revision=revision)
+            # A pinned worker checks its pin as it starts (`check_pinned`); waiting for it here raises that
+            # here, where the Remote is asked for, not at its first use.
+            pinned = ((runtime_env or {}).get('env_vars') or {}).get('DBX_PINNED_REVISION')
+            if pinned:
+                got = ray.get(self._handle.environ.remote('DBX_PINNED_REVISION'))
+                if got != pinned:
+                    raise PinMismatchError(f"Remote: asked for a worker pinned to {pinned}, got one pinned to {got}")
 
     def __del__(self):
         """
@@ -3920,6 +3982,130 @@ def _shquote_(text: str) -> str:
     return "'" + text.replace("'", "'\\''") + "'"
 
 
+class RayReconnectError(RuntimeError):
+    """Another Ray connection was asked for, and making it would end what lives on this one."""
+
+
+class Ray:
+    """A Ray cluster: the one `remote` -- and so `entry.originst()` -- and `dbx.gpu.run` connect this process to.
+
+    As with `BuildJournal`, one is current: the innermost `with Ray(...)` open
+    in this process, else `DEFAULT_RAY`, whose address is `DBX_RAY` -- read
+    when it connects -- and, with that unset, whatever `ray.init()` finds or
+    starts:
+
+        with dbx.Ray('ray://head:10001'):
+            block = entry.originst()          # its worker on head's cluster
+
+    Unlike a journal, a process holds ONE Ray connection, and every Remote
+    lives on it -- each pinned by an actor runtime_env of its own, so Remotes
+    at different revisions ride the same connection. Connecting again -- to
+    another cluster, or with another job working_dir -- ends everything on the
+    old one, so it is refused (`RayReconnectError`) while a Remote is alive on
+    it, or when the connection is not dbx's: whatever made it may be using it.
+    """
+
+    _STACK_ = []
+    _LOCK_ = threading.RLock()
+    # The connection dbx made: `(address, working_dir)`. None: none, or one dbx did not make.
+    _connection_ = None
+    # The Remotes alive on it.
+    _remotes_ = weakref.WeakSet()
+
+    def __init__(self, address: 'str | None' = None):
+        """A cluster at *address* -- `'auto'`, `'ray://host:port'`, ...; None, `DBX_RAY`'s when it connects."""
+        self._address = address
+
+    def __enter__(self):
+        with Ray._LOCK_:
+            Ray._STACK_.append(self)
+        return self
+
+    def __exit__(self, *exc):
+        with Ray._LOCK_:
+            # This handle's innermost entry: exits out of order must not pop another's.
+            for i in range(len(Ray._STACK_) - 1, -1, -1):
+                if Ray._STACK_[i] is self:
+                    del Ray._STACK_[i]
+                    break
+        return False
+
+    def __repr__(self):
+        return f"dbx.Ray({self._address!r})"
+
+    @staticmethod
+    def current() -> 'Ray':
+        """The innermost `with Ray(...)` open in this process, else `DEFAULT_RAY`."""
+        with Ray._LOCK_:
+            return Ray._STACK_[-1] if Ray._STACK_ else DEFAULT_RAY
+
+    @property
+    def address(self) -> 'str | None':
+        """The address it was given, else `DBX_RAY`, as it is now; None: whatever `ray.init()` finds or starts."""
+        return self._address if self._address is not None else _env_.DBX_RAY
+
+    @staticmethod
+    def working_dir(working_dir='auto') -> 'str | None':
+        """*working_dir*, with `'auto'` the workspace's on Anyscale (`dbx.anyscale.working_dir()`), else None: Ray's own."""
+        if working_dir != 'auto':
+            return working_dir
+        from . import anyscale
+        return anyscale.working_dir() if anyscale.present() else None
+
+    def connect(self, *, working_dir='auto', runtime_env: 'dict | None' = None, shim: bool = False, log=None):
+        """Connect this process to this cluster -- or keep the connection it has to it -- and return `ray`.
+
+        The connection is kept when dbx made it, to the same cluster -- or to
+        `'auto'`'s, for an address None or `'auto'` -- with the same job
+        *working_dir* (`working_dir()`). One dbx did not make is kept for an
+        address None, unless *shim* is needed: its job does not ship the pin
+        shim. Otherwise another is made -- refused while a Remote lives on the
+        old one, or when it is not dbx's (`RayReconnectError`). A connection
+        dbx makes ships the shim to every worker, as the job's `py_modules`,
+        and *runtime_env* -- the job's, and so every worker's -- with it.
+        """
+        import ray
+        log = log or _datalog_(name="Ray")
+        address, working_dir = self.address, self.working_dir(working_dir)
+        with Ray._LOCK_:
+            if ray.is_initialized():
+                held = Ray._connection_
+                if held is not None and held[1] == working_dir and self._same_(address, held[0]):
+                    return ray
+                if held is None and address is None and not shim:
+                    return ray
+                if held is None:
+                    raise RayReconnectError(
+                        f"Ray is connected, but not by dbx, and {self!r} needs "
+                        f"{'its own connection' if address is not None else 'one that ships the pin shim'}: "
+                        f"call ray.shutdown() first, if nothing still needs that connection")
+                alive = len(Ray._remotes_)
+                if alive:
+                    raise RayReconnectError(
+                        f"{self!r} at {address!r} with working_dir {working_dir!r} is another connection than "
+                        f"this process's -- {held[0]!r}, {held[1]!r} -- and {alive} Remote(s) live on that one: "
+                        f"drop them first, or use that cluster")
+                log.info(f"Ray: reconnecting to {address or 'the local cluster'} -- no Remote lives on the old connection")
+                ray.shutdown()
+            job_env = dict(runtime_env or {})
+            job_env['py_modules'] = [*job_env.get('py_modules', ()), os.path.join(pinshimdir(log=log), 'dbxpinshim.py')]
+            if working_dir is not None:
+                job_env['working_dir'] = working_dir
+            ray.init(**({'address': address} if address is not None else {}), runtime_env=job_env,
+                     ignore_reinit_error=True)
+            Ray._connection_ = (address, working_dir)
+        return ray
+
+    @staticmethod
+    def _same_(address, held) -> bool:
+        """Whether *address* names the cluster dbx connected to at *held*: the same, or `'auto'`'s, for None or `'auto'`."""
+        return address == held or (address in (None, 'auto') and held in (None, 'auto'))
+
+
+# The current Ray when no `with Ray(...)` is open: `DBX_RAY`'s.
+DEFAULT_RAY = Ray()
+
+
 def remote(*, revision=None, slurm=None, conda=None, address=None, shared_repo=None,
            pin_root=None, pin_mode='auto', pin_source=None, gitrepo=None,
            working_dir='auto', env: 'dict | None' = None, log: 'Datalog' = _datalog_()):
@@ -3936,12 +4122,15 @@ def remote(*, revision=None, slurm=None, conda=None, address=None, shared_repo=N
     ----------
     address:
         Ray cluster to connect to, for a cluster that was not started by
-        *slurm*. `None` runs against a local Ray.
+        *slurm*: `'auto'`, or an address. `None` (default) is the current
+        `Ray`'s -- the innermost `with dbx.Ray(...)`, else `DBX_RAY`'s, and
+        with that unset, whatever `ray.init()` finds -- the cluster this host
+        is the head of -- or starts. See `Ray`: the process connects once.
     shared_repo:
         Whether the workers can see `_DBX_GIT_REPO_`, the original repo
         path. `None` (default) guesses: true whenever the workers might be on
-        another host, i.e. when *slurm* or *address* is given. See the note on
-        filesystem visibility below.
+        another host -- *slurm* or *address* given -- or clone it themselves,
+        by the shim. See the note on filesystem visibility below.
     pin_root:
         Forwarded to `gitpinrepos` in `pin_mode='pin_root'`. Same
         visibility requirement as *shared_repo*: the default temporary directory
@@ -3952,8 +4141,13 @@ def remote(*, revision=None, slurm=None, conda=None, address=None, shared_repo=N
         How the worker comes up pinned. `'pin_root'` clones here and hands the
         worker paths; `'shim'` ships `dbx._pinshim_` and lets each worker
         clone for itself. `'auto'` (default) picks `'shim'` when *pin_source*
-        is given, or when the workers may be off-host and Ray supports the setup
-        hook; otherwise `'pin_root'`, which is cheaper on one host.
+        is given, `'pin_root'` when *pin_root* is -- a place on storage the
+        workers share -- and otherwise `'shim'` wherever Ray supports the setup
+        hook, `'pin_root'` where it does not. The shim is right wherever the
+        workers are: a Ray running on this host may still put them on another
+        node -- an Anyscale workspace's head offers Ray no CPU at all -- where a
+        temporary pin_root here is not. It clones once per node and revision,
+        no more than pin_root does on one host.
     pin_source:
         SPACE-separated clone sources for `'shim'`, dbx first, matching the
         colon-separated parts of *revision*. Defaults to the repo paths in
@@ -3970,12 +4164,12 @@ def remote(*, revision=None, slurm=None, conda=None, address=None, shared_repo=N
         one's: `BuildJournalEntry.rinst` sets it to the datalake its entry
         recorded.
     working_dir:
-        Ray `runtime_env` working directory. `'auto'` (the default) means:
-        when pinning, hand Ray an EMPTY directory, because Ray otherwise puts
-        this process's cwd at the head of the worker's `sys.path` -- and a
-        driver run from inside the dbx or project checkout would then shadow the
-        pins with the live tree. Pass a path to supply your own, or `None` to
-        leave Ray's default alone and accept that cwd.
+        The Ray job's working directory, which every worker gets: `'auto'`
+        (the default), the workspace's on Anyscale -- `dbx.anyscale.working_dir()`,
+        as `dbx.gpu.run` gives it -- else Ray's own; a path; or `None`, none.
+        It is the connection's, so it is given when the process connects
+        (`Ray.connect`); the pins are not in it, nor shadowed by it -- the
+        shim puts them at the head of `sys.path` after Ray has set it up.
 
     Notes
     -----
@@ -3985,6 +4179,11 @@ def remote(*, revision=None, slurm=None, conda=None, address=None, shared_repo=N
     a local-looking one may not be.
     """
     import ray
+    if slurm and slurm.ray_address:
+        cluster = Ray(getattr(slurm, 'ray_client_address', slurm.ray_address))
+    else:
+        cluster = Ray(address) if address is not None else Ray.current()
+    address = cluster.address
     dbx_env = {k: v for k, v in os.environ.items() if k.startswith('DBX')}
 
     if DBX_USE_WORK_REPO is not None:
@@ -3996,8 +4195,22 @@ def remote(*, revision=None, slurm=None, conda=None, address=None, shared_repo=N
     # off-host cluster gets. This used to key off `slurm` alone, which left a
     # cluster reached via a plain `address` handing workers an unreadable /tmp path.
     offhost = bool(slurm) or address is not None
+    use_shim = False
+    if revision is not None:
+        if pin_mode == 'auto':
+            use_shim = pin_source is not None or (pin_root is None and pinhook_available(ray))
+        elif pin_mode == 'shim':
+            if not pinhook_available(ray):
+                raise ValueError(
+                    "pin_mode='shim' needs a Ray with runtime_env['worker_process_setup_hook']; "
+                    f"this one ({getattr(ray, '__version__', '?')}) has no such field"
+                )
+            use_shim = True
+        elif pin_mode not in ('pin_root', 'clone'):
+            raise ValueError(f"pin_mode must be 'auto', 'shim' or 'pin_root', got {pin_mode!r}")
+    # A worker cloning for itself clones from the original repos, wherever it is: the work repo is node-local.
     if shared_repo is None:
-        shared_repo = offhost
+        shared_repo = offhost or use_shim
     if shared_repo and gitrepo is None:
         if _DBX_GIT_REPO_ is None:
             raise ValueError(
@@ -4020,6 +4233,8 @@ def remote(*, revision=None, slurm=None, conda=None, address=None, shared_repo=N
         else:
             dbx_env[k] = str(v)
 
+    # The worker's own: each Remote is an actor with a runtime_env of its own, on the one connection every
+    # Remote shares -- a Remote at another revision is another worker, beside it, not a new connection.
     runtime_env = {'env_vars': dbx_env}
     if conda:
         runtime_env['conda'] = conda
@@ -4043,22 +4258,7 @@ def remote(*, revision=None, slurm=None, conda=None, address=None, shared_repo=N
     # _EditableFinder to sys.meta_path, leaving PathFinder -- and hence sys.path
     # -- ahead of it. The shim wins by inserting at sys.path[0] directly.
     worker_revision = revision
-    use_shim = False
     if revision is not None:
-        if pin_mode == 'auto':
-            use_shim = pin_source is not None or (offhost and pinhook_available(ray))
-        elif pin_mode == 'shim':
-            if not pinhook_available(ray):
-                raise ValueError(
-                    "pin_mode='shim' needs a Ray with runtime_env['worker_process_setup_hook']; "
-                    f"this one ({getattr(ray, '__version__', '?')}) has no such field"
-                )
-            use_shim = True
-        elif pin_mode in ('pin_root', 'clone'):
-            use_shim = False
-        else:
-            raise ValueError(f"pin_mode must be 'auto', 'shim' or 'pin_root', got {pin_mode!r}")
-
         # Tells the worker's gitwrkreposetup that it is already where it needs to
         # be, and lets it refuse a conflicting revision instead of half-applying one.
         dbx_env['DBX_PINNED_REVISION'] = revision
@@ -4086,20 +4286,25 @@ def remote(*, revision=None, slurm=None, conda=None, address=None, shared_repo=N
                     )
             dbx_env['DBX_PIN_SOURCE'] = pin_source
             dbx_env['DBX_PIN_REVISION'] = pin_revision
-            runtime_env['worker_process_setup_hook'] = 'dbxpinshim.setup'
+            dbx_env[RAY_SETUP_HOOK_ENV_VAR] = 'dbxpinshim.setup'
             log.verbose(f"PINNING by worker self-clone: {pin_source!r} at {pin_revision}")
         else:
-            if offhost and pin_root is None:
+            if pin_root is None:
                 log.warning(
-                    "PINNING into a temporary pin_root for an off-host cluster: workers "
-                    "on other hosts will not see it -- pass pin_root on shared storage, "
-                    "or pin_mode='shim' to have each worker clone for itself"
+                    "PINNING into a temporary pin_root: workers on other nodes will not see "
+                    "it -- pass pin_root on shared storage, or use a Ray with "
+                    "worker_process_setup_hook, for each worker to clone for itself"
                 )
             dbx_pin, project_pin = gitpinrepos(revision, gitrepo=dbx_env.get('DBX_GIT_REPO'),
                                                pin_root=pin_root, log=log)
             pins = [p for p in (dbx_pin, project_pin) if p]
             dbx_env['PYTHONPATH'] = os.pathsep.join(pins + [p for p in (os.environ.get('PYTHONPATH'),) if p])
             dbx_env['DBX_GIT_REPO'] = ':'.join(pins)
+            # PYTHONPATH comes after what Ray puts first -- the driver's directory, a working_dir --
+            # so the shim, where Ray has it, puts the pins ahead of those too.
+            if pinhook_available(ray):
+                dbx_env['DBX_PIN_PATHS'] = os.pathsep.join(pins)
+                dbx_env[RAY_SETUP_HOOK_ENV_VAR] = 'dbxpinshim.setup'
             log.verbose(f"PINNED worker to {revision} via PYTHONPATH={dbx_env['PYTHONPATH']}")
 
         # Both repos are already at the requested revision by the time the worker
@@ -4107,44 +4312,11 @@ def remote(*, revision=None, slurm=None, conda=None, address=None, shared_repo=N
         # clone again to no effect -- and for dbx, to no *possible* effect.
         worker_revision = None
 
-    # Ray prepends the driver's cwd to the worker's sys.path, AHEAD of anything
-    # PYTHONPATH contributes. Run the driver from inside the dbx or project
-    # checkout -- the most natural place to run it from -- and the live tree
-    # silently wins over the pins. Handing Ray a working_dir displaces that entry.
-    # The shim needs one anyway, to ship itself.
-    if working_dir == 'auto':
-        if use_shim:
-            runtime_env['working_dir'] = pinshimdir(log=log)
-        elif revision is not None:
-            empty = tempfile.TemporaryDirectory(prefix='dbx-pin-workdir-')
-            _DBX_PIN_ROOTS.append(empty)
-            runtime_env['working_dir'] = empty.name
-    elif use_shim:
-        raise ValueError(
-            "the self-clone shim needs working_dir to ship dbxpinshim.py, so it cannot "
-            "be combined with an explicit working_dir; use pin_mode='pin_root', or "
-            "leave working_dir='auto'"
-        )
-    elif working_dir is not None:
-        runtime_env['working_dir'] = working_dir
+    cluster.connect(working_dir=working_dir, shim=use_shim or 'DBX_PIN_PATHS' in dbx_env, log=log)
 
-    if slurm and slurm.ray_address:
-        if ray.is_initialized():
-            log.info("Re-initializing Ray to connect to Slurm Ray cluster...")
-            ray.shutdown()
-        # Use ray:// protocol for remote clusters to avoid shared /tmp/ray filesystem requirements
-        cluster_address = getattr(slurm, 'ray_client_address', slurm.ray_address)
-        ray.init(address=cluster_address, runtime_env=runtime_env, ignore_reinit_error=True)
-    elif address is not None:
-        if ray.is_initialized():
-            log.info(f"Re-initializing Ray to connect to cluster at {address}...")
-            ray.shutdown()
-        ray.init(address=address, runtime_env=runtime_env, ignore_reinit_error=True)
-    elif not ray.is_initialized():
-        ray.init(runtime_env=runtime_env, ignore_reinit_error=True)
-    
     log.verbose(f"INSTANTIATING Remote with env: {dbx_env}, revision: {revision}, slurm: {bool(slurm)}, conda: {conda}")
-    return Remote(revision=worker_revision, slurm=slurm)
+    return Remote(revision=worker_revision, slurm=slurm, runtime_env=runtime_env)
+
 
 def slurm_remote(*, revision=None, conda=None, n_gpus=0, mem='8G', n_cpus=1, partition=None, n_nodes=1, nodelist=None,
                  time='01:00:00', log: 'Datalog' = _datalog_()):

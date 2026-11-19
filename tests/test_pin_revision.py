@@ -15,6 +15,7 @@ import os
 import subprocess
 import sys
 import types
+import weakref
 
 import pytest
 
@@ -22,6 +23,7 @@ import dbx._pinshim_  # noqa: F401  -- imported here only so the tests can reach
 
 import dbx.datablocks as dbxmod
 import dbx.databits as databits_mod
+import dbx.anyscale as anyscale_mod
 import dbx.journals as journals_mod
 
 
@@ -82,20 +84,30 @@ def stub_ray(monkeypatch):
         def __init__(self, cls):
             self._cls = cls
 
+        def options(self, runtime_env=None, **kwargs):
+            captured['actor_env'] = runtime_env
+            return self
+
         def remote(self, **kwargs):
             captured['actor_kwargs'] = kwargs
-            return object()
+            # A worker as pinned as its runtime_env says: `Remote` asks it.
+            env = (captured.get('actor_env') or {}).get('env_vars') or {}
+            return types.SimpleNamespace(environ=types.SimpleNamespace(remote=env.get))
 
     ray = types.ModuleType('ray')
     ray.__version__ = '9.9.9-stub'
     ray.is_initialized = lambda: False
     ray.init = lambda **kw: captured.update(init=kw)
     ray.remote = _ActorClass
+    ray.get = lambda ref: ref
     ray.actor = types.SimpleNamespace(ActorHandle=type('ActorHandle', (), {}))
     ray.runtime_env = types.SimpleNamespace(
         RuntimeEnv=type('RuntimeEnv', (), {
             'known_fields': {'env_vars', 'working_dir', 'worker_process_setup_hook'}}))
     monkeypatch.setitem(sys.modules, 'ray', ray)
+    monkeypatch.delenv('DBX_RAY', raising=False)    # a shell's own must not pick the cluster
+    monkeypatch.setattr(databits_mod.Ray, '_connection_', None)
+    monkeypatch.setattr(databits_mod.Ray, '_remotes_', weakref.WeakSet())
     captured['ray'] = ray
     return captured
 
@@ -196,7 +208,7 @@ class TestRemotePinning:
 
         databits_mod.remote(revision=revision, pin_root=repos.pin_root)
 
-        env = stub_ray['init']['runtime_env']['env_vars']
+        env = stub_ray['actor_env']['env_vars']
         entries = env['PYTHONPATH'].split(os.pathsep)
         assert len(entries) == 2
         assert _head(entries[0]) == repos.dbx_shas[0]
@@ -209,7 +221,7 @@ class TestRemotePinning:
 
         databits_mod.remote(revision=revision, pin_root=repos.pin_root)
 
-        env = stub_ray['init']['runtime_env']['env_vars']
+        env = stub_ray['actor_env']['env_vars']
         assert env['DBX_GIT_REPO'] == env['PYTHONPATH']
 
     def test_worker_is_not_asked_to_check_out_again(self, repos, stub_ray, monkeypatch):
@@ -229,7 +241,7 @@ class TestRemotePinning:
 
         databits_mod.remote(revision=revision, pin_root=repos.pin_root)
 
-        env = stub_ray['init']['runtime_env']['env_vars']
+        env = stub_ray['actor_env']['env_vars']
         assert env['PYTHONPATH'].split(os.pathsep)[-1] == '/somewhere/else'
 
     def test_no_revision_leaves_pythonpath_alone(self, repos, stub_ray, monkeypatch):
@@ -239,7 +251,7 @@ class TestRemotePinning:
 
         databits_mod.remote()
 
-        env = stub_ray['init']['runtime_env']['env_vars']
+        env = stub_ray['actor_env']['env_vars']
         assert 'PYTHONPATH' not in env
         assert env['DBX_GIT_REPO'] == repos.gitrepo
         assert stub_ray['actor_kwargs'] == {'revision': None}
@@ -298,6 +310,21 @@ class TestPinShim:
         with pytest.raises(RuntimeError, match='1 sources but 2 revisions'):
             shim.setup()
 
+    def test_pin_paths_go_first_as_they_are(self, shim, tmp_path, monkeypatch, clean_path):
+        """`pin_mode='pin_root'`'s clones, ahead of whatever Ray put first -- the driver's directory."""
+        a, b = tmp_path / 'dbx-pin', tmp_path / 'proj-pin'
+        a.mkdir(), b.mkdir()
+        monkeypatch.delenv('DBX_PIN_SOURCE', raising=False)
+        monkeypatch.delenv('DBX_PIN_REVISION', raising=False)
+        monkeypatch.setenv('DBX_PIN_PATHS', os.pathsep.join([str(a), str(b)]))
+        shim.setup()
+        assert sys.path[:2] == [str(a), str(b)]
+
+    def test_a_pin_path_not_on_the_node_raises(self, shim, tmp_path, monkeypatch, clean_path):
+        monkeypatch.setenv('DBX_PIN_PATHS', str(tmp_path / 'elsewhere'))
+        with pytest.raises(RuntimeError, match='not on this node'):
+            shim.setup()
+
     def test_no_env_is_a_no_op(self, shim, monkeypatch, clean_path):
         monkeypatch.delenv('DBX_PIN_SOURCE', raising=False)
         monkeypatch.delenv('DBX_PIN_REVISION', raising=False)
@@ -324,40 +351,70 @@ class TestRemotePinMode:
         monkeypatch.setattr(databits_mod, '_DBX_GIT_REPO_', repos.gitrepo)
 
     def _env(self, stub_ray):
-        return stub_ray['init']['runtime_env']
+        return stub_ray['actor_env']
 
     def test_shim_ships_the_bootstrap_and_names_the_hook(self, repos, stub_ray):
         rev = f"{repos.dbx_shas[0]}:{repos.proj_shas[0]}"
         databits_mod.remote(revision=rev, pin_mode='shim')
         renv = self._env(stub_ray)
-        assert renv['worker_process_setup_hook'] == 'dbxpinshim.setup'
-        assert os.path.isfile(os.path.join(renv['working_dir'], 'dbxpinshim.py'))
+        assert renv['env_vars'][databits_mod.RAY_SETUP_HOOK_ENV_VAR] == 'dbxpinshim.setup'
+        (shim,) = stub_ray['init']['runtime_env']['py_modules']
+        assert os.path.basename(shim) == 'dbxpinshim.py' and os.path.isfile(shim), "shipped as the job's py_modules"
         assert renv['env_vars']['DBX_PIN_SOURCE'] == f"{repos.dbx_repo} {repos.proj_repo}"
         assert renv['env_vars']['DBX_PIN_REVISION'] == rev
         assert 'PYTHONPATH' not in renv['env_vars'], "shim pins by sys.path, not PYTHONPATH"
 
-    def test_pin_root_uses_pythonpath_and_no_hook(self, repos, stub_ray):
+    def test_pin_root_puts_its_paths_first_through_the_hook(self, repos, stub_ray):
+        """PYTHONPATH comes after the driver's directory Ray puts first; the hook puts the pins ahead of it."""
         rev = f"{repos.dbx_shas[0]}:{repos.proj_shas[0]}"
         databits_mod.remote(revision=rev, pin_mode='pin_root', pin_root=repos.pin_root)
-        renv = self._env(stub_ray)
-        assert 'worker_process_setup_hook' not in renv
-        assert 'PYTHONPATH' in renv['env_vars']
+        env = self._env(stub_ray)['env_vars']
+        assert env[databits_mod.RAY_SETUP_HOOK_ENV_VAR] == 'dbxpinshim.setup' and 'DBX_PIN_SOURCE' not in env, "no clone of its own"
+        assert env['DBX_PIN_PATHS'].split(os.pathsep) == env['PYTHONPATH'].split(os.pathsep)[:2]
 
-    def test_auto_prefers_pin_root_on_this_host(self, repos, stub_ray):
+    def test_auto_takes_an_explicit_pin_root(self, repos, stub_ray):
         rev = f"{repos.dbx_shas[0]}:{repos.proj_shas[0]}"
         databits_mod.remote(revision=rev, pin_root=repos.pin_root)
-        assert 'worker_process_setup_hook' not in self._env(stub_ray)
+        env = self._env(stub_ray)['env_vars']
+        assert 'DBX_PIN_SOURCE' not in env and 'DBX_PIN_PATHS' in env
+
+    def test_auto_prefers_shim_on_this_host(self, repos, stub_ray, monkeypatch):
+        """A Ray on this host may still put the worker on another node: the head of an
+        Anyscale workspace offers Ray no CPU. A temporary pin_root here is not there."""
+        monkeypatch.setattr(databits_mod, 'DBX_USE_WORK_REPO', '/tmp/node-local-work-repo')
+        rev = f"{repos.dbx_shas[0]}:{repos.proj_shas[0]}"
+        databits_mod.remote(revision=rev)
+        renv = self._env(stub_ray)
+        assert renv['env_vars'][databits_mod.RAY_SETUP_HOOK_ENV_VAR] == 'dbxpinshim.setup'
+        assert renv['env_vars']['DBX_PIN_SOURCE'] == f"{repos.dbx_repo} {repos.proj_repo}", \
+            "cloned from the original repos, not the node-local work repo"
 
     def test_auto_prefers_shim_off_host(self, repos, stub_ray):
         rev = f"{repos.dbx_shas[0]}:{repos.proj_shas[0]}"
         databits_mod.remote(revision=rev, address='ray://head:10001')
-        assert self._env(stub_ray)['worker_process_setup_hook'] == 'dbxpinshim.setup'
+        assert self._env(stub_ray)['env_vars'][databits_mod.RAY_SETUP_HOOK_ENV_VAR] == 'dbxpinshim.setup'
 
     def test_auto_falls_back_to_pin_root_without_the_hook(self, repos, stub_ray, monkeypatch):
         monkeypatch.setattr(stub_ray['ray'].runtime_env.RuntimeEnv, 'known_fields', {'env_vars'})
         rev = f"{repos.dbx_shas[0]}:{repos.proj_shas[0]}"
         databits_mod.remote(revision=rev, address='ray://head:10001', pin_root=repos.pin_root)
-        assert 'worker_process_setup_hook' not in self._env(stub_ray)
+        assert databits_mod.RAY_SETUP_HOOK_ENV_VAR not in self._env(stub_ray)['env_vars']
+
+    def test_dbx_ray_is_the_default_address(self, repos, stub_ray, monkeypatch):
+        monkeypatch.setenv('DBX_RAY', 'auto')
+        rev = f"{repos.dbx_shas[0]}:{repos.proj_shas[0]}"
+        databits_mod.remote(revision=rev)
+        assert stub_ray['init']['address'] == 'auto'
+        assert self._env(stub_ray)['env_vars'][databits_mod.RAY_SETUP_HOOK_ENV_VAR] == 'dbxpinshim.setup'
+
+    def test_an_address_passed_overrides_dbx_ray(self, repos, stub_ray, monkeypatch):
+        monkeypatch.setenv('DBX_RAY', 'auto')
+        databits_mod.remote(address='ray://head:10001')
+        assert stub_ray['init']['address'] == 'ray://head:10001'
+
+    def test_without_dbx_ray_ray_init_gets_no_address(self, repos, stub_ray):
+        databits_mod.remote()
+        assert 'address' not in stub_ray['init']
 
     def test_explicit_shim_without_the_hook_is_an_error(self, repos, stub_ray, monkeypatch):
         monkeypatch.setattr(stub_ray['ray'].runtime_env.RuntimeEnv, 'known_fields', {'env_vars'})
@@ -369,17 +426,19 @@ class TestRemotePinMode:
         rev = f"{repos.dbx_shas[0]}:{repos.proj_shas[0]}"
         databits_mod.remote(revision=rev, pin_source='https://h/dbx.git https://h/proj.git')
         renv = self._env(stub_ray)
-        assert renv['worker_process_setup_hook'] == 'dbxpinshim.setup'
+        assert renv['env_vars'][databits_mod.RAY_SETUP_HOOK_ENV_VAR] == 'dbxpinshim.setup'
         assert renv['env_vars']['DBX_PIN_SOURCE'] == 'https://h/dbx.git https://h/proj.git'
 
     def test_pin_source_must_match_the_revision_arity(self, repos, stub_ray):
         with pytest.raises(ValueError, match='zipped together'):
             databits_mod.remote(revision='a:b', pin_source='https://h/only-one.git')
 
-    def test_shim_conflicts_with_an_explicit_working_dir(self, repos, stub_ray, tmp_path):
+    def test_shim_goes_with_an_explicit_working_dir(self, repos, stub_ray, tmp_path):
+        """The shim is the job's py_modules, not its working_dir: the two are independent."""
         rev = f"{repos.dbx_shas[0]}:{repos.proj_shas[0]}"
-        with pytest.raises(ValueError, match='working_dir'):
-            databits_mod.remote(revision=rev, pin_mode='shim', working_dir=str(tmp_path))
+        databits_mod.remote(revision=rev, pin_mode='shim', working_dir=str(tmp_path))
+        job = stub_ray['init']['runtime_env']
+        assert job['working_dir'] == str(tmp_path) and job['py_modules'][0].endswith('dbxpinshim.py')
 
     def test_pinned_revision_is_advertised_to_the_worker(self, repos, stub_ray):
         rev = f"{repos.dbx_shas[0]}:{repos.proj_shas[0]}"
@@ -638,45 +697,37 @@ class TestInstRemoteEqualsRinst:
 # ---------------------------------------------------------------------------
 
 class TestRemoteWorkingDir:
-    """Ray prepends the driver's cwd to the worker's sys.path, ahead of PYTHONPATH.
+    """The job's working_dir is what every worker gets: the workspace on Anyscale, as before dbx pinned anything.
 
-    Verified against a real cluster: a driver run from inside the dbx checkout
-    imported the LIVE tree in the worker despite correct pins on PYTHONPATH, and
-    the same driver run from /home or /tmp imported the pins. An empty
-    working_dir displaces the cwd entry and makes the pin hold either way.
+    It was once an empty directory when pinning, to displace the driver's cwd, which Ray puts on a worker's
+    sys.path ahead of PYTHONPATH -- a driver run from inside the dbx checkout imported the LIVE tree despite
+    correct pins. The shim now puts the pins at sys.path[0] after Ray has set it up, so a working_dir
+    neither carries nor shadows them, and the workers keep the workspace.
     """
 
-    def test_pinning_hands_ray_an_empty_working_dir(self, repos, stub_ray, monkeypatch):
+    @pytest.fixture(autouse=True)
+    def _work_repo(self, repos, monkeypatch):
         monkeypatch.setattr(databits_mod, 'DBX_USE_WORK_REPO', repos.gitrepo)
-        revision = f"{repos.dbx_shas[0]}:{repos.proj_shas[0]}"
 
-        databits_mod.remote(revision=revision, pin_root=repos.pin_root)
-
-        wd = stub_ray['init']['runtime_env']['working_dir']
-        assert os.path.isdir(wd)
-        assert os.listdir(wd) == [], "working_dir must be empty; it exists only to displace cwd"
-
-    def test_no_working_dir_when_not_pinning(self, repos, stub_ray, monkeypatch):
-        """Unpinned callers keep Ray's default behaviour, cwd and all."""
-        monkeypatch.setattr(databits_mod, 'DBX_USE_WORK_REPO', repos.gitrepo)
-        databits_mod.remote()
+    def test_off_anyscale_pinning_leaves_rays_own(self, repos, stub_ray, monkeypatch):
+        monkeypatch.setattr(anyscale_mod, 'present', lambda: False)
+        databits_mod.remote(revision=f"{repos.dbx_shas[0]}:{repos.proj_shas[0]}", pin_root=repos.pin_root)
         assert 'working_dir' not in stub_ray['init']['runtime_env']
 
-    def test_explicit_working_dir_is_honored(self, repos, stub_ray, monkeypatch, tmp_path):
-        monkeypatch.setattr(databits_mod, 'DBX_USE_WORK_REPO', repos.gitrepo)
-        mine = str(tmp_path / "mine")
-        os.makedirs(mine)
+    def test_on_anyscale_the_workspace_is_the_working_dir(self, repos, stub_ray, monkeypatch):
+        """As `dbx.gpu.run` gives it: so a Remote's worker and a gpu task's share one connection."""
+        monkeypatch.setattr(anyscale_mod, 'present', lambda: True)
+        monkeypatch.setenv('ANYSCALE_WORKING_DIR', '/home/ray/default')
+        databits_mod.remote(revision=f"{repos.dbx_shas[0]}:{repos.proj_shas[0]}")
+        assert stub_ray['init']['runtime_env']['working_dir'] == '/home/ray/default'
 
-        databits_mod.remote(working_dir=mine)
+    def test_explicit_working_dir_is_honored(self, stub_ray, tmp_path):
+        databits_mod.remote(working_dir=str(tmp_path))
+        assert stub_ray['init']['runtime_env']['working_dir'] == str(tmp_path)
 
-        assert stub_ray['init']['runtime_env']['working_dir'] == mine
-
-    def test_working_dir_none_opts_out_even_when_pinning(self, repos, stub_ray, monkeypatch):
-        monkeypatch.setattr(databits_mod, 'DBX_USE_WORK_REPO', repos.gitrepo)
-        revision = f"{repos.dbx_shas[0]}:{repos.proj_shas[0]}"
-
-        databits_mod.remote(revision=revision, pin_root=repos.pin_root, working_dir=None)
-
+    def test_working_dir_none_is_none(self, stub_ray, monkeypatch):
+        monkeypatch.setattr(anyscale_mod, 'present', lambda: True)
+        databits_mod.remote(working_dir=None)
         assert 'working_dir' not in stub_ray['init']['runtime_env']
 
 
@@ -698,11 +749,11 @@ class TestRemoteSharedRepo:
 
     def test_local_cluster_keeps_the_work_repo(self, stub_ray, repos):
         databits_mod.remote()
-        assert stub_ray['init']['runtime_env']['env_vars']['DBX_GIT_REPO'] == repos.gitrepo
+        assert stub_ray['actor_env']['env_vars']['DBX_GIT_REPO'] == repos.gitrepo
 
     def test_address_switches_to_the_original_repo(self, stub_ray):
         databits_mod.remote(address='ray://head:10001')
-        env = stub_ray['init']['runtime_env']['env_vars']
+        env = stub_ray['actor_env']['env_vars']
         assert env['DBX_GIT_REPO'] == '/original/dbx:/original/proj'
 
     def test_address_is_passed_to_ray_init(self, stub_ray):
@@ -712,17 +763,17 @@ class TestRemoteSharedRepo:
     def test_slurm_still_switches_to_the_original_repo(self, stub_ray):
         # cancel() because Remote.__del__ cancels the Slurm job on teardown.
         databits_mod.remote(slurm=types.SimpleNamespace(ray_address=None, cancel=lambda: None))
-        env = stub_ray['init']['runtime_env']['env_vars']
+        env = stub_ray['actor_env']['env_vars']
         assert env['DBX_GIT_REPO'] == '/original/dbx:/original/proj'
 
     def test_shared_repo_true_forces_the_original_repo(self, stub_ray):
         databits_mod.remote(shared_repo=True)
-        env = stub_ray['init']['runtime_env']['env_vars']
+        env = stub_ray['actor_env']['env_vars']
         assert env['DBX_GIT_REPO'] == '/original/dbx:/original/proj'
 
     def test_shared_repo_false_forces_the_work_repo(self, stub_ray, repos):
         databits_mod.remote(address='ray://head:10001', shared_repo=False)
-        env = stub_ray['init']['runtime_env']['env_vars']
+        env = stub_ray['actor_env']['env_vars']
         assert env['DBX_GIT_REPO'] == repos.gitrepo
 
     def test_shared_repo_needs_an_original_repo_to_share(self, stub_ray, monkeypatch):
@@ -734,6 +785,147 @@ class TestRemoteSharedRepo:
         """A pinned worker imports from the pins, so DBX_GIT_REPO must name them."""
         revision = f"{repos.dbx_shas[0]}:{repos.proj_shas[0]}"
         databits_mod.remote(revision=revision, shared_repo=False, pin_root=repos.pin_root)
-        env = stub_ray['init']['runtime_env']['env_vars']
+        env = stub_ray['actor_env']['env_vars']
         assert env['DBX_GIT_REPO'] == env['PYTHONPATH']
         assert env['DBX_GIT_REPO'] != repos.gitrepo
+
+
+# ---------------------------------------------------------------------------
+# One Ray connection, every Remote's
+# ---------------------------------------------------------------------------
+
+class TestRayConnection:
+    """A Remote lives on its process's Ray connection: a new one would end it.
+
+    So `remote` connects once and every Remote after rides it, each pinned by an
+    actor runtime_env of its own; only another cluster -- or a connection that
+    cannot carry the shim -- is a new one.
+    """
+
+    @pytest.fixture
+    def ray_(self, stub_ray, repos, monkeypatch):
+        monkeypatch.setattr(databits_mod, 'DBX_USE_WORK_REPO', repos.gitrepo)
+        monkeypatch.setattr(databits_mod, '_DBX_GIT_REPO_', repos.gitrepo)
+        ray = stub_ray['ray']
+        state = {'on': False, 'inits': 0, 'shutdowns': 0, 'envs': []}
+
+        def init(**kw):
+            stub_ray['init'] = kw
+            state.update(on=True, inits=state['inits'] + 1)
+
+        def shutdown():
+            state.update(on=False, shutdowns=state['shutdowns'] + 1)
+
+        monkeypatch.setattr(ray, 'init', init)
+        monkeypatch.setattr(ray, 'shutdown', shutdown, raising=False)
+        monkeypatch.setattr(ray, 'is_initialized', lambda: state['on'])
+        return state
+
+    def _revs(self, repos):
+        return [f"{repos.dbx_shas[i]}:{repos.proj_shas[i]}" for i in range(2)]
+
+    def test_remotes_at_two_revisions_share_one_connection(self, ray_, repos, stub_ray):
+        envs = []
+        for rev in self._revs(repos):
+            databits_mod.remote(revision=rev)
+            envs.append(stub_ray['actor_env']['env_vars']['DBX_PIN_REVISION'])
+        assert (ray_['inits'], ray_['shutdowns']) == (1, 0)
+        assert envs == self._revs(repos), "each actor pinned to its own revision"
+
+    def test_dbx_ray_keeps_the_connection_too(self, ray_, repos, monkeypatch):
+        monkeypatch.setenv('DBX_RAY', 'auto')
+        for rev in self._revs(repos):
+            databits_mod.remote(revision=rev)
+        assert (ray_['inits'], ray_['shutdowns']) == (1, 0)
+
+    def test_no_address_rides_the_one_made_for_an_address(self, ray_, repos):
+        databits_mod.remote(address='auto')
+        databits_mod.remote(revision=self._revs(repos)[0])
+        assert (ray_['inits'], ray_['shutdowns']) == (1, 0)
+
+    def test_another_cluster_is_another_connection(self, ray_):
+        databits_mod.remote(address='auto')
+        databits_mod.remote(address='ray://elsewhere:10001')
+        assert (ray_['inits'], ray_['shutdowns']) == (2, 1)
+
+    def test_a_connection_made_elsewhere_is_kept_unpinned(self, ray_):
+        ray_['on'] = True                     # e.g. dbx.gpu.run's, or the user's own ray.init
+        databits_mod.remote()
+        assert (ray_['inits'], ray_['shutdowns']) == (0, 0)
+
+    def test_a_connection_made_elsewhere_has_no_shim_and_is_refused(self, ray_, repos):
+        """Whatever made it may still be using it: dbx does not shut it down, it says so."""
+        ray_['on'] = True
+        with pytest.raises(databits_mod.RayReconnectError, match='not by dbx'):
+            databits_mod.remote(revision=self._revs(repos)[0])
+        assert (ray_['inits'], ray_['shutdowns']) == (0, 0)
+
+    def test_another_cluster_is_refused_while_a_remote_lives(self, ray_):
+        held = databits_mod.remote(address='auto')
+        with pytest.raises(databits_mod.RayReconnectError, match='1 Remote'):
+            databits_mod.remote(address='ray://elsewhere:10001')
+        assert (ray_['inits'], ray_['shutdowns']) == (1, 0)
+        del held
+        databits_mod.remote(address='ray://elsewhere:10001')
+        assert (ray_['inits'], ray_['shutdowns']) == (2, 1), "once no Remote lives on it"
+
+    def test_with_ray_names_the_cluster(self, ray_, stub_ray):
+        with databits_mod.Ray('ray://scoped:10001'):
+            assert databits_mod.Ray.current().address == 'ray://scoped:10001'
+            databits_mod.remote()
+        assert stub_ray['init']['address'] == 'ray://scoped:10001'
+        assert databits_mod.Ray.current() is databits_mod.DEFAULT_RAY
+
+    def test_default_ray_reads_dbx_ray_when_it_connects(self, monkeypatch):
+        monkeypatch.setenv('DBX_RAY', 'ray://from-env:10001')
+        assert databits_mod.DEFAULT_RAY.address == 'ray://from-env:10001'
+
+
+# ---------------------------------------------------------------------------
+# A worker checks its pin, and says so loudly
+# ---------------------------------------------------------------------------
+
+class TestCheckPinned:
+    """Pinning happens before dbx imports, unchecked -- a setup hook Ray ignores leaves a worker on another dbx that
+    still claims the revision. `check_pinned` is the worker's check that its code is the revision's."""
+
+    def _module(self, path):
+        return types.SimpleNamespace(__file__=os.path.join(path, 'dbx', '__init__.py'))
+
+    def test_unpinned_is_not_checked(self, monkeypatch):
+        monkeypatch.delenv('DBX_PINNED_REVISION', raising=False)
+        databits_mod.check_pinned(self._module('/nowhere'))
+
+    def test_dbx_from_a_checkout_at_the_revision_passes(self, repos, monkeypatch):
+        rev = f"{repos.dbx_shas[0]}:{repos.proj_shas[0]}"
+        dbx_pin, proj_pin = databits_mod.gitpinrepos(rev, gitrepo=repos.gitrepo, pin_root=repos.pin_root)
+        monkeypatch.setenv('DBX_PINNED_REVISION', rev)
+        monkeypatch.setattr(sys, 'path', [proj_pin, *sys.path])
+        databits_mod.check_pinned(self._module(dbx_pin))
+
+    def test_dbx_from_elsewhere_fails(self, repos, monkeypatch):
+        rev = f"{repos.dbx_shas[0]}:{repos.proj_shas[0]}"
+        monkeypatch.setenv('DBX_PINNED_REVISION', rev)
+        with pytest.raises(databits_mod.PinMismatchError, match='dbx is imported from'):
+            databits_mod.check_pinned(self._module('/site-packages'))
+
+    def test_dbx_from_a_checkout_at_another_revision_fails(self, repos, monkeypatch):
+        dbx_pin, _ = databits_mod.gitpinrepos(f"{repos.dbx_shas[1]}:{repos.proj_shas[0]}",
+                                             gitrepo=repos.gitrepo, pin_root=repos.pin_root)
+        monkeypatch.setenv('DBX_PINNED_REVISION', f"{repos.dbx_shas[0]}:{repos.proj_shas[0]}")
+        with pytest.raises(databits_mod.PinMismatchError):
+            databits_mod.check_pinned(self._module(dbx_pin))
+
+    def test_no_project_checkout_on_the_path_fails(self, repos, monkeypatch):
+        rev = f"{repos.dbx_shas[0]}:{repos.proj_shas[0]}"
+        dbx_pin, _ = databits_mod.gitpinrepos(rev, gitrepo=repos.gitrepo, pin_root=repos.pin_root)
+        monkeypatch.setenv('DBX_PINNED_REVISION', rev)
+        monkeypatch.setattr(sys, 'path', [p for p in sys.path if 'pins' not in p])
+        with pytest.raises(databits_mod.PinMismatchError, match='no checkout at'):
+            databits_mod.check_pinned(self._module(dbx_pin))
+
+    def test_remote_raises_when_the_worker_is_pinned_otherwise(self, repos, stub_ray, monkeypatch):
+        monkeypatch.setattr(databits_mod, 'DBX_USE_WORK_REPO', repos.gitrepo)
+        monkeypatch.setattr(stub_ray['ray'], 'get', lambda ref: 'something-else')
+        with pytest.raises(databits_mod.PinMismatchError, match='got one pinned to something-else'):
+            databits_mod.remote(revision=f"{repos.dbx_shas[0]}:{repos.proj_shas[0]}", pin_root=repos.pin_root)

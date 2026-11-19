@@ -39,13 +39,13 @@ db
     `dbx.db`: datablock locks in the Postgres database `DBX_DB` names --
     exclusive for `build`, shared for `read`, `ls` and `paths`, none
     without it -- and `dbx.db up|down|status|locks|unlock`, its server.
-cluster, kube, gpu, image, anyscale
+cluster, kube, gpu, container, anyscale
     `dbx.clusters`: a pipeline's call (`Pipeline.runner`) run on a
     `Cluster`, and journaled; `dbx.runner`, the runs of a pipeline, a
     datablock or a whole Datablock class. `dbx.kube`: a Kueue cluster,
     `dbx.kube.KubeCluster` -- its `submit`, `jobs` and `queues` -- and
     `jobs` and `queues` over several clusters, as tables. `dbx.gpu`: a function on GPUs through Ray, one task per
-    call. `dbx.image`: an image of a venv's code, for a Job.
+    call. `dbx.container`: a container image of a venv's code, for a Job.
     `dbx.anyscale`: what a Job or an image needs on Anyscale. Imported
     as modules, not into `dbx`.
 
@@ -88,7 +88,10 @@ if _importlib_util.find_spec('torch') and _importlib_util.find_spec('streaming')
     from .featuretables import *
     from .probes import *
 from .pipelines import *
-from . import anyscale, clusters, gpu, image, kube
+from . import anyscale, clusters, container, gpu, kube
 # The two of dbx.clusters typed most: dbx.cluster('crusoe'), dbx.runner(...); the rest through the module.
 from .clusters import cluster, runner
+# dbx.env, the module of the environment variables dbx reads -- and, called, `databits.env`'s specline --
+# over the function `from .databits import *` bound the name to.
+env = __import__('sys').modules[f"{__name__}.env"]
 

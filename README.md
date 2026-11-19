@@ -129,7 +129,7 @@ Every Datablock maps to a deterministic directory tree:
 - **root** — storage root (local path or fsspec URL)
 - **anchor** — defaults to the fully-qualified class name
 - **key** — derived from the content hash and VERSION (configurable via `keyby`); a datablock's
-  tag is a label and stays out of it, except a tablet's, which is keyed by its tag
+  tag is a label and stays out of it -- a tablet's too -- unless an explicit `keyby` includes the tag
 - **topic** — named output channel
 - **TOPICFILE** — the filename within the topic directory
 
@@ -360,6 +360,9 @@ Remote tests rely on **Ray**. If you are running tests in an environment with a 
 
 ## Environment Variables
 
+Every one dbx reads is listed, with what it says, in `dbx.env.VARS`, and read there --
+`dbx.env.DBX_RAY` is `$DBX_RAY` when it is accessed, or None.
+
 | Variable | Description |
 |---|---|
 | `DBX_DATALAKE` | The datalake a datablock is stored in when not given `datalake=` |
@@ -370,6 +373,7 @@ Remote tests rely on **Ray**. If you are running tests in an environment with a 
 | `DBX_DIRTY` | `True`: both of the above at once, `DBX_USE_WORK_REPO=False` and `DBX_DIRTY_REPO_OK=True`: run the working tree as it is |
 | `DBX_LOG_INFO`, `DBX_LOG_DEBUG`, etc. | Control per-level log output |
 | `DBX_LOG_SELECTION` | Comma-separated FQN list for `selected()` log filtering |
+| `DBX_RAY` | The Ray cluster `dbx.remote` -- and `entry.originst()`, `dbx.gpu.run` -- connects to without `address=` or a `with dbx.Ray(...)`: `auto`, or an address |
 
 ## License
 

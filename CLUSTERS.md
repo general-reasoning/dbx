@@ -303,7 +303,7 @@ dbx.kubequeues -q myteam           # the clusters' Kueue queues: quota, use, pen
 ```
 
 Modules: `dbx/clusters.py` (clusters, `Runner`, `Run`, the journal), `dbx/kube.py` (Kubernetes),
-`dbx/image.py` (an image of a venv's code), `dbx/gpu.py` (a function on a node's GPUs, through Ray),
+`dbx/container.py` (an image of a venv's code), `dbx/gpu.py` (a function on a node's GPUs, through Ray),
 `dbx/anyscale.py` (what a Job or an image needs on Anyscale; also a workspace as a datalake, above). `EXECUTORS.md` is the earlier proposal.
 
 ### 1. Clusters: values, passed where they are used
@@ -437,7 +437,7 @@ What the run imports and reads must be there, at the paths the expression names:
   fsspec's defaults for its protocols, and only while the datablock copies. Its anchorkeypath is the
   same path on both sides.
 - **The code itself:** `revision` pins the dbx and project repos to commits, cloned in the Job.
-- **The code and the venv, as an image:** `image=dbx.image.build(venv, repo=..., anyscale=True)` --
+- **The code and the venv, as an image:** `image=dbx.container.build(venv, repo=..., anyscale=True)` --
   the venv's editable installs as they are on disk, the packages it adds over the base image, and any
   `extra` trees, appended to the base image as one layer (`crane`, no Docker build). The tag is the
   layer's sha256, so the same code is the same image, an unchanged rebuild pushes nothing, and the

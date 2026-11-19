@@ -777,9 +777,9 @@ All notable changes to this project will be documented in this file.
   VERSION -- for an untagged block exactly the key `tag_version_shorthash`
   made, so no untagged build moves. A tagged block is keyed as if untagged,
   so tagging one already built finds it built. The default is the class's
-  `KEYBY`, and `Datatablet.KEYBY` stays `'tag_version_shorthash'`: every
-  tablet -- a table's, a piece, a packed or core tablet, an autopath
-  `__tablet__` override's -- keeps its tag in its path, as built. A stack
+  `KEYBY`. (`Datatablet.KEYBY` stayed `'tag_version_shorthash'` here, keeping
+  every tablet's tag in its path; since 2026-10-17 it is `'version_shorthash'`
+  too -- see "Every tablet is filed by its hash" above.) A stack
   hands its keyby to its blocks only when it is not the stack's `KEYBY`, so
   a table at its default builds its tablets where `tablet(i)` reads them; an
   explicit keyby on a table still reaches them. Every quote spells its

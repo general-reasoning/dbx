@@ -3292,9 +3292,9 @@ class BuildJournal:
             url = eval(url)
         fs, root = fsspec.url_to_fs(url, **(storage_options or {}))
         base = fs_full_path(fs, os.path.join(root, anchor))
-        # Not the untagged directory for a tag-keyed block: a tablet is one of
-        # thousands under its anchor, and listing the anchor for each is what
-        # looking by hash is there to avoid.
+        # Not the untagged directory for a tag-keyed block: one of thousands
+        # under its anchor -- as tablets were, until 2026-10-17 -- and listing the
+        # anchor for each is what looking by hash is there to avoid.
         if not tag:
             keydirs = [base]
         elif keyby in cls._TAG_KEYBYS_:

@@ -2047,8 +2047,9 @@ class Datablock:
         # in it too.
         determined: dict | None = field(default=None, kw_only=True)
         # The tag the narrower block was filed under, when it is not this block's: a block
-        # keyed by tag -- a tablet -- is looked for under its tag, and the same identity
-        # filed under a tag since renamed is found only where this says. None: this block's.
+        # filed under its tag -- a tag-bearing keyby, or a tablet built before 2026-10-17 --
+        # is looked for under its tag, and the same identity filed under a tag since renamed
+        # is found only where this says. None: this block's.
         tag: str | None = field(default=None, kw_only=True)
         # Why the coincidence holds. Last -- and keyword-only, so that it is
         # last in a subclass's constructor too, after its BLOCK or TABLET.
@@ -2448,18 +2449,22 @@ class Datablock:
     # what the block IS, so they are noise in a citation and they dominate it.
     #
     # `tag` is the one that cannot be dropped silently. It is NOT part of the
-    # identity hash (signature() is built from _rootkwargs_ + spec), but a
-    # tag-keyed layout (a Datatablet's KEYBY, or an explicit
-    # keyby='tag_version_shorthash') puts it in the artifact PATH, so a citation
-    # without it re-evaluates to the same hash at a DIFFERENT key -- i.e. it
-    # points at storage that does not hold the artifact you cited.
+    # identity hash (signature() is built from _rootkwargs_ + spec), and no
+    # block's KEYBY puts it in its path. But a block may still be filed under
+    # its tag: given a tag-bearing keyby explicitly (keyby='tag_version_shorthash',
+    # say), or a tablet built before 2026-10-17, which is read where its tag
+    # filed it (`Datatablet._tags_filed_under_`). A citation without the tag
+    # re-evaluates to the same hash, but not to where that one is -- storage
+    # that does not hold the artifact you cited.
     CITE_KEEP_TAILKWARGS = ('tag',)
 
     # The keyby a block is given when its constructor is not: what its key,
     # and so its path, is made of. 'version_shorthash' leaves the tag out, so
     # a tag is a label and tagging a built block does not move it; for an
-    # untagged block it is the key 'tag_version_shorthash' made. `Datatablet`
-    # keeps 'tag_version_shorthash': a tablet's tag has always been in its path.
+    # untagged block it is the key 'tag_version_shorthash' made. No block has
+    # its tag in its path by default, tablets included: `Datatablet.KEYBY` is
+    # 'version_shorthash' too since 2026-10-17, and a tablet filed under its
+    # tag before then is read there (`Datatablet._redirected_paths_`).
     KEYBY = 'version_shorthash'
 
     Diff = collections.namedtuple('Diff', ['signature', 'topics', 'version'])
@@ -7645,7 +7650,7 @@ class Datablock:
         """Whether this block's keyby is one it was given, rather than its class's KEYBY.
 
         What decides whether a stack hands its keyby to its blocks: a table at
-        its default leaves each tablet its own (tag-keyed) KEYBY, so a tablet's
+        its default leaves each tablet its own KEYBY, so a tablet's
         path is the same built by the table and read back by `tablet(i)`.
         Judged by value, not by how the block was constructed, so a pickled
         or re-quoted stack, which always spells its keyby, says the same.

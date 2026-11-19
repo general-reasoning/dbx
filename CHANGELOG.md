@@ -18,6 +18,8 @@ All notable changes to this project will be documented in this file.
   unset, `ray.init()` finds or starts one, as before.
 
 ### Changed
+- **`dbx.image` is `dbx.container`.** The module that builds a container image of a venv's code -- `build`,
+  `write_layer`, `acr_login` -- is named for the container, not the picture: `dbx.container.build(venv, ...)`.
 - **`dbx.env` is a module, and still makes speclines.** `dbx.env.DBX_RAY` reads a variable (see Added); called,
   `dbx.env('KEY')` is the specline `$dbx.getenv('KEY')`, as it was.
 - **One Ray connection for every `Remote`; each pinned by its own actor.** `dbx.remote` connects once and every Remote

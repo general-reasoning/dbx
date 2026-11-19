@@ -1,12 +1,12 @@
 """Anyscale, two ways: what a Kubernetes Job or an image needs to run on an Anyscale image, and a
 running Anyscale workspace as a datalake.
 
-Jobs and images, `dbx.kube`'s and `dbx.image`'s `anyscale=True`: an Anyscale image runs as its `ray` user (uid 1000, gid 100), keeps Ray in its own venv
+Jobs and images, `dbx.kube`'s and `dbx.container`'s `anyscale=True`: an Anyscale image runs as its `ray` user (uid 1000, gid 100), keeps Ray in its own venv
 (`/home/ray/venv`), and its Ray runtime-env hook snapshots the current directory as the working
 directory of every task unless one is given: `working_dir` says which, `$ANYSCALE_WORKING_DIR` when
-set. An image of a workspace venv's code (`dbx.image`) is layered on the workspace's image, runs
+set. An image of a workspace venv's code (`dbx.container`) is layered on the workspace's image, runs
 its interpreter, and leaves out the path hooks Anyscale puts in its venvs. None of it is needed off
-Anyscale, which is why `dbx.kube` and `dbx.image` ask for it (`anyscale=True`), never assume it.
+Anyscale, which is why `dbx.kube` and `dbx.container` ask for it (`anyscale=True`), never assume it.
 
 A workspace as a datalake: fsspec over ssh, the way `anyscale workspace_v2 ssh` connects. From the shell:
 
@@ -140,7 +140,7 @@ def job_options() -> dict:
 
 
 def image_options(prefix: str) -> dict:
-    """The `dbx.image.build` options an image of a workspace venv's code needs, its code under *prefix*."""
+    """The `dbx.container.build` options an image of a workspace venv's code needs, its code under *prefix*."""
     return dict(base=IMAGE, python=PYTHON, run_as=RUN_AS, skip=VENV_HOOKS,
                 env={'ANYSCALE_WORKING_DIR': f"/{prefix.strip('/')}/raywd"})
 

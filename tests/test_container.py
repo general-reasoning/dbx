@@ -1,4 +1,4 @@
-"""dbx.image: the layer of a venv's code, written deterministically so its hash is the code's.
+"""dbx.container: the layer of a venv's code, written deterministically so its hash is the code's.
 
 Nothing is pushed: `build(dry_run=True)` stops before crane, and `write_layer` is checked directly.
 """
@@ -7,7 +7,7 @@ import tarfile
 
 import pytest
 
-from dbx import image
+from dbx import container
 
 
 @pytest.fixture
@@ -43,7 +43,7 @@ def _names_(path):
 
 def test_the_layer_holds_the_editable_code_the_added_packages_and_the_scripts(venv, tmp_path):
     out = tmp_path / 'layer.tar'
-    image.write_layer(out, str(venv), prefix='/opt/p', python='/home/ray/venv/bin/python', run_as=(1000, 100),
+    container.write_layer(out, str(venv), prefix='/opt/p', python='/home/ray/venv/bin/python', run_as=(1000, 100),
                       skip=('zz_home_venv.pth',), extra={str(tmp_path / 'proj'): 'checkout'})
     names = _names_(out)
     assert {'opt/p/src/mypkg/__init__.py', 'opt/p/site-packages/timm/__init__.py', 'opt/p/bin/mytool',
@@ -56,15 +56,15 @@ def test_the_layer_holds_the_editable_code_the_added_packages_and_the_scripts(ve
 
 def test_the_same_code_is_the_same_tag_and_a_change_is_another(venv, tmp_path):
     kw = dict(repo='reg.example.com/p', base='base:1', python='/usr/bin/python3', dry_run=True)
-    first, again = image.build(str(venv), **kw), image.build(str(venv), **kw)
+    first, again = container.build(str(venv), **kw), container.build(str(venv), **kw)
     assert first == again and first.startswith('reg.example.com/p:')
     (tmp_path / 'proj' / 'mypkg' / '__init__.py').write_text('X = 2\n')
-    assert image.build(str(venv), **kw) != first
+    assert container.build(str(venv), **kw) != first
 
 
 def test_anyscale_gives_the_base_the_interpreter_and_the_user(venv, monkeypatch):
-    monkeypatch.setattr(image._anyscale_, 'IMAGE', 'anyscale-image:1')
-    ref = image.build(str(venv), repo='reg.example.com/p', anyscale=True, dry_run=True)
+    monkeypatch.setattr(container._anyscale_, 'IMAGE', 'anyscale-image:1')
+    ref = container.build(str(venv), repo='reg.example.com/p', anyscale=True, dry_run=True)
     assert ref.startswith('reg.example.com/p:')
     with pytest.raises(ValueError, match='anyscale=True'):
-        image.build(str(venv), repo='reg.example.com/p', dry_run=True)
+        container.build(str(venv), repo='reg.example.com/p', dry_run=True)

@@ -36,7 +36,7 @@ Where the cluster gets code that is not in git: *workdirs* `{src: target}`. A cl
 `storage` mounts the paths this process sees, so a workdir is already there (src == target); one
 with `storage` -- its own filesystem, reached by URL with its `storage_options` -- is synced to
 first, file by file, skipping those whose size and mtime match, keeping modes (console scripts stay
-executable). Or the code is in the image (`dbx.image`).
+executable). Or the code is in the image (`dbx.container`).
 
 `anyscale=True` adds what an Anyscale image needs (`dbx.anyscale.job_options`): its image, its
 `ray` user, its Ray, its Ray working directory. Off Anyscale, give *image* (or `KubeCluster.image`).

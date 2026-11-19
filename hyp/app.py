@@ -2241,8 +2241,9 @@ def main(argv=None):
                          help="with no ANCHOR, or 'pipelines', the datalake's pipelines, from dbx.pipejournal(), one point "
                               "each; with an ANCHOR, that anchor's datablocks, from its build journal")
     journal.add_argument("--filter", default=None, metavar="'KEY=PATTERN, ...'",
-                         help="with an ANCHOR: its journal filtered, each KEY a column, each PATTERN matched against it; the "
-                              "filter field in the top bar changes it")
+                         help="the pipelines, or an ANCHOR's journal, filtered: each KEY a column, each PATTERN a regex "
+                              "matched anywhere in it -- `tag=^myproject\\.` the pipelines tagged in myproject's modules; "
+                              "the filter field in the top bar changes it")
     journal.add_argument("--extra-construction-events", "--ece", nargs="+", default=[], metavar="EVENT",
                          help="with the pipelines: events that also make an entry datablock count as constructed -- each alone, "
                               "or followed by = or : and the rest: `--ece ckpt` takes a datablock that has checkpointed "
@@ -2278,8 +2279,8 @@ def main(argv=None):
             ap.error("--claude-dir is where --docs saves Claude sessions")
         if problem := _unscanned_(args.claude_dir):
             ap.error(f"--claude-dir {args.claude_dir}: {problem}")
-    if args.filter and (args.journal is None or pipelines):
-        ap.error("--filter filters an anchor's journal: --journal ANCHOR --filter 'key=pattern, ...'")
+    if args.filter and args.journal is None:
+        ap.error("--filter filters a journal: --journal [ANCHOR] --filter 'key=pattern, ...'")
     if args.journal is not None:
         from .dbxpipelines import HypDbxJournal as cls, parse_filters
 

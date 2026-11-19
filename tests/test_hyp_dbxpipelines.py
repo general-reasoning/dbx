@@ -80,6 +80,18 @@ def write_build(lake, entrypath, i, event="build:end"):
     pd.DataFrame([row]).to_parquet(jdir / f"pkg.Model-journal-hm-{i}-{event.replace(':', '-')}.parquet")
 
 
+def test_pipelines_filtered_by_a_pattern_anywhere_in_a_column(tmp_path, monkeypatch):
+    monkeypatch.setenv("DBX_DATALAKE", str(tmp_path))
+    write_run(tmp_path, "TrainPipeline", "aaaa", 0, "lr: 0.1\n", tag="proj.train:big")
+    write_run(tmp_path, "EvalPipeline", "bbbb", 1, "split: test\n", tag="other.proj.eval:small")
+    tags = lambda filters: sorted(e.extra["row"]["tag"] for e in dbxpipelines.pipelines(quiet, filters=filters))  # noqa: E731
+    assert tags(None) == ["other.proj.eval:small", "proj.train:big"]
+    assert tags({"tag": "proj"}) == ["other.proj.eval:small", "proj.train:big"], "contained"
+    assert tags({"tag": r"^proj\."}) == ["proj.train:big"], "a regex: a prefix"
+    assert tags({"tag": "eval|train"}) == ["other.proj.eval:small", "proj.train:big"]
+    assert tags({"tag": "nothing"}) == []
+
+
 def test_pipelines_aggregate_runs(tmp_path, monkeypatch):
     monkeypatch.setenv("DBX_DATALAKE", str(tmp_path))
     write_run(tmp_path, "TrainPipeline", "aaaa", 0, "lr: 0.1\n", signature="Train(lr: float)")
@@ -887,8 +899,10 @@ def test_journal_without_an_anchor_is_the_pipelines_and_with_one_its_blocks(monk
         app_mod.main(["--journal", "pkg.Model", "--ece", "ckpt"])
     with pytest.raises(SystemExit):
         app_mod.main(["--pipejournal"])
+    with pytest.raises(RuntimeError, match="chosen"):
+        app_mod.main(["--journal", "--filter", "tag=x"])  # the pipelines take one too
     with pytest.raises(SystemExit):
-        app_mod.main(["--journal", "--filter", "tag=x"]), "a filter is an anchor's"
+        app_mod.main(["--filter", "tag=x"]), "a filter is a journal's"
     with pytest.raises(SystemExit):
         app_mod.main(["--journal", "pkg.Model", "--filter", "no equals sign"])
 
@@ -1059,7 +1073,7 @@ def test_the_journal_menu_lists_the_pipelines_then_the_anchors(pipelines_app):
     assert app.journal_menu.current() is None, "the anchors, still being read"
     app.anchors = ["pkg.Data", "pkg.Model"]
     assert app.journal_menu.current() == [("pipelines", dbxpipelines.PIPELINES), ("pkg.Data", "pkg.Data"), ("pkg.Model", "pkg.Model")]
-    assert not app.filter_field.visible(), "the pipelines take no filter"
+    assert app.filter_field.visible(), "the pipelines take a filter too"
 
 
 @pytest.fixture

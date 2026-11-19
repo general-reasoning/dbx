@@ -436,8 +436,13 @@ def _entries_(df, progress, msg, n_workers):
     return out
 
 
-def pipelines(progress=print, n_workers=16):
+def pipelines(progress=print, n_workers=16, filters=None):
     """Every pipeline in dbx's datalake, from `dbx.pipejournal()`, newest first.
+
+    *filters* -- `{column: pattern}`, as `parse_filters` makes them -- keep
+    the pipelines whose column matches its pattern anywhere, as a regex
+    (`dbx.journals.filter_journal_frame`): `tag=^myproject\.` those tagged
+    in a module of `myproject`. The whole journal is still read.
 
     *n_workers* threads list and read the journal -- `dbx.pipejournal()`
     parallelizes with threads only, which suits it: the work is round trips
@@ -445,7 +450,10 @@ def pipelines(progress=print, n_workers=16):
     each stage and, where they are counted, how many files of it are read.
     """
     progress("dbx.pipejournal()")
-    df = _dbx_().pipejournal(n_workers=n_workers, progress=_counted_(progress, "dbx.pipejournal()"))
+    dbx = _dbx_()
+    df = dbx.pipejournal(n_workers=n_workers, progress=_counted_(progress, "dbx.pipejournal()"))
+    if filters:
+        df = dbx.journals.filter_journal_frame(pd.DataFrame(df), **filters)
     return _entries_(df, progress, f"reading the specs and renderings of {len(df):,} pipelines", n_workers)
 
 
@@ -501,9 +509,9 @@ def corpus_dir(anchor=None):
 
 
 def journal_source(anchor=None, filters=None, n_workers=16):
-    """The corpus source of a journal: the pipelines, or *anchor*'s blocks with *filters*."""
+    """The corpus source of a journal: the pipelines, or *anchor*'s blocks, with *filters*."""
     if anchor is None:
-        return lambda progress: pipelines(progress, n_workers=n_workers)
+        return lambda progress: pipelines(progress, n_workers=n_workers, filters=filters)
     return lambda progress: blocks(anchor, progress, n_workers=n_workers, filters=filters)
 
 
@@ -1198,9 +1206,10 @@ class HypDbxJournal(Hyp):
     """A journal of a dbx datalake on the disk: its pipelines, one point each, or an anchor's blocks.
 
     Which, the journal menu in the top bar says -- `--journal [ANCHOR]` at
-    the start -- and switches, each journal a corpus of its own. An anchor's
-    blocks may be filtered, by the filter field beside it: `key=value, ...`,
-    each a pattern on the journal's column *key*.
+    the start -- and switches, each journal a corpus of its own. Its
+    pipelines or blocks may be filtered, by the filter field beside it --
+    `--filter` at the start: `key=value, ...`, each a regex matched anywhere
+    in the journal's column *key*.
 
     A pipeline opens its window, its entry blocks and session blocks listed;
     a block opens the window an entry block does. A right click lists a
@@ -1248,7 +1257,7 @@ class HypDbxJournal(Hyp):
         self.anchors = None  # every anchor of the datalake, for the journal menu; None until read
         self.journal_menu = Dropdown(self._journal_label_(), self._journal_items_, self._pick_journal_, empty="no anchors")
         self.filter_field = TextField("filter", self._apply_filter_, placeholder="key=pattern, key=pattern, ...",
-                                      visible=lambda: self.anchor is not None, text=format_filters(self.filters))
+                                      text=format_filters(self.filters))
         self.controls = [self.journal_menu, self.filter_field]  # right to left from points: the journal, then its filter
         self._titled_()
         # A block's tag, under its label on a line of its own; a pipeline's VAR.name and version, before the datetime: listed first.
